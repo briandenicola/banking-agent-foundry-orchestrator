@@ -13,6 +13,12 @@ data "azurerm_cognitive_account" "foundry" {
   resource_group_name = local.core_rg_name
 }
 
+data "azapi_resource" "foundry_project" {
+  type      = "Microsoft.CognitiveServices/accounts/projects@2025-10-01-preview"
+  name      = local.foundry_project
+  parent_id = data.azurerm_cognitive_account.foundry.id
+}
+
 data "azurerm_application_insights" "this" {
   name                = "${var.app_name}-appinsights"
   resource_group_name = local.core_rg_name

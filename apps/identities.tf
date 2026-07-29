@@ -1,5 +1,5 @@
 locals {
-  app_identities = toset(["orchestrator", "webui", "agents", "litellm"])
+  app_identities = toset(["orchestrator", "webui", "litellm", "agent-deployer"])
 }
 
 resource "azurerm_user_assigned_identity" "this" {

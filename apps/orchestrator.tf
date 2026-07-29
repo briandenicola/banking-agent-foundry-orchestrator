@@ -91,6 +91,6 @@ resource "azurerm_container_app" "orchestrator" {
 
   depends_on = [
     azurerm_role_assignment.acr_pull,
-    azurerm_role_assignment.ai_developer,
+    azurerm_role_assignment.orchestrator_agent_consumer,
   ]
 }

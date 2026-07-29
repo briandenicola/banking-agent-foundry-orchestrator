@@ -1,5 +1,9 @@
 version: "3"
 
+vars:
+  COMMIT_VERSION:
+    sh: git rev-parse HEAD | cut -c 1-8
+
 tasks:
   default:
     cmds:
@@ -15,7 +19,8 @@ tasks:
     cmds:
       - task: build-orchestrator
       - task: build-webui
-      - task: build-agents
+      - task: build-hosted-agents
+      - task: build-agent-deployer
       - task: build-litellm
 
   build-orchestrator:
@@ -29,8 +34,7 @@ tasks:
     vars:
       ACR_NAME:
         sh: terraform -chdir=./infrastructure output -raw ACR_NAME
-      COMMIT_VERSION:
-        sh: git rev-parse HEAD | cut -c 1-8
+      COMMIT_VERSION: { sh: "git rev-parse HEAD | cut -c 1-8" }
 
   build-webui:
     desc: Build and push the web UI image to ACR
@@ -47,13 +51,41 @@ tasks:
         sh: git rev-parse HEAD | cut -c 1-8
 
   build-agents:
-    desc: Build and push the Python agent image to ACR
+    desc: Build and push the local Python agent compatibility image to ACR
     cmds:
       - az acr build
         --registry {{.ACR_NAME}}
         --image agents:{{.COMMIT_VERSION}}
         --image agents:latest
         --file src/agents/python/Dockerfile .
+    vars:
+      ACR_NAME:
+        sh: terraform -chdir=./infrastructure output -raw ACR_NAME
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8
+
+  build-hosted-agents:
+    desc: Build and push the Foundry Hosted Agent runtime image to ACR
+    cmds:
+      - az acr build
+        --registry {{.ACR_NAME}}
+        --image hosted-agents:{{.COMMIT_VERSION}}
+        --image hosted-agents:latest
+        --file src/agents/python/Dockerfile.hosted .
+    vars:
+      ACR_NAME:
+        sh: terraform -chdir=./infrastructure output -raw ACR_NAME
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8
+
+  build-agent-deployer:
+    desc: Build and push the managed-identity Hosted Agent deployer image to ACR
+    cmds:
+      - az acr build
+        --registry {{.ACR_NAME}}
+        --image agent-deployer:{{.COMMIT_VERSION}}
+        --image agent-deployer:latest
+        --file src/agents/deployer/Dockerfile .
     vars:
       ACR_NAME:
         sh: terraform -chdir=./infrastructure output -raw ACR_NAME
@@ -85,14 +117,18 @@ tasks:
       APP_NAME:
         sh: terraform -chdir=./infrastructure output -raw APP_NAME
       REGION: '{{default "swedencentral" .CLI_ARGS}}'
-      COMMIT_VERSION:
-        sh: git rev-parse HEAD | cut -c 1-8
 
   deploy:
-    desc: Build images in ACR and deploy the application stack
+    desc: Build images, deploy Container Apps, and register Foundry Hosted Agents
     cmds:
       - task: build
       - task: apply
+      - task: deploy-hosted-agents
+
+  deploy-hosted-agents:
+    desc: Run the Container Apps Job that registers and versions all Hosted Agents
+    cmds:
+      - bash ./scripts/deploy-hosted-agents.sh
 
   destroy:
     desc: Destroy the application Container Apps

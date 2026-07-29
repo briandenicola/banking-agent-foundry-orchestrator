@@ -4,7 +4,7 @@ import os
 from collections.abc import Awaitable, Callable
 
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
 from app.contracts import AgentName, AgentRequest, AgentResult
 
@@ -12,14 +12,28 @@ from app.contracts import AgentName, AgentRequest, AgentResult
 StructuredReasoner = Callable[[AgentName, str, AgentRequest], Awaitable[AgentResult]]
 
 
-def _model() -> AzureChatOpenAI | None:
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT") or _openai_endpoint_from_project()
+def _model() -> AzureChatOpenAI | ChatOpenAI | None:
+    project_endpoint = os.getenv("FOUNDRY_PROJECT_ENDPOINT")
     deployment = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini")
+    credential = DefaultAzureCredential()
+
+    if project_endpoint:
+        token_provider = get_bearer_token_provider(
+            credential,
+            "https://ai.azure.com/.default",
+        )
+        return ChatOpenAI(
+            base_url=f"{project_endpoint.rstrip('/')}/openai/v1/",
+            model=deployment,
+            api_key=token_provider,
+        )
+
+    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     if not endpoint:
         return None
 
     token_provider = get_bearer_token_provider(
-        DefaultAzureCredential(),
+        credential,
         "https://cognitiveservices.azure.com/.default",
     )
     return AzureChatOpenAI(
@@ -28,15 +42,6 @@ def _model() -> AzureChatOpenAI | None:
         api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview"),
         azure_ad_token_provider=token_provider,
     )
-
-
-def _openai_endpoint_from_project() -> str | None:
-    project_endpoint = os.getenv("FOUNDRY_PROJECT_ENDPOINT")
-    if not project_endpoint:
-        return None
-
-    host = project_endpoint.split("/api/projects/", 1)[0]
-    return host.replace(".services.ai.azure.com", ".openai.azure.com")
 
 
 async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> AgentResult:
