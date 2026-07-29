@@ -1,0 +1,24 @@
+# .NET
+bin/
+obj/
+publish/
+*.user
+*.suo
+*.cache
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# OS
+.DS_Store
+Thumbs.db

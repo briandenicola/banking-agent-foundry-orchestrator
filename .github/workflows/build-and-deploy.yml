@@ -1,0 +1,34 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Restore .NET app
+        run: dotnet restore src/orchestrator/orchestrator.csproj
+      - name: Build .NET app
+        run: dotnet build src/orchestrator/orchestrator.csproj --configuration Release --no-restore
+      - name: Compile Python agent stubs
+        run: python -m compileall src/agents/python
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder deployment
+        run: echo "Deployment to Azure Container Apps will be wired here once the Terraform and container image pipeline are in place."
