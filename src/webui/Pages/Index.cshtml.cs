@@ -8,10 +8,12 @@ namespace webui.Pages;
 public class IndexModel : PageModel
 {
     private readonly HttpClient _httpClient;
+    private readonly ILogger<IndexModel> _logger;
 
-    public IndexModel(HttpClient httpClient)
+    public IndexModel(IHttpClientFactory httpClientFactory, ILogger<IndexModel> logger)
     {
-        _httpClient = httpClient;
+        _httpClient = httpClientFactory.CreateClient("orchestrator");
+        _logger = logger;
     }
 
     [BindProperty]
@@ -30,16 +32,38 @@ public class IndexModel : PageModel
 
     public async Task<IActionResult> OnPostAsync()
     {
-        var response = await _httpClient.PostAsJsonAsync("http://localhost:5000/api/v1/workflows", new { userMessage = Input.UserMessage });
-        if (!response.IsSuccessStatusCode)
+        if (!ModelState.IsValid)
         {
-            StatusMessage = "The workflow service could not be reached.";
             return Page();
         }
 
-        Workflow = await response.Content.ReadFromJsonAsync<WorkflowResponse>();
-        StatusMessage = "Workflow submitted successfully.";
-        return Page();
+        try
+        {
+            var response = await _httpClient.PostAsJsonAsync(
+                "/api/v1/workflows",
+                new { userMessage = Input.UserMessage });
+            if (!response.IsSuccessStatusCode)
+            {
+                StatusMessage = "The workflow service rejected the request.";
+                return Page();
+            }
+
+            Workflow = await response.Content.ReadFromJsonAsync<WorkflowResponse>();
+            StatusMessage = "Workflow submitted successfully.";
+            return Page();
+        }
+        catch (HttpRequestException exception)
+        {
+            _logger.LogError(exception, "The orchestrator API could not be reached");
+            StatusMessage = "The workflow service could not be reached.";
+            return Page();
+        }
+        catch (TaskCanceledException exception)
+        {
+            _logger.LogError(exception, "The orchestrator API request timed out");
+            StatusMessage = "The workflow service timed out.";
+            return Page();
+        }
     }
 
     public async Task<IActionResult> OnPostApproveAsync(Guid workflowId)
@@ -50,16 +74,33 @@ public class IndexModel : PageModel
             return Page();
         }
 
-        var response = await _httpClient.PostAsJsonAsync($"http://localhost:5000/api/v1/workflows/{workflowId}/approval", new { decision = ApprovalInput.Decision, reason = ApprovalInput.Reason });
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            StatusMessage = "The approval request could not be submitted.";
+            var response = await _httpClient.PostAsJsonAsync(
+                $"/api/v1/workflows/{workflowId}/approval",
+                new { decision = ApprovalInput.Decision, reason = ApprovalInput.Reason });
+            if (!response.IsSuccessStatusCode)
+            {
+                StatusMessage = "The approval request was rejected.";
+                return Page();
+            }
+
+            Workflow = await response.Content.ReadFromJsonAsync<WorkflowResponse>();
+            StatusMessage = "Approval recorded successfully.";
             return Page();
         }
-
-        Workflow = await response.Content.ReadFromJsonAsync<WorkflowResponse>();
-        StatusMessage = "Approval recorded successfully.";
-        return Page();
+        catch (HttpRequestException exception)
+        {
+            _logger.LogError(exception, "The orchestrator API could not be reached for approval");
+            StatusMessage = "The approval service could not be reached.";
+            return Page();
+        }
+        catch (TaskCanceledException exception)
+        {
+            _logger.LogError(exception, "The orchestrator approval request timed out");
+            StatusMessage = "The approval service timed out.";
+            return Page();
+        }
     }
 
     public sealed class InputModel
