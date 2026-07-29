@@ -1,4 +1,3 @@
-using System.ComponentModel.DataAnnotations;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -32,8 +31,9 @@ public class IndexModel : PageModel
 
     public async Task<IActionResult> OnPostAsync()
     {
-        if (!ModelState.IsValid)
+        if (string.IsNullOrWhiteSpace(Input.UserMessage))
         {
+            StatusMessage = "Provide a request before submitting the workflow.";
             return Page();
         }
 
@@ -68,6 +68,13 @@ public class IndexModel : PageModel
 
     public async Task<IActionResult> OnPostApproveAsync(Guid workflowId)
     {
+        if (ApprovalInput.Decision is not ("approve" or "reject")
+            || string.IsNullOrWhiteSpace(ApprovalInput.Reason))
+        {
+            StatusMessage = "Provide an approval decision and reason.";
+            return Page();
+        }
+
         if (workflowId == Guid.Empty)
         {
             StatusMessage = "Create a workflow before approving it.";
@@ -106,18 +113,15 @@ public class IndexModel : PageModel
     public sealed class InputModel
     {
         [BindProperty]
-        [Required]
         public string? UserMessage { get; set; }
     }
 
     public sealed class ApprovalInputModel
     {
         [BindProperty]
-        [Required]
         public string Decision { get; set; } = "approve";
 
         [BindProperty]
-        [Required]
         public string Reason { get; set; } = string.Empty;
     }
 

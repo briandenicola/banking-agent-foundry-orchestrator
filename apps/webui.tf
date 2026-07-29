@@ -48,11 +48,24 @@ resource "azurerm_container_app" "webui" {
       }
 
       env {
+        name  = "DATA_PROTECTION_BLOB_URI"
+        value = "${azurerm_storage_account.webui_data_protection.primary_blob_endpoint}${azurerm_storage_container.webui_data_protection.name}/keys.xml"
+      }
+
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.this["webui"].client_id
+      }
+
+      env {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         value = data.azurerm_application_insights.this.connection_string
       }
     }
   }
 
-  depends_on = [azurerm_role_assignment.acr_pull]
+  depends_on = [
+    azurerm_role_assignment.acr_pull,
+    azurerm_role_assignment.webui_data_protection,
+  ]
 }

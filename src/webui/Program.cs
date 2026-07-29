@@ -1,5 +1,10 @@
+using Azure.Identity;
+using Microsoft.AspNetCore.DataProtection;
+
 var builder = WebApplication.CreateBuilder(args);
 var orchestratorApiBaseUrl = builder.Configuration["ORCHESTRATOR_API_BASE_URL"] ?? "http://localhost:5000";
+var dataProtectionBlobUri = builder.Configuration["DATA_PROTECTION_BLOB_URI"];
+var managedIdentityClientId = builder.Configuration["AZURE_CLIENT_ID"];
 
 if (!Uri.TryCreate(orchestratorApiBaseUrl, UriKind.Absolute, out var orchestratorApiBaseUri))
 {
@@ -7,10 +12,41 @@ if (!Uri.TryCreate(orchestratorApiBaseUrl, UriKind.Absolute, out var orchestrato
 }
 
 builder.Services.AddRazorPages();
+builder.Services.AddAntiforgery(options =>
+{
+    options.Cookie.Name = builder.Environment.IsDevelopment()
+        ? "BankingAgent.Antiforgery.v2"
+        : "__Host-BankingAgent.Antiforgery.v2";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.Path = "/";
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+        ? CookieSecurePolicy.SameAsRequest
+        : CookieSecurePolicy.Always;
+});
 builder.Services.AddHttpClient("orchestrator", client =>
 {
     client.BaseAddress = orchestratorApiBaseUri;
 });
+
+if (builder.Environment.IsProduction() && string.IsNullOrWhiteSpace(dataProtectionBlobUri))
+{
+    throw new InvalidOperationException("DATA_PROTECTION_BLOB_URI is required in production.");
+}
+
+if (!string.IsNullOrWhiteSpace(dataProtectionBlobUri))
+{
+    var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+    {
+        ManagedIdentityClientId = managedIdentityClientId,
+        ExcludeInteractiveBrowserCredential = true
+    });
+
+    builder.Services
+        .AddDataProtection()
+        .SetApplicationName("BankingAgent.WebUi")
+        .PersistKeysToAzureBlobStorage(new Uri(dataProtectionBlobUri), credential);
+}
 
 var app = builder.Build();
 

@@ -27,11 +27,11 @@ jobs:
       - name: Build solution
         run: dotnet build banking-agent.sln --configuration Release --no-restore
       - name: Terraform fmt check
-        run: terraform -chdir=src/infra/terraform fmt -check -recursive
+        run: terraform -chdir=infrastructure fmt -check -recursive
       - name: Terraform init
-        run: terraform -chdir=src/infra/terraform init -backend=false -input=false
+        run: terraform -chdir=infrastructure init -backend=false -input=false
       - name: Terraform validate
-        run: terraform -chdir=src/infra/terraform validate
+        run: terraform -chdir=infrastructure validate
       - name: Build orchestrator container
         run: docker build -f src/orchestrator/Dockerfile -t banking-agent-orchestrator:test .
       - name: Build UI container
@@ -51,7 +51,7 @@ jobs:
         with:
           terraform_version: '1.8.5'
       - name: Terraform init
-        run: terraform -chdir=src/infra/terraform/environments/dev init -input=false
+        run: terraform -chdir=infrastructure init -input=false
       - name: Terraform apply
         env:
           ARM_USE_OIDC: false
@@ -59,4 +59,4 @@ jobs:
           ARM_TENANT_ID: ${{ fromJSON(secrets.AZURE_CREDENTIALS).tenantId }}
           ARM_SUBSCRIPTION_ID: ${{ fromJSON(secrets.AZURE_CREDENTIALS).subscriptionId }}
           ARM_CLIENT_SECRET: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientSecret }}
-        run: terraform -chdir=src/infra/terraform/environments/dev apply -auto-approve -input=false
+        run: terraform -chdir=infrastructure apply -auto-approve -input=false
