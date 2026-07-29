@@ -15,6 +15,8 @@ from azure.identity import ManagedIdentityCredential
 
 API_VERSION = "v1"
 TOKEN_SCOPE = "https://ai.azure.com/.default"
+READY_STATUSES = {"active", "running"}
+PENDING_STATUSES = {"creating", "starting", "updating"}
 
 
 @dataclass(frozen=True)
@@ -46,8 +48,8 @@ class FoundryClient:
         existing_version = self._find_matching_version(agent, image, model_deployment)
         if existing_version is not None:
             version, status = existing_version
-            if status == "creating":
-                self._wait_until_active(agent.name, version)
+            if status in PENDING_STATUSES:
+                self._wait_until_running(agent.name, version)
                 return version
 
             print(
@@ -81,11 +83,17 @@ class FoundryClient:
                 {"name": agent.name, "definition": definition},
             )
 
-        version = str(result.get("version", "")).strip()
+        version = _version(result)
+        status = str(result.get("status", "")).lower()
         if not version:
-            raise RuntimeError(f"{agent.name}: Foundry did not return an agent version")
+            version, status = self._wait_for_created_version(
+                agent,
+                image,
+                model_deployment,
+            )
 
-        self._wait_until_active(agent.name, version)
+        if status not in READY_STATUSES:
+            self._wait_until_running(agent.name, version)
         return version
 
     def _agent_exists(self, name: str) -> bool:
@@ -110,7 +118,7 @@ class FoundryClient:
         versions = _items(response)
         for version in versions:
             status = str(version.get("status", "")).lower()
-            if status not in {"active", "creating"}:
+            if status not in READY_STATUSES | PENDING_STATUSES:
                 continue
 
             definition = version.get("definition") or {}
@@ -125,7 +133,28 @@ class FoundryClient:
 
         return None
 
-    def _wait_until_active(self, name: str, version: str) -> None:
+    def _wait_for_created_version(
+        self,
+        agent: AgentDefinition,
+        image: str,
+        model_deployment: str,
+    ) -> tuple[str, str]:
+        for _ in range(30):
+            existing_version = self._find_matching_version(
+                agent,
+                image,
+                model_deployment,
+            )
+            if existing_version is not None:
+                return existing_version
+
+            time.sleep(5)
+
+        raise TimeoutError(
+            f"{agent.name}: timed out waiting for Foundry to return the created version"
+        )
+
+    def _wait_until_running(self, name: str, version: str) -> None:
         for attempt in range(60):
             result = self._request(
                 "GET",
@@ -134,14 +163,14 @@ class FoundryClient:
             status = str(result.get("status", "")).lower()
             print(f"{name}: version {version} status={status}", flush=True)
 
-            if status == "active":
+            if status in READY_STATUSES:
                 return
             if status == "failed":
                 raise RuntimeError(f"{name}: deployment failed: {result.get('error')}")
 
             time.sleep(5)
 
-        raise TimeoutError(f"{name}: timed out waiting for version {version} to become active")
+        raise TimeoutError(f"{name}: timed out waiting for version {version} to start running")
 
     def _request(
         self,
@@ -205,6 +234,18 @@ def _items(response: Any) -> list[dict[str, Any]]:
             if isinstance(value, list):
                 return value
     return []
+
+
+def _version(response: dict[str, Any]) -> str:
+    version = str(response.get("version", "")).strip()
+    if version:
+        return version
+
+    identifier = str(response.get("id", "")).strip()
+    if ":" in identifier:
+        return identifier.rsplit(":", 1)[1]
+
+    return ""
 
 
 def _definitions(raw: str) -> list[AgentDefinition]:
