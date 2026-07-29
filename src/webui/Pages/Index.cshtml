@@ -1,0 +1,56 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Banking Agent Workflow";
+}
+
+<div class="container mt-4">
+    <h1>Banking Agent Workflow</h1>
+    <p class="lead">Submit a request, review the workflow, and approve sensitive actions.</p>
+
+    <form method="post" class="mb-4">
+        <div class="mb-3">
+            <label asp-for="Input.UserMessage" class="form-label">Request</label>
+            <textarea asp-for="Input.UserMessage" class="form-control" rows="4"></textarea>
+            <span asp-validation-for="Input.UserMessage" class="text-danger"></span>
+        </div>
+        <button type="submit" class="btn btn-primary">Submit</button>
+    </form>
+
+    @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+    {
+        <div class="alert alert-info">@Model.StatusMessage</div>
+    }
+
+    @if (Model.Workflow is not null)
+    {
+            <div class="card mb-3">
+            <div class="card-body">
+                <h2 class="h5">Workflow Status</h2>
+                    <p><strong>Workflow ID:</strong> @Model.Workflow.WorkflowId</p>
+                    <p><strong>Trace ID:</strong> @Model.Workflow.TraceId</p>
+                    <p><strong>Status:</strong> @Model.Workflow.Status</p>
+                    <p><strong>Message:</strong> @Model.Workflow.Message</p>
+                </div>
+            </div>
+
+            <form method="post" asp-page-handler="Approve" class="card">
+                <div class="card-body">
+                    <h2 class="h5">Approval</h2>
+                    <input type="hidden" name="workflowId" value="@Model.Workflow.WorkflowId" />
+                    <div class="mb-3">
+                        <label asp-for="ApprovalInput.Decision" class="form-label">Decision</label>
+                        <select asp-for="ApprovalInput.Decision" class="form-select">
+                            <option value="approve">Approve</option>
+                            <option value="reject">Reject</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label asp-for="ApprovalInput.Reason" class="form-label">Reason</label>
+                        <textarea asp-for="ApprovalInput.Reason" class="form-control" rows="3"></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-outline-primary">Submit approval</button>
+                </div>
+            </form>
+        }
+    </div>

@@ -1,29 +1,42 @@
-# Copilot instructions for this repository
+# Copilot Instructions for the Banking Agent Prototype
 
-## Repository status
+## Project overview
+This repository contains a reference banking agent application built around a .NET orchestrator, Python LangGraph/LangChain agents, LiteLLM as the AI gateway, Azure Container Apps deployment, and Terraform-based infrastructure. The implementation should reflect the principles in `docs/project-constitution.md` and the active specification in `docs/functional-spec.md`.
 
-This repository currently does not contain application source code, package manifests, or project tooling files. The only top-level content present is the .github directory.
+## Architecture
+- Follow a layered structure: Domain → Application → Infrastructure → API/Web.
+- Keep dependencies pointing inward. Domain code must not depend on HTTP, EF Core, or framework-specific packages.
+- Keep controllers thin. Parse input, invoke an application service, and return a result.
+- Prefer constructor injection and explicit composition in the application entrypoint.
+- Expose versioned REST APIs under `/api/v1/...` and return ProblemDetails for failures.
 
-## Build, test, and lint commands
+## Build, test, and quality gate
+- Use `dotnet build -c Release` for the .NET app.
+- Use `dotnet test` when test projects exist.
+- Use `dotnet format --verify-no-changes` when formatting is part of the workflow.
+- Use `python -m compileall src/agents/python` for the Python service stubs until a dedicated test runner exists.
+- Run the local quality gate before marking work complete.
 
-No build, test, or lint commands are currently defined for this repository.
+## AI and agent guidance
+- Use Microsoft Foundry and Microsoft Agent Framework for agentic orchestration where practical.
+- Do not introduce Semantic Kernel for new work in this repository.
+- Implement the primary orchestrator as a C# Agent Framework agent.
+- Use Microsoft Foundry-hosted LangGraph agents as MCP-backed tools rather than embedding their logic directly in the orchestrator.
+- Route direct model calls through LiteLLM when needed.
+- Keep workflows multi-step, approval-controlled, and traceable.
 
-- There is no package.json, pyproject.toml, requirements.txt, Makefile, justfile, tox.ini, pytest.ini, Cargo.toml, go.mod, or similar project manifest to inspect.
-- Do not assume a language runtime or test runner exists until a project manifest is added.
+## Security and identity
+- Never use API keys for service authentication. Use Microsoft Entra ID, managed identity, and workload identity.
+- Do not commit secrets or keys. Keep secrets in Azure Key Vault or secure runtime stores when unavoidable.
+- Validate input at the boundary and avoid logging secrets or PII.
+- Prefer non-root containers and secure defaults.
 
-## High-level architecture
+## Data and observability
+- Persist workflow state and audit events in a structured store.
+- Use correlation IDs and structured logging for every workflow step.
+- Capture OpenTelemetry traces for agent calls, approval transitions, and persistence operations.
 
-The repository is effectively a blank slate at the moment. There is no existing application architecture to reason about, so changes should stay minimal and avoid introducing framework or build-system conventions unless they are explicitly requested.
-
-When new project files are added later, prefer keeping the structure straightforward and documented in the repository root so future sessions can discover it quickly.
-
-## Key conventions
-
-- Keep changes scoped to the repository's current contents; there is no established codebase layout to preserve yet.
-- If you add new tooling or project files, document the relevant commands in the repository root documentation so future sessions can follow them.
-- Use .github/copilot-instructions.md as the place for repository-specific guidance that would otherwise be easy to miss.
-
-## Notes for future sessions
-
-- There is no README.md, CONTRIBUTING.md, or other existing instruction file to incorporate from at this time.
-- Avoid adding framework-specific conventions or build pipelines until the repository actually contains code that needs them.
+## Delivery
+- Keep infrastructure definitions in `src/infra/terraform/`.
+- Keep GitHub Actions workflows in `.github/workflows/`.
+- Update `docs/` when requirements, architecture, or guardrails change.

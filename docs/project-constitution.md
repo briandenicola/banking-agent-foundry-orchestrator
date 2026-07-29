@@ -1,24 +1,32 @@
 # Project Constitution
 
 ## Purpose
-Create a banking-focused agentic application that demonstrates multi-step reasoning, approval-controlled actions, and production-minded observability. The first implementation will be a reference architecture for a .NET-based orchestrator that coordinates Python-based LangGraph/LangChain agents.
+Create a banking-focused agentic reference application in which a C# orchestrator agent built with Microsoft Agent Framework coordinates a workflow of LangGraph-hosted agents in Microsoft Foundry through MCP tools.
 
 ## Core objectives
-- Learn LangGraph/LangChain concepts through a real-world banking scenario.
-- Use C# for the orchestrator, workflow state, approvals, and enterprise integration.
-- Host the solution in Azure using Azure Container Apps.
-- Use Azure HorizonDB as the primary operational data store for workflow state and audit logs.
-- Use LiteLLM as the AI gateway for model routing, retries, and provider abstraction.
-- Provision all infrastructure with Terraform.
-- Make sensitive actions require explicit approval and produce detailed traces.
+- Build a C# orchestrator agent using Microsoft Agent Framework as the primary control plane.
+- Use MCP to load Microsoft Foundry-hosted LangGraph agents as tools for specialized reasoning and action workflows.
+- Deploy containerized services to Azure Container Apps with Entra ID-based authentication.
+- Use Azure HorizonDB as the operational data store for workflow state and audit history.
+- Use LiteLLM as the AI gateway for provider abstraction, retries, and routing where direct model access is needed.
+- Provision infrastructure with Terraform and automate builds and deployments with GitHub Actions.
 - Never use keys for authentication; always use Microsoft Entra ID.
-- Include GitHub workflows for build and deployment.
+- Make sensitive actions require explicit approval and produce detailed traces.
+
+## Architectural principles
+1. Security and identity: No API keys or shared secrets for service authentication. Entra ID, managed identity, and workload identity are mandatory.
+2. Layered architecture: Keep domain logic independent from frameworks and infrastructure. Use a Domain → Application → Infrastructure → API structure.
+3. Agentic design: Build multi-step workflows with explicit approvals, tool boundaries, and traceable decisions. The C# orchestrator agent uses Microsoft Agent Framework and loads Foundry-hosted LangGraph agents as MCP tools rather than embedding their logic directly.
+4. Observability and traceability: Every workflow emits structured logs, OpenTelemetry traces, and correlation IDs. Never log secrets or PII.
+5. Cloud-native delivery: Azure Container Apps, Terraform, and GitHub Actions are the default deployment path. Containers must be non-root and images must be built reproducibly.
+6. API-first and versioned: Public APIs are versioned, validated at the boundary, and return ProblemDetails for failures.
+7. Data discipline: Persist workflow state and audit metadata using parameterized access patterns, pagination on lists, and audit fields where applicable.
 
 ## Architectural guardrails
 - C# is the primary application language for orchestration, policy enforcement, and API integration.
-- Python hosts the LangGraph/LangChain agents and keeps the agent graph logic isolated from the .NET orchestrator.
-- Communication between the orchestrator and agents should use a stable contract such as HTTP or MCP.
-- LiteLLM should sit in front of model providers to provide a unified gateway for the agents and orchestrator.
+- The C# orchestrator agent uses Microsoft Agent Framework and loads Microsoft Foundry-hosted LangGraph agents as MCP tools.
+- Communication between the orchestrator and remote agents should use MCP or versioned HTTP contracts where a non-MCP gateway is required.
+- LiteLLM should sit in front of model providers to provide a unified gateway for direct model access or fallback paths.
 - The orchestrator must enforce approval gates before any sensitive banking action.
 - Every workflow step must emit traceable, structured audit data.
 - The system must be deployable as Azure Container Apps with managed identity and secretless access where possible.
@@ -27,13 +35,14 @@ Create a banking-focused agentic application that demonstrates multi-step reason
 - Full production banking operations or live transaction execution against real bank systems.
 - Advanced multi-tenant enterprise security controls beyond the initial approval and audit patterns.
 - A fully autonomous agent that can act without guardrails.
+- A deviation from Entra ID-only authentication without an approved architecture decision record.
 
-## Design principles
-1. Safety first: sensitive actions require explicit approval.
-2. Traceability: every request, decision, and action is logged with correlation IDs.
-3. Separation of concerns: Python handles agent reasoning; C# handles workflow control.
-4. Cloud-native deployment: Azure Container Apps and Terraform are the default implementation path.
-5. Build for learning and iteration: the first release should be understandable and easy to evolve.
+## Document hierarchy and governance
+- This constitution is the highest authority for this repository. Lower-level documents, plans, and implementation tasks must align with it.
+- The expected decision order is: constitution → active spec → implementation plan → tasks → backlog → local judgment.
+- Any change to this constitution requires a documented amendment and version bump.
+- Before declaring work complete, run the local quality gate: build, tests, formatting, and targeted validation for changed services.
+- Any deviation from Entra ID-only authentication, no-key policy, or agent framework guidance requires an architecture decision record before merge.
 
 ## Success criteria
 - A user can submit a banking request and receive a guided multi-step workflow response.

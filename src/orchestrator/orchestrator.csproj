@@ -4,4 +4,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../application/application.csproj" />
+    <ProjectReference Include="../domain/domain.csproj" />
+    <ProjectReference Include="../infrastructure/infrastructure.csproj" />
+    <ProjectReference Include="../api/api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+  </ItemGroup>
 </Project>
