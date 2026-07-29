@@ -3,7 +3,11 @@
 **/.vs/
 **/.git/
 **/.terraform/
+**/.venv/
+**/venv/
+**/__pycache__/
 **/node_modules/
 .env
+*.py[cod]
 *.user
 *.suo

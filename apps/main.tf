@@ -25,8 +25,10 @@ locals {
   agents_internal_url      = "https://${azurerm_container_app.agents.ingress[0].fqdn}"
 
   foundry_tool_endpoints = jsonencode({
-    "workflow.plan"   = "${local.agents_internal_url}/plan"
-    "workflow.reason" = "${local.agents_internal_url}/reason"
+    "workflow.plan"       = "${local.agents_internal_url}/plan"
+    "transaction.explain" = "${local.agents_internal_url}/transaction-explanation"
+    "suspicious.assess"   = "${local.agents_internal_url}/suspicious-activity"
+    "dispute.plan"        = "${local.agents_internal_url}/dispute"
   })
 
   tags = {

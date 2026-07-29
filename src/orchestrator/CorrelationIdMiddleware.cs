@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Primitives;
 
 namespace BankingAgent.Orchestrator;
@@ -22,6 +23,7 @@ public sealed class CorrelationIdMiddleware
 
         context.Items["CorrelationId"] = correlationId;
         context.Response.Headers[HeaderName] = correlationId;
+        Activity.Current?.SetTag("correlation_id", correlationId);
 
         using var scope = _logger.BeginScope(new Dictionary<string, object?>
         {
