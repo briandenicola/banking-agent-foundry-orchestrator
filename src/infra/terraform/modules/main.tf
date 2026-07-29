@@ -45,7 +45,10 @@ resource "azurerm_container_app" "orchestrator" {
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
       cpu    = 0.5
       memory = "1Gi"
-      env { name = "ASPNETCORE_URLS" value = "http://+:8080" }
+      env {
+        name  = "ASPNETCORE_URLS"
+        value = "http://+:8080"
+      }
     }
   }
 
@@ -71,7 +74,10 @@ resource "azurerm_container_app" "agents" {
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
       cpu    = 0.5
       memory = "1Gi"
-      env { name = "PORT" value = "8000" }
+      env {
+        name  = "PORT"
+        value = "8000"
+      }
     }
   }
 

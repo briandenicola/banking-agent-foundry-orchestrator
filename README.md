@@ -14,10 +14,13 @@ This repository contains a starter implementation for a banking-focused agentic 
 - `docs/` - project constitution and specifications
 
 ## Getting started
-1. Restore the .NET app: `dotnet restore src/orchestrator/orchestrator.csproj`
-2. Run the orchestrator: `dotnet run --project src/orchestrator/orchestrator.csproj`
-3. Provision infrastructure with Terraform from `src/infra/terraform/environments/dev`
-4. Use GitHub Actions in `.github/workflows/build-and-deploy.yml` for build validation and deployment automation.
+1. Restore the solution: `dotnet restore banking-agent.sln`
+2. Build the solution: `dotnet build banking-agent.sln`
+3. Run the orchestrator: `dotnet run --project src/orchestrator/orchestrator.csproj`
+4. Run the UI: `dotnet run --project src/webui/webui.csproj`
+5. Build container images locally with `docker build -f src/orchestrator/Dockerfile -t banking-agent-orchestrator:test .` and `docker build -f src/webui/Dockerfile -t banking-agent-webui:test .`
+6. Provision infrastructure with Terraform from `src/infra/terraform/environments/dev`
+7. Use GitHub Actions in `.github/workflows/build-and-deploy.yml` for build validation and deployment automation.
 
 ## Implementation planning
 - `docs/phase-plan.md` outlines the implementation phases for the project.

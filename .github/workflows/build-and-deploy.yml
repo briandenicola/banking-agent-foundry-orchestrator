@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   build:
@@ -14,21 +19,44 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - uses: actions/setup-python@v5
+      - uses: hashicorp/setup-terraform@v3
         with:
-          python-version: '3.11'
-      - name: Restore .NET app
-        run: dotnet restore src/orchestrator/orchestrator.csproj
-      - name: Build .NET app
-        run: dotnet build src/orchestrator/orchestrator.csproj --configuration Release --no-restore
-      - name: Compile Python agent stubs
-        run: python -m compileall src/agents/python
+          terraform_version: '1.8.5'
+      - name: Restore solution
+        run: dotnet restore banking-agent.sln
+      - name: Build solution
+        run: dotnet build banking-agent.sln --configuration Release --no-restore
+      - name: Terraform fmt check
+        run: terraform -chdir=src/infra/terraform fmt -check -recursive
+      - name: Terraform init
+        run: terraform -chdir=src/infra/terraform init -backend=false -input=false
+      - name: Terraform validate
+        run: terraform -chdir=src/infra/terraform validate
+      - name: Build orchestrator container
+        run: docker build -f src/orchestrator/Dockerfile -t banking-agent-orchestrator:test .
+      - name: Build UI container
+        run: docker build -f src/webui/Dockerfile -t banking-agent-webui:test .
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.AZURE_CREDENTIALS != ''
     needs: build
     runs-on: ubuntu-latest
+    environment: dev
     steps:
       - uses: actions/checkout@v4
-      - name: Placeholder deployment
-        run: echo "Deployment to Azure Container Apps will be wired here once the Terraform and container image pipeline are in place."
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.8.5'
+      - name: Terraform init
+        run: terraform -chdir=src/infra/terraform/environments/dev init -input=false
+      - name: Terraform apply
+        env:
+          ARM_USE_OIDC: false
+          ARM_CLIENT_ID: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_TENANT_ID: ${{ fromJSON(secrets.AZURE_CREDENTIALS).tenantId }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJSON(secrets.AZURE_CREDENTIALS).subscriptionId }}
+          ARM_CLIENT_SECRET: ${{ fromJSON(secrets.AZURE_CREDENTIALS).clientSecret }}
+        run: terraform -chdir=src/infra/terraform/environments/dev apply -auto-approve -input=false

@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.git/
+**/.terraform/
+**/node_modules/
+.env
+*.user
+*.suo

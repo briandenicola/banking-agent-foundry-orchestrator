@@ -22,6 +22,9 @@ crash.log
 # OS
 .DS_Store
 Thumbs.db
+# Session and local tooling state
+.copilot/
+.specify/
 # Squad: ignore runtime state (logs, inbox, sessions)
 .squad/orchestration-log/
 .squad/log/
