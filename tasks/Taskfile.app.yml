@@ -1,0 +1,109 @@
+version: "3"
+
+tasks:
+  default:
+    cmds:
+      - task --list --taskfile ./tasks/Taskfile.app.yml
+
+  init:
+    desc: Initialize the application Terraform stack
+    cmds:
+      - terraform -chdir=./apps init
+
+  build:
+    desc: Build and push all application images to ACR
+    cmds:
+      - task: build-orchestrator
+      - task: build-webui
+      - task: build-agents
+      - task: build-litellm
+
+  build-orchestrator:
+    desc: Build and push the orchestrator image to ACR
+    cmds:
+      - az acr build
+        --registry {{.ACR_NAME}}
+        --image orchestrator:{{.COMMIT_VERSION}}
+        --image orchestrator:latest
+        --file src/orchestrator/Dockerfile .
+    vars:
+      ACR_NAME:
+        sh: terraform -chdir=./infrastructure output -raw ACR_NAME
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8
+
+  build-webui:
+    desc: Build and push the web UI image to ACR
+    cmds:
+      - az acr build
+        --registry {{.ACR_NAME}}
+        --image webui:{{.COMMIT_VERSION}}
+        --image webui:latest
+        --file src/webui/Dockerfile .
+    vars:
+      ACR_NAME:
+        sh: terraform -chdir=./infrastructure output -raw ACR_NAME
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8
+
+  build-agents:
+    desc: Build and push the Python agent image to ACR
+    cmds:
+      - az acr build
+        --registry {{.ACR_NAME}}
+        --image agents:{{.COMMIT_VERSION}}
+        --image agents:latest
+        --file src/agents/python/Dockerfile .
+    vars:
+      ACR_NAME:
+        sh: terraform -chdir=./infrastructure output -raw ACR_NAME
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8
+
+  build-litellm:
+    desc: Build and push the LiteLLM image to ACR
+    cmds:
+      - az acr build
+        --registry {{.ACR_NAME}}
+        --image litellm:{{.COMMIT_VERSION}}
+        --image litellm:latest
+        --file src/litellm/Dockerfile .
+    vars:
+      ACR_NAME:
+        sh: terraform -chdir=./infrastructure output -raw ACR_NAME
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8
+
+  apply:
+    desc: Deploy the application Container Apps
+    cmds:
+      - terraform -chdir=./apps apply -compact-warnings
+        -var "app_name={{.APP_NAME}}"
+        -var "region={{.REGION}}"
+        -var "image_tag={{.COMMIT_VERSION}}"
+    vars:
+      APP_NAME:
+        sh: terraform -chdir=./infrastructure output -raw APP_NAME
+      REGION: '{{default "swedencentral" .CLI_ARGS}}'
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8
+
+  deploy:
+    desc: Build images in ACR and deploy the application stack
+    cmds:
+      - task: build
+      - task: apply
+
+  destroy:
+    desc: Destroy the application Container Apps
+    cmds:
+      - terraform -chdir=./apps destroy -compact-warnings
+        -var "app_name={{.APP_NAME}}"
+        -var "region={{.REGION}}"
+        -var "image_tag={{.COMMIT_VERSION}}"
+    vars:
+      APP_NAME:
+        sh: terraform -chdir=./infrastructure output -raw APP_NAME
+      REGION: '{{default "swedencentral" .CLI_ARGS}}'
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8

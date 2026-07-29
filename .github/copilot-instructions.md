@@ -37,6 +37,6 @@ This repository contains a reference banking agent application built around a .N
 - Capture OpenTelemetry traces for agent calls, approval transitions, and persistence operations.
 
 ## Delivery
-- Keep infrastructure definitions in `src/infra/terraform/`.
+- Keep infrastructure definitions in `infrastructure/` (convention-over-configuration; `region` is the only Terraform input).
 - Keep GitHub Actions workflows in `.github/workflows/`.
 - Update `docs/` when requirements, architecture, or guardrails change.

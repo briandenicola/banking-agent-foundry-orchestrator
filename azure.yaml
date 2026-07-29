@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+requiredVersions:
+  extensions:
+    azure.ai.agents: ">=1.0.0-beta.4"
+
+name: banking-agent-hosted-agents
+
+services:
+  ai-project:
+    host: azure.ai.project
+    endpoint: ${AZURE_AI_PROJECT_ENDPOINT}
+
+  workflow-planning:
+    host: azure.ai.agent
+    project: src/agents/python
+    language: python
+    uses:
+      - ai-project
+    kind: hosted
+    name: workflow-planning
+    description: Classifies banking requests, assesses risk, and selects a specialist.
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: app/hosted.py
+      dependencyResolution: remote_build
+    environmentVariables:
+      - name: BANKING_AGENT_KIND
+        value: workflow-planning
+      - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+        value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+    protocols:
+      - protocol: invocations
+        version: 2.0.0
+    container:
+      resources:
+        cpu: "0.5"
+        memory: 1Gi
+
+  transaction-explanation:
+    host: azure.ai.agent
+    project: src/agents/python
+    language: python
+    uses:
+      - ai-project
+    kind: hosted
+    name: transaction-explanation
+    description: Explains transaction status and merchant activity without taking action.
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: app/hosted.py
+      dependencyResolution: remote_build
+    environmentVariables:
+      - name: BANKING_AGENT_KIND
+        value: transaction-explanation
+      - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+        value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+    protocols:
+      - protocol: invocations
+        version: 2.0.0
+    container:
+      resources:
+        cpu: "0.5"
+        memory: 1Gi
+
+  suspicious-activity:
+    host: azure.ai.agent
+    project: src/agents/python
+    language: python
+    uses:
+      - ai-project
+    kind: hosted
+    name: suspicious-activity
+    description: Assesses suspicious account activity and recommends protected next steps.
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: app/hosted.py
+      dependencyResolution: remote_build
+    environmentVariables:
+      - name: BANKING_AGENT_KIND
+        value: suspicious-activity
+      - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+        value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+    protocols:
+      - protocol: invocations
+        version: 2.0.0
+    container:
+      resources:
+        cpu: "0.5"
+        memory: 1Gi
+
+  dispute-planning:
+    host: azure.ai.agent
+    project: src/agents/python
+    language: python
+    uses:
+      - ai-project
+    kind: hosted
+    name: dispute-planning
+    description: Prepares bounded dispute plans that always require approval before execution.
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: app/hosted.py
+      dependencyResolution: remote_build
+    environmentVariables:
+      - name: BANKING_AGENT_KIND
+        value: dispute-planning
+      - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+        value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+    protocols:
+      - protocol: invocations
+        version: 2.0.0
+    container:
+      resources:
+        cpu: "0.5"
+        memory: 1Gi
+
+infra:
+  provider: microsoft.foundry

@@ -1,0 +1,43 @@
+version: "3"
+
+vars:
+  ENDPOINT_POINT: FOUNDRY_NEXTGEN_ENDPOINT
+  INFRA_DIR: infrastructure
+  APP_PORT: 8082
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  up:
+    desc: Creates complete Azure environment for {{.TITLE}}
+    cmds:
+      - task: _init
+      - task: apply
+      - task: infra:config
+
+  apply:
+    desc: Apply Terraform infrastructure
+    cmds:
+      - terraform -chdir=./{{.INFRA_DIR}} apply -auto-approve -compact-warnings
+        -var "region={{.REGION}}"
+    vars:
+      REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
+
+  down:
+    desc: Destroy the shared Azure infrastructure
+    cmds:
+      - terraform -chdir=./infrastructure init
+      - terraform -chdir=./infrastructure destroy -var "region={{.REGION}}"
+    vars:
+      REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
+
+  _init:
+    internal: true
+    cmds:
+      - terraform -chdir=./{{.INFRA_DIR}} init -upgrade
+      - terraform -chdir=./{{.INFRA_DIR}} workspace new {{.REGION}} || true
+      - terraform -chdir=./{{.INFRA_DIR}} workspace select {{.REGION}}
+    vars:
+      REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'

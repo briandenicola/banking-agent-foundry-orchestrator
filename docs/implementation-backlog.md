@@ -50,3 +50,12 @@
 11. P2 — Harden for security and reliability
     - Review secrets handling, identity configuration, retry behavior, and operational readiness.
     - Acceptance criteria: the implementation meets the project constitution for security and observability.
+
+12. P1 — Write a code-level technical implementation guide
+    - Document the end-to-end request lifecycle from the web/API boundary through the C# orchestrator, planner agent, specialist agents, approval transitions, persistence, and final response.
+    - Explain each agent's LangGraph state, nodes, routing decisions, model invocation, typed request/result contracts, local fallback behavior, and Microsoft Foundry Hosted Agent adapter.
+    - Document how the four Hosted Agents are packaged and deployed independently, how their endpoints and managed identities differ, and how the orchestrator selects and invokes them.
+    - Cover Microsoft Entra authentication, managed identity token acquisition, PostgreSQL access, Application Insights/OpenTelemetry correlation, configuration, and failure handling.
+    - Include sequence diagrams and direct `path/to/file:line` references for every important implementation step so readers can move between the guide and the exact code.
+    - Keep line references current whenever referenced code changes.
+    - Acceptance criteria: a developer unfamiliar with the repository can trace the primary informational, suspicious-activity, and dispute-approval flows from entrypoint to completion using the guide and its verified code references.

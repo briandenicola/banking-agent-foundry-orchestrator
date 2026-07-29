@@ -1,0 +1,35 @@
+# LiteLLM gateway configuration.
+#
+# This file is intentionally static and checked into git: everything in it is a
+# convention constant that Terraform also owns (the model deployment name) or a
+# runtime-injected non-secret endpoint. There is no secret material here, and
+# there must never be.
+#
+# Auth: keyless. No `api_key` is present. LiteLLM acquires an Entra ID token via
+# the Azure identity chain, which resolves to the container app's user-assigned
+# managed identity (AZURE_CLIENT_ID is injected by Terraform). The identity holds
+# "Cognitive Services User" on the Foundry account, and the Foundry account has
+# local (key) auth disabled outright, so a key-based path does not even exist.
+
+model_list:
+  - model_name: gpt-5.4-mini
+    litellm_params:
+      # Must match the Foundry model deployment name created in infrastructure/ai.tf.
+      model: azure/gpt-5.4-mini
+      api_base: os.environ/AZURE_API_BASE
+      api_version: os.environ/AZURE_API_VERSION
+      azure_ad_token_provider: "default"
+
+litellm_settings:
+  # Tolerate provider-specific params the Azure deployment does not accept
+  # rather than failing the whole call.
+  drop_params: true
+  request_timeout: 120
+
+# NOTE: no `general_settings.master_key` on purpose.
+#
+# This proxy is published with internal-only Container Apps ingress, so its
+# trust boundary is the Container Apps Environment network. Adding a proxy
+# master key would reintroduce exactly the shared-secret pattern the project
+# constitution forbids for service-to-service auth, with no real gain. See the
+# decision entry in .squad/decisions/inbox/lumen-infra.md.

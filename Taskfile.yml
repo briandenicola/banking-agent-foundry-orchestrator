@@ -1,0 +1,27 @@
+version: '3'
+
+dotenv: ['.env']
+
+env:
+  TITLE: LangGraph Hosted Agent in Foundry Demo
+  DEFAULT_REGION: swedencentral
+
+includes:
+  app:
+    taskfile: ./tasks/Taskfile.app.yml
+    internal: false
+
+  cloud:
+    taskfile: ./tasks/Taskfile.cloud.yml
+    internal: false
+
+tasks:
+  up:
+    desc: Create the Azure environment for {{.TITLE}}
+    cmds:
+      - task: cloud:up
+
+  down:
+    desc: Destroy the Azure environment for {{.TITLE}}
+    cmds:
+      - task: cloud:down

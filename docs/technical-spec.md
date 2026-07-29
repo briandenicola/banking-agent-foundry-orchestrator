@@ -66,5 +66,5 @@ A C# orchestrator agent coordinates a banking workflow and uses Microsoft Agent 
 - `/src/infrastructure/` - Azure, persistence, and external integration implementations
 - `/src/api/` - versioned HTTP endpoints and DTOs
 - `/src/agents/python/` - Python LangGraph/LangChain agents
-- `/src/infra/terraform/` - Terraform modules and environment configs
+- `/infrastructure/` - Terraform configuration (convention-over-configuration; `region` is the only input)
 - `/docs/` - specifications and architecture notes
