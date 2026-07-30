@@ -17,15 +17,33 @@ resource "azurerm_postgresql_flexible_server" "this" {
     password_auth_enabled         = false
     tenant_id                     = data.azurerm_client_config.current.tenant_id
   }
+
+  lifecycle {
+    ignore_changes = [
+      zone,
+      identity[0].identity_ids,
+    ]
+  }
+}
+
+resource "azurerm_user_assigned_identity" "database_migrator" {
+  name                = "${local.resource_name}-database-migrator-identity"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  tags                = local.tags
 }
 
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "current" {
   server_name         = azurerm_postgresql_flexible_server.this.name
   resource_group_name = azurerm_resource_group.this.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
-  object_id           = data.azuread_user.current.object_id
-  principal_name      = data.azuread_user.current.user_principal_name
-  principal_type      = "User"
+  object_id           = azurerm_user_assigned_identity.database_migrator.principal_id
+  principal_name      = azurerm_user_assigned_identity.database_migrator.name
+  principal_type      = "ServicePrincipal"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "azurerm_postgresql_flexible_server_database" "this" {

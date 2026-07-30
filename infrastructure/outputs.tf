@@ -51,3 +51,19 @@ output "POSTGRESQL_HOST" {
 output "POSTGRESQL_DATABASE" {
   value = azurerm_postgresql_flexible_server_database.this.name
 }
+
+output "DATABASE_MIGRATOR_IDENTITY_NAME" {
+  value = azurerm_user_assigned_identity.database_migrator.name
+}
+
+output "DATABASE_MIGRATOR_IDENTITY_ID" {
+  value = azurerm_user_assigned_identity.database_migrator.id
+}
+
+output "DATABASE_MIGRATOR_CLIENT_ID" {
+  value = azurerm_user_assigned_identity.database_migrator.client_id
+}
+
+output "DATABASE_MIGRATOR_PRINCIPAL_ID" {
+  value = azurerm_user_assigned_identity.database_migrator.principal_id
+}

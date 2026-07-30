@@ -78,7 +78,15 @@ task app:init
 task app:apply -- swedencentral
 ```
 
-This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, shared web UI Data Protection storage, and the manual Container Apps Hosted Agent deployment job.
+This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, shared web UI Data Protection storage, and the manual database migration and Hosted Agent deployment jobs.
+
+Run the Entra-authenticated database migration job before sending application traffic:
+
+```bash
+task app:migrate
+```
+
+The job applies EF Core migrations and grants the orchestrator managed identity runtime-only access to the application tables. Database schema administration remains isolated from the orchestrator.
 
 Review the Terraform plan before applying when changing infrastructure:
 
@@ -119,7 +127,7 @@ The smoke runner verifies the web UI form, orchestrator health, all four Hosted 
 
 ## Complete deployment shortcut
 
-After the shared infrastructure exists, the following command builds all images, applies the application stack, and registers the Hosted Agents:
+After the shared infrastructure exists, the following command builds all images, applies the application stack, migrates PostgreSQL, and registers the Hosted Agents:
 
 ```bash
 task app:deploy -- swedencentral

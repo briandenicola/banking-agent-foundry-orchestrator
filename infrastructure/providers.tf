@@ -14,10 +14,6 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.0"
     }
-    azuread = {
-      source  = "hashicorp/azuread"
-      version = "~> 3.0"
-    }
   }
 }
 
@@ -32,7 +28,3 @@ provider "azurerm" {
 provider "azapi" {}
 
 data "azurerm_client_config" "current" {}
-
-data "azuread_user" "current" {
-  object_id = data.azurerm_client_config.current.object_id
-}

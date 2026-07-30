@@ -14,6 +14,10 @@ output "AGENT_DEPLOYER_JOB_NAME" {
   value = azurerm_container_app_job.agent_deployer.name
 }
 
+output "DATABASE_MIGRATOR_JOB_NAME" {
+  value = azurerm_container_app_job.database_migrator.name
+}
+
 output "APPS_RESOURCE_GROUP_NAME" {
   value = azurerm_resource_group.this.name
 }

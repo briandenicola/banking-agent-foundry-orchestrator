@@ -23,6 +23,13 @@ resource "azurerm_role_assignment" "orchestrator_agent_consumer" {
   skip_service_principal_aad_check = true
 }
 
+resource "azurerm_role_assignment" "database_migrator_acr_pull" {
+  scope                            = data.azurerm_container_registry.this.id
+  role_definition_name             = "AcrPull"
+  principal_id                     = data.azurerm_user_assigned_identity.database_migrator.principal_id
+  skip_service_principal_aad_check = true
+}
+
 resource "azurerm_role_assignment" "agent_deployer_project_manager" {
   scope                            = data.azapi_resource.foundry_project.id
   role_definition_name             = "Foundry Project Manager"

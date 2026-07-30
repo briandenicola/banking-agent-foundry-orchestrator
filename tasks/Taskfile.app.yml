@@ -21,6 +21,7 @@ tasks:
       - task: build-webui
       - task: build-hosted-agents
       - task: build-agent-deployer
+      - task: build-database-migrator
       - task: build-litellm
 
   build-orchestrator:
@@ -92,6 +93,20 @@ tasks:
       COMMIT_VERSION:
         sh: git rev-parse HEAD | cut -c 1-8
 
+  build-database-migrator:
+    desc: Build and push the managed-identity PostgreSQL migration image to ACR
+    cmds:
+      - az acr build
+        --registry {{.ACR_NAME}}
+        --image database-migrator:{{.COMMIT_VERSION}}
+        --image database-migrator:latest
+        --file src/database-migrator/Dockerfile .
+    vars:
+      ACR_NAME:
+        sh: terraform -chdir=./infrastructure output -raw ACR_NAME
+      COMMIT_VERSION:
+        sh: git rev-parse HEAD | cut -c 1-8
+
   build-litellm:
     desc: Build and push the LiteLLM image to ACR
     cmds:
@@ -123,12 +138,18 @@ tasks:
     cmds:
       - task: build
       - task: apply
+      - task: migrate
       - task: deploy-hosted-agents
 
   deploy-hosted-agents:
     desc: Run the Container Apps Job that registers and versions all Hosted Agents
     cmds:
       - bash ./scripts/deploy-hosted-agents.sh
+
+  migrate:
+    desc: Run the managed-identity PostgreSQL migration job
+    cmds:
+      - bash ./scripts/migrate-database.sh
 
   smoke:
     desc: Run the deployed MVP health, Hosted Agent, workflow, and approval checks
