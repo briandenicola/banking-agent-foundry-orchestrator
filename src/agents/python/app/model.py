@@ -61,7 +61,13 @@ async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> 
             ),
         ]
     )
-    return result.model_copy(update={"agent": agent, "trace_id": request.trace_id})
+    return result.model_copy(
+        update={
+            "agent": agent,
+            "status": "ok",
+            "trace_id": request.trace_id,
+        }
+    )
 
 
 def _local_result(agent: AgentName, request: AgentRequest) -> AgentResult:

@@ -1,8 +1,10 @@
 import os
 import unittest
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.agents import get_agent_graph
-from app.contracts import AgentName, AgentRequest
+from app.contracts import AgentName, AgentRequest, AgentResult
+from app.model import reason
 
 
 class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
@@ -30,3 +32,32 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
         action = await self.invoke(AgentName.SUSPICIOUS_ACTIVITY, "Freeze my card; this transaction is not mine")
         self.assertFalse(informational.requires_approval)
         self.assertTrue(action.requires_approval)
+
+    async def test_successful_model_invocation_owns_operational_status(self):
+        structured_model = Mock()
+        structured_model.ainvoke = AsyncMock(
+            return_value=AgentResult(
+                agent=AgentName.TRANSACTION_EXPLANATION,
+                status="error",
+                trace_id="model-selected-trace",
+                intent="transaction_explanation",
+                summary="The model completed its analysis.",
+                risk_level="low",
+                requires_approval=False,
+                recommended_action="Explain the transaction.",
+                next_step="respond_to_user",
+            )
+        )
+        model = Mock()
+        model.with_structured_output.return_value = structured_model
+        request = AgentRequest(message="Explain this transaction.", trace_id="request-trace")
+
+        with patch("app.model._model", return_value=model):
+            result = await reason(
+                AgentName.TRANSACTION_EXPLANATION,
+                "Explain the transaction.",
+                request,
+            )
+
+        self.assertEqual("ok", result.status)
+        self.assertEqual("request-trace", result.trace_id)
