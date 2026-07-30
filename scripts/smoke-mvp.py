@@ -187,7 +187,7 @@ def collect_container_app_logs(
             "ContainerAppConsoleLogs_CL "
             f"| where TimeGenerated >= datetime({started_at_utc}) "
             f"| where ContainerAppName_s in ({quoted_names}) "
-            '| where Log_s matches regex @"(?i)(fail|error|exception|denied|unauthorized|permission)" '
+            '| where Log_s matches regex @"(?i)(fail|error|exception|denied|unauthorized|permission|completed routing|routing policy)" '
             "| project TimeGenerated, ContainerAppName_s, RevisionName_s, Log_s "
             "| order by TimeGenerated asc "
             "| take 100"
@@ -359,13 +359,16 @@ def check_workflows(
     results: dict[str, dict[str, Any]] = {}
 
     for name, message, expected_status in scenarios:
-        results[name] = start_workflow(
-            orchestrator_url,
-            message,
-            expected_status,
-            timeout,
-            token,
-        )
+        try:
+            results[name] = start_workflow(
+                orchestrator_url,
+                message,
+                expected_status,
+                timeout,
+                token,
+            )
+        except SmokeFailure as error:
+            raise SmokeFailure(f"Scenario {name} failed: {error}") from error
 
     dispute = results["dispute"]
     approval_status, approval = request_json(

@@ -70,8 +70,8 @@ public sealed class WorkflowService : IWorkflowService
                 plannerError);
         }
 
-        if (string.IsNullOrWhiteSpace(plannerDecision.SelectedAgent) ||
-            !SpecialistTools.TryGetValue(plannerDecision.SelectedAgent, out var specialistTool))
+        var route = WorkflowRoutingPolicy.Decide(userMessage);
+        if (!SpecialistTools.TryGetValue(route.Agent, out var specialistTool))
         {
             return StoreFailedWorkflow(
                 workflowId,
@@ -79,8 +79,27 @@ public sealed class WorkflowService : IWorkflowService
                 userMessage,
                 createdAt,
                 events,
-                $"Planner selected unsupported agent '{plannerDecision.SelectedAgent ?? "none"}'.");
+                $"Routing policy selected unsupported agent '{route.Agent}'.");
         }
+
+        if (!string.Equals(plannerDecision.SelectedAgent, route.Agent, StringComparison.OrdinalIgnoreCase) ||
+            plannerDecision.RequiresApproval != route.RequiresApproval)
+        {
+            _logger.LogWarning(
+                "Workflow {WorkflowId} routing policy overrode planner route {PlannerAgent}/{PlannerApproval} with {PolicyAgent}/{PolicyApproval}",
+                workflowId,
+                plannerDecision.SelectedAgent,
+                plannerDecision.RequiresApproval,
+                route.Agent,
+                route.RequiresApproval);
+        }
+
+        events.Add(new WorkflowEvent(
+            "workflow.route_selected",
+            $"Selected specialist {route.Agent}",
+            DateTimeOffset.UtcNow,
+            "system",
+            $"Approval required: {route.RequiresApproval}"));
 
         var specialistParameters = new Dictionary<string, object?>(parameters)
         {
@@ -90,7 +109,8 @@ public sealed class WorkflowService : IWorkflowService
             {
                 ["planner_summary"] = plannerDecision.Summary,
                 ["planner_evidence"] = plannerDecision.Evidence,
-                ["selected_agent"] = plannerDecision.SelectedAgent
+                ["planner_selected_agent"] = plannerDecision.SelectedAgent,
+                ["selected_agent"] = route.Agent
             }
         };
 
@@ -99,7 +119,7 @@ public sealed class WorkflowService : IWorkflowService
 
         if (!TryReadAgentResult(
                 specialistResult,
-                plannerDecision.SelectedAgent,
+                route.Agent,
                 out var specialistDecision,
                 out var specialistError))
         {
@@ -112,7 +132,7 @@ public sealed class WorkflowService : IWorkflowService
                 specialistError);
         }
 
-        var requiresApproval = plannerDecision.RequiresApproval || specialistDecision.RequiresApproval;
+        var requiresApproval = route.RequiresApproval;
         var status = requiresApproval
             ? WorkflowStatus.WaitingForApproval
             : WorkflowStatus.Completed;
@@ -144,7 +164,7 @@ public sealed class WorkflowService : IWorkflowService
             workflow.Id,
             workflow.TraceId,
             workflow.Status,
-            plannerDecision.SelectedAgent);
+            route.Agent);
         return workflow;
     }
 
