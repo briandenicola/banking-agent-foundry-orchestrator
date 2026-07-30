@@ -77,18 +77,37 @@ public sealed class FoundryMcpClient : IMcpClient
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             var parsedResponse = TryParseResponse(body);
+            var (errorCode, errorMessage) = ReadError(parsedResponse);
+            var agentInvocationId = HeaderValue(response, "x-agent-invocation-id");
+            var agentSessionId = HeaderValue(response, "x-agent-session-id");
             var data = new Dictionary<string, object?>
             {
                 ["endpoint"] = endpoint,
                 ["agent_name"] = ResolveAgentName(toolName),
                 ["status_code"] = (int)response.StatusCode,
                 ["response_body"] = body,
-                ["response_json"] = parsedResponse
+                ["response_json"] = parsedResponse,
+                ["error_code"] = errorCode,
+                ["error_message"] = errorMessage,
+                ["agent_invocation_id"] = agentInvocationId,
+                ["agent_session_id"] = agentSessionId
             };
 
             var message = response.IsSuccessStatusCode
                 ? "Foundry adapter invocation completed successfully."
-                : "Foundry adapter returned an error response.";
+                : $"Foundry adapter returned HTTP {(int)response.StatusCode}"
+                    + (string.IsNullOrWhiteSpace(errorCode) ? "." : $" ({errorCode}).");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError(
+                    "Foundry invocation failed for {ToolName} with HTTP {StatusCode} and error {ErrorCode}. InvocationId={AgentInvocationId}, SessionId={AgentSessionId}",
+                    toolName,
+                    (int)response.StatusCode,
+                    errorCode,
+                    agentInvocationId,
+                    agentSessionId);
+            }
 
             return response.IsSuccessStatusCode
                 ? new McpToolResult(toolName, "ok", message, data)
@@ -171,6 +190,29 @@ public sealed class FoundryMcpClient : IMcpClient
             return responseBody;
         }
     }
+
+    private static (string? Code, string? Message) ReadError(object? response)
+    {
+        if (response is not JsonElement root ||
+            !root.TryGetProperty("error", out var error) ||
+            error.ValueKind != JsonValueKind.Object)
+        {
+            return (null, null);
+        }
+
+        var code = error.TryGetProperty("code", out var codeElement)
+            ? codeElement.GetString()
+            : null;
+        var message = error.TryGetProperty("message", out var messageElement)
+            ? messageElement.GetString()
+            : null;
+        return (code, message);
+    }
+
+    private static string? HeaderValue(HttpResponseMessage response, string name) =>
+        response.Headers.TryGetValues(name, out var values)
+            ? values.FirstOrDefault()
+            : null;
 
     private static McpToolResult CreateFallbackResult(string toolName, IDictionary<string, object?> parameters, string? endpoint)
     {

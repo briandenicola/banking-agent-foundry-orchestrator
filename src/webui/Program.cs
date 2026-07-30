@@ -1,11 +1,10 @@
-using Azure.Identity;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 var orchestratorApiBaseUrl = builder.Configuration["ORCHESTRATOR_API_BASE_URL"] ?? "http://localhost:5000";
-var dataProtectionBlobUri = builder.Configuration["DATA_PROTECTION_BLOB_URI"];
-var managedIdentityClientId = builder.Configuration["AZURE_CLIENT_ID"];
+var dataProtectionKeysPath = builder.Configuration["DATA_PROTECTION_KEYS_PATH"]
+    ?? Path.Combine(Path.GetTempPath(), "banking-agent-data-protection");
 
 if (!Uri.TryCreate(orchestratorApiBaseUrl, UriKind.Absolute, out var orchestratorApiBaseUri))
 {
@@ -37,25 +36,11 @@ builder.Services.AddHttpClient("orchestrator", client =>
 {
     client.BaseAddress = orchestratorApiBaseUri;
 });
-
-if (builder.Environment.IsProduction() && string.IsNullOrWhiteSpace(dataProtectionBlobUri))
-{
-    throw new InvalidOperationException("DATA_PROTECTION_BLOB_URI is required in production.");
-}
-
-if (!string.IsNullOrWhiteSpace(dataProtectionBlobUri))
-{
-    var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
-    {
-        ManagedIdentityClientId = managedIdentityClientId,
-        ExcludeInteractiveBrowserCredential = true
-    });
-
-    builder.Services
-        .AddDataProtection()
-        .SetApplicationName("BankingAgent.WebUi")
-        .PersistKeysToAzureBlobStorage(new Uri(dataProtectionBlobUri), credential);
-}
+Directory.CreateDirectory(dataProtectionKeysPath);
+builder.Services
+    .AddDataProtection()
+    .SetApplicationName("BankingAgent.WebUi")
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
 
 var app = builder.Build();
 

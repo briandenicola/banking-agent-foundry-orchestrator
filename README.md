@@ -78,7 +78,7 @@ task app:init
 task app:apply -- swedencentral
 ```
 
-This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, shared web UI Data Protection storage, and the manual database migration and Hosted Agent deployment jobs.
+This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, and the manual database migration and Hosted Agent deployment jobs. For the MVP, the web UI runs one replica and keeps ASP.NET Data Protection keys in local container storage because subscription policy disables public Storage access. Replacing the web UI replica invalidates existing antiforgery cookies.
 
 Run the Entra-authenticated database migration job before sending application traffic:
 
@@ -115,6 +115,8 @@ The job idempotently creates or versions these four Hosted Agents:
 - `suspicious-activity`
 - `dispute-planning`
 
+After deployment, the task grants each active Hosted Agent instance identity the `Cognitive Services OpenAI User` role required to invoke the project model.
+
 No `azd` deployment is used.
 
 Run the deployed MVP smoke checks after the job succeeds:
@@ -144,7 +146,7 @@ A deployment is ready only when all of the following are true:
 5. All four Hosted Agents exist in the Foundry project with an active version.
 6. A workflow can be submitted from the web UI and displays a workflow result.
 7. Informational workflows complete without approval, while sensitive actions enter `WaitingForApproval` and can complete through the approval form.
-8. The web UI continues accepting form submissions after a revision restart or replica change.
+8. The MVP web UI runs exactly one replica; replacing that replica requires clients to refresh the page so antiforgery cookies use the new local Data Protection key.
 
 ## Destroy the environment
 

@@ -29,7 +29,7 @@ resource "azurerm_container_app" "webui" {
 
   template {
     min_replicas = 1
-    max_replicas = 2
+    max_replicas = 1
 
     container {
       name   = "webui"
@@ -48,13 +48,8 @@ resource "azurerm_container_app" "webui" {
       }
 
       env {
-        name  = "DATA_PROTECTION_BLOB_URI"
-        value = "${azurerm_storage_account.webui_data_protection.primary_blob_endpoint}${azurerm_storage_container.webui_data_protection.name}/keys.xml"
-      }
-
-      env {
-        name  = "AZURE_CLIENT_ID"
-        value = azurerm_user_assigned_identity.this["webui"].client_id
+        name  = "DATA_PROTECTION_KEYS_PATH"
+        value = "/tmp/banking-agent-data-protection"
       }
 
       env {
@@ -66,6 +61,5 @@ resource "azurerm_container_app" "webui" {
 
   depends_on = [
     azurerm_role_assignment.acr_pull,
-    azurerm_role_assignment.webui_data_protection,
   ]
 }

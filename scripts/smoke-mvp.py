@@ -10,10 +10,11 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 
@@ -132,6 +133,88 @@ def run_check(name: str, operation) -> CheckResult:
         )
 
 
+def collect_container_app_logs(
+    resource_group: str,
+    app_urls: tuple[str, ...],
+    started_at: datetime,
+) -> dict[str, Any]:
+    app_names = tuple(
+        hostname.split(".", 1)[0]
+        for app_url in app_urls
+        if (hostname := urlparse(app_url).hostname)
+    )
+    if not app_names:
+        return {"error": "Unable to derive Container App names from deployed URLs."}
+
+    try:
+        environment_id = subprocess.run(
+            [
+                "az",
+                "containerapp",
+                "show",
+                "--name",
+                app_names[0],
+                "--resource-group",
+                resource_group,
+                "--query",
+                "properties.environmentId",
+                "--output",
+                "tsv",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        workspace_id = subprocess.run(
+            [
+                "az",
+                "resource",
+                "show",
+                "--ids",
+                environment_id,
+                "--query",
+                "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId",
+                "--output",
+                "tsv",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        quoted_names = ", ".join(f"'{name}'" for name in app_names)
+        started_at_utc = started_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = (
+            "ContainerAppConsoleLogs_CL "
+            f"| where TimeGenerated >= datetime({started_at_utc}) "
+            f"| where ContainerAppName_s in ({quoted_names}) "
+            '| where Log_s matches regex @"(?i)(fail|error|exception|denied|unauthorized|permission)" '
+            "| project TimeGenerated, ContainerAppName_s, RevisionName_s, Log_s "
+            "| order by TimeGenerated asc "
+            "| take 100"
+        )
+        result = subprocess.run(
+            [
+                "az",
+                "monitor",
+                "log-analytics",
+                "query",
+                "--workspace",
+                workspace_id,
+                "--analytics-query",
+                query,
+                "--output",
+                "json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return {"entries": json.loads(result.stdout)}
+    except (json.JSONDecodeError, subprocess.CalledProcessError) as error:
+        details = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
+        return {"error": details or "Unable to query Container Apps logs."}
+
+
 def expect_status(actual: int, expected: int, body: dict[str, Any]) -> None:
     if actual != expected:
         raise SmokeFailure(f"Expected HTTP {expected}, received {actual}: {body}")
@@ -173,12 +256,18 @@ def check_webui(webui_url: str, timeout: int) -> dict[str, Any]:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
-    with opener.open(request, timeout=timeout) as response:
-        submitted_page = response.read().decode("utf-8")
-        if response.status != 200:
-            raise SmokeFailure(f"Web UI form returned HTTP {response.status}.")
-        if "Workflow submitted successfully." not in submitted_page:
-            raise SmokeFailure("Web UI did not display a successful workflow submission.")
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            submitted_page = response.read().decode("utf-8")
+            if response.status != 200:
+                raise SmokeFailure(f"Web UI form returned HTTP {response.status}.")
+            if "Workflow submitted successfully." not in submitted_page:
+                raise SmokeFailure("Web UI did not display a successful workflow submission.")
+    except HTTPError as error:
+        response_body = error.read().decode("utf-8", errors="replace")
+        raise SmokeFailure(
+            f"Web UI form returned HTTP {error.code}: {response_body[:2000]}"
+        ) from error
 
     return {
         "http_status": 200,
@@ -354,8 +443,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    started_at = datetime.now(timezone.utc)
     orchestrator_url = setting("ORCHESTRATOR_URL", "apps", "ORCHESTRATOR_URL").rstrip("/")
     webui_url = setting("WEBUI_URL", "apps", "WEBUI_URL").rstrip("/")
+    resource_group = setting(
+        "APPS_RESOURCE_GROUP_NAME",
+        "apps",
+        "APPS_RESOURCE_GROUP_NAME",
+    )
     foundry_endpoint = setting(
         "FOUNDRY_PROJECT_ENDPOINT",
         "infrastructure",
@@ -393,6 +488,14 @@ def main() -> int:
         "foundry_project_endpoint": foundry_endpoint,
         "checks": [asdict(check) for check in checks],
     }
+    if evidence["status"] == "failed":
+        evidence["diagnostics"] = {
+            "container_app_logs": collect_container_app_logs(
+                resource_group,
+                (webui_url, orchestrator_url),
+                started_at,
+            )
+        }
     rendered = json.dumps(evidence, indent=2, sort_keys=True)
     print(rendered)
 
