@@ -23,7 +23,7 @@ This repository contains a banking-focused agentic application built around:
 - Azure CLI authenticated with `az login`
 - Terraform 1.6 or later
 - [Task](https://taskfile.dev/)
-- .NET 8 SDK
+- .NET 10 SDK
 - Python 3
 - Permission to create Azure resources and role assignments in the target subscription
 

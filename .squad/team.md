@@ -23,6 +23,6 @@
 
 - **Project:** langgraph-learnings
 - **Owner:** brian
-- **Stack:** C#, .NET 8, Python, Azure Container Apps, Terraform, GitHub Actions, MCP, Microsoft Foundry
+- **Stack:** C#, .NET 10, Python, Azure Container Apps, Terraform, GitHub Actions, MCP, Microsoft Foundry
 - **Description:** A banking agent prototype where a C# orchestrator uses Microsoft Agent Framework and MCP to invoke Foundry-hosted LangGraph agents.
 - **Created:** 2026-07-29
