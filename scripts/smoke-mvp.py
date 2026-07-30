@@ -281,7 +281,7 @@ def submit_webui_workflow(
 ) -> tuple[dict[str, str], str]:
     with opener.open(webui_url, timeout=timeout) as response:
         page = response.read().decode("utf-8")
-        if response.status != 200 or "Banking Agent Workflow" not in page:
+        if response.status != 200 or "Northstar Banking" not in page:
             raise SmokeFailure(f"Unexpected web UI response: HTTP {response.status}")
 
     token_match = ANTIFORGERY_PATTERN.search(page)
