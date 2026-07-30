@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BankingAgent.Domain;
-using BankingAgent.Infrastructure;
 using Microsoft.Extensions.Logging;
 
 namespace BankingAgent.Application;

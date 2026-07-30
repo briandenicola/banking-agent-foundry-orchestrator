@@ -4,6 +4,7 @@ using System.Text.Json;
 using Azure;
 using Azure.Core;
 using Azure.Identity;
+using BankingAgent.Application;
 using Microsoft.Extensions.Logging;
 
 namespace BankingAgent.Infrastructure;

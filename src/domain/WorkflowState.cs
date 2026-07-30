@@ -21,7 +21,8 @@ public sealed record WorkflowState(
     string? ApprovalReason,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    IReadOnlyList<WorkflowEvent> Events);
+    IReadOnlyList<WorkflowEvent> Events,
+    long Version = 0);
 
 public sealed record WorkflowEvent(
     string Type,
@@ -29,3 +30,38 @@ public sealed record WorkflowEvent(
     DateTimeOffset Timestamp,
     string? Actor = null,
     string? Details = null);
+
+public enum ActionExecutionStatus
+{
+    Pending,
+    Completed,
+    Failed
+}
+
+public sealed record ApprovalDecision(
+    Guid Id,
+    Guid WorkflowId,
+    string Decision,
+    string Reason,
+    string Actor,
+    DateTimeOffset CreatedAt);
+
+public sealed record ActionExecution(
+    Guid Id,
+    Guid WorkflowId,
+    string ActionType,
+    string IdempotencyKey,
+    ActionExecutionStatus Status,
+    DateTimeOffset RequestedAt,
+    DateTimeOffset? CompletedAt = null,
+    string? Result = null,
+    string? ErrorCode = null);
+
+public sealed record SupportCase(
+    Guid Id,
+    Guid WorkflowId,
+    string CaseNumber,
+    string Status,
+    string Summary,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
