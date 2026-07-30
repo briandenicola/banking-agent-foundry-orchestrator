@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
@@ -21,19 +22,27 @@ public class IndexModel : PageModel
     [BindProperty]
     public ApprovalInputModel ApprovalInput { get; set; } = new();
 
-    public string? StatusMessage { get; private set; }
+    [TempData]
+    public string? StatusMessage { get; set; }
 
-    public WorkflowResponse? Workflow { get; private set; }
+    [TempData]
+    public string? ErrorMessage { get; set; }
 
-    public void OnGet()
+    public WorkflowDetailResponse? Workflow { get; private set; }
+
+    public async Task OnGetAsync(Guid? workflowId)
     {
+        if (workflowId.HasValue)
+        {
+            await LoadWorkflowAsync(workflowId.Value);
+        }
     }
 
     public async Task<IActionResult> OnPostAsync()
     {
         if (string.IsNullOrWhiteSpace(Input.UserMessage))
         {
-            StatusMessage = "Provide a request before submitting the workflow.";
+            ErrorMessage = "Enter a banking request before starting a workflow.";
             return Page();
         }
 
@@ -44,24 +53,30 @@ public class IndexModel : PageModel
                 new { userMessage = Input.UserMessage });
             if (!response.IsSuccessStatusCode)
             {
-                StatusMessage = "The workflow service rejected the request.";
+                ErrorMessage = await ReadFailureAsync(response, "The workflow service rejected the request.");
                 return Page();
             }
 
-            Workflow = await response.Content.ReadFromJsonAsync<WorkflowResponse>();
+            var workflow = await response.Content.ReadFromJsonAsync<WorkflowResponse>();
+            if (workflow is null)
+            {
+                ErrorMessage = "The workflow service returned an invalid response.";
+                return Page();
+            }
+
             StatusMessage = "Workflow submitted successfully.";
-            return Page();
+            return RedirectToPage(new { workflowId = workflow.WorkflowId });
         }
         catch (HttpRequestException exception)
         {
             _logger.LogError(exception, "The orchestrator API could not be reached");
-            StatusMessage = "The workflow service could not be reached.";
+            ErrorMessage = "The workflow service is currently unavailable. Try again shortly.";
             return Page();
         }
         catch (TaskCanceledException exception)
         {
             _logger.LogError(exception, "The orchestrator API request timed out");
-            StatusMessage = "The workflow service timed out.";
+            ErrorMessage = "The workflow request timed out. Check its status before resubmitting.";
             return Page();
         }
     }
@@ -71,13 +86,14 @@ public class IndexModel : PageModel
         if (ApprovalInput.Decision is not ("approve" or "reject")
             || string.IsNullOrWhiteSpace(ApprovalInput.Reason))
         {
-            StatusMessage = "Provide an approval decision and reason.";
+            ErrorMessage = "Choose a decision and provide a reason.";
+            await LoadWorkflowAsync(workflowId);
             return Page();
         }
 
         if (workflowId == Guid.Empty)
         {
-            StatusMessage = "Create a workflow before approving it.";
+            ErrorMessage = "Create a workflow before recording a decision.";
             return Page();
         }
 
@@ -88,25 +104,71 @@ public class IndexModel : PageModel
                 new { decision = ApprovalInput.Decision, reason = ApprovalInput.Reason });
             if (!response.IsSuccessStatusCode)
             {
-                StatusMessage = "The approval request was rejected.";
+                ErrorMessage = await ReadFailureAsync(response, "The approval request was rejected.");
+                await LoadWorkflowAsync(workflowId);
                 return Page();
             }
 
-            Workflow = await response.Content.ReadFromJsonAsync<WorkflowResponse>();
             StatusMessage = "Approval recorded successfully.";
-            return Page();
+            return RedirectToPage(new { workflowId });
         }
         catch (HttpRequestException exception)
         {
             _logger.LogError(exception, "The orchestrator API could not be reached for approval");
-            StatusMessage = "The approval service could not be reached.";
+            ErrorMessage = "The approval service is currently unavailable.";
+            await LoadWorkflowAsync(workflowId);
             return Page();
         }
         catch (TaskCanceledException exception)
         {
             _logger.LogError(exception, "The orchestrator approval request timed out");
-            StatusMessage = "The approval service timed out.";
+            ErrorMessage = "The approval request timed out. Refresh the workflow before retrying.";
+            await LoadWorkflowAsync(workflowId);
             return Page();
+        }
+    }
+
+    private async Task LoadWorkflowAsync(Guid workflowId)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"/api/v1/workflows/{workflowId}");
+            if (!response.IsSuccessStatusCode)
+            {
+                ErrorMessage = await ReadFailureAsync(response, "The workflow could not be loaded.");
+                return;
+            }
+
+            Workflow = await response.Content.ReadFromJsonAsync<WorkflowDetailResponse>();
+            if (Workflow is null)
+            {
+                ErrorMessage = "The workflow service returned an invalid status response.";
+            }
+        }
+        catch (HttpRequestException exception)
+        {
+            _logger.LogError(exception, "Workflow {WorkflowId} could not be loaded", workflowId);
+            ErrorMessage = "The workflow status is temporarily unavailable.";
+        }
+        catch (TaskCanceledException exception)
+        {
+            _logger.LogError(exception, "Workflow {WorkflowId} status request timed out", workflowId);
+            ErrorMessage = "The workflow status request timed out.";
+        }
+    }
+
+    private static async Task<string> ReadFailureAsync(
+        HttpResponseMessage response,
+        string fallback)
+    {
+        try
+        {
+            var problem = await response.Content.ReadFromJsonAsync<ProblemResponse>();
+            return string.IsNullOrWhiteSpace(problem?.Title) ? fallback : problem.Title;
+        }
+        catch (JsonException)
+        {
+            return fallback;
         }
     }
 
@@ -126,4 +188,36 @@ public class IndexModel : PageModel
     }
 
     public sealed record WorkflowResponse(Guid WorkflowId, string TraceId, string Status, string Message);
+
+    public sealed record WorkflowEventResponse(
+        string Type,
+        string Message,
+        DateTimeOffset Timestamp,
+        string? Actor,
+        string? Details);
+
+    public sealed record SupportCaseResponse(
+        Guid Id,
+        string CaseNumber,
+        string Status,
+        string Summary,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset UpdatedAt);
+
+    public sealed record WorkflowDetailResponse(
+        Guid WorkflowId,
+        string TraceId,
+        string UserMessage,
+        string Status,
+        string? Intent,
+        bool RequiresApproval,
+        string? ApprovalDecision,
+        string? ApprovalReason,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset UpdatedAt,
+        long Version,
+        IReadOnlyList<WorkflowEventResponse> Events,
+        SupportCaseResponse? SupportCase);
+
+    private sealed record ProblemResponse(string? Title);
 }

@@ -1,4 +1,17 @@
-﻿// Please see documentation at https://learn.microsoft.com/aspnet/core/client-side/bundling-and-minification
-// for details on configuring this project to bundle and minify static web assets.
+document.querySelectorAll("[data-prompt]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const input = document.querySelector("#Input_UserMessage");
+    if (!input) return;
 
-// Write your JavaScript code.
+    input.value = button.dataset.prompt ?? "";
+    input.focus();
+  });
+});
+
+document.querySelectorAll("[data-loading-form]").forEach((form) => {
+  form.addEventListener("submit", () => {
+    if (form.checkValidity()) {
+      form.classList.add("is-loading");
+    }
+  });
+});
