@@ -26,12 +26,12 @@ tasks:
       REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
 
   down:
-    desc: Destroy the shared Azure infrastructure
+    desc: Destroys all Azure resources and cleans up Terraform
+    dir: '{{.INFRA_DIR}}'
     cmds:
-      - terraform -chdir=./infrastructure init
-      - terraform -chdir=./infrastructure destroy -var "region={{.REGION}}"
-    vars:
-      REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
+      - az group list --tag Application="{{.TITLE}}" --query "[].name" -o tsv | xargs --no-run-if-empty -ot -n 1 az group delete -y --no-wait -n || true
+      - rm -rf terraform.tfstate.d .terraform.lock.hcl .terraform terraform.tfstate terraform.tfstate.backup .terraform.tfstate.lock.info terraform.tfstate.* || true
+
 
   _init:
     internal: true
