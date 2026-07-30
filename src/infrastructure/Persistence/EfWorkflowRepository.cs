@@ -29,34 +29,61 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context) : IWorkf
         long expectedVersion,
         CancellationToken cancellationToken = default)
     {
-        var entity = await context.Workflows
-            .Include(w => w.Events)
-            .FirstOrDefaultAsync(w => w.Id == workflow.Id, cancellationToken)
+        var currentVersion = await context.Workflows
+            .AsNoTracking()
+            .Where(item => item.Id == workflow.Id)
+            .Select(item => (long?)item.Version)
+            .SingleOrDefaultAsync(cancellationToken)
             ?? throw new WorkflowNotFoundException(workflow.Id);
 
-        if (entity.Version != expectedVersion)
-            throw new StaleVersionException(workflow.Id, expectedVersion, entity.Version);
+        if (currentVersion != expectedVersion)
+            throw new StaleVersionException(workflow.Id, expectedVersion, currentVersion);
 
-        entity.Status = workflow.Status;
-        entity.Intent = workflow.Intent;
-        entity.RequiresApproval = workflow.RequiresApproval;
-        entity.ApprovalDecision = workflow.ApprovalDecision;
-        entity.ApprovalReason = workflow.ApprovalReason;
-        entity.UpdatedAt = workflow.UpdatedAt;
+        var existingEventCount = await context.WorkflowEvents
+            .AsNoTracking()
+            .CountAsync(item => item.WorkflowId == workflow.Id, cancellationToken);
 
-        AppendNewEvents(entity, workflow);
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var affectedRows = await context.Workflows
+            .Where(item => item.Id == workflow.Id && item.Version == expectedVersion)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(item => item.Status, workflow.Status)
+                    .SetProperty(item => item.Intent, workflow.Intent)
+                    .SetProperty(item => item.RequiresApproval, workflow.RequiresApproval)
+                    .SetProperty(item => item.ApprovalDecision, workflow.ApprovalDecision)
+                    .SetProperty(item => item.ApprovalReason, workflow.ApprovalReason)
+                    .SetProperty(item => item.UpdatedAt, workflow.UpdatedAt)
+                    .SetProperty(item => item.Version, workflow.Version),
+                cancellationToken);
 
-        context.Entry(entity).Property(item => item.Version).OriginalValue = expectedVersion;
-        entity.Version = workflow.Version;
-
-        try
-        {
-            await context.SaveChangesAsync(cancellationToken);
-            context.ChangeTracker.Clear();
-        }
-        catch (DbUpdateConcurrencyException)
+        if (affectedRows != 1)
         {
             throw new StaleVersionException(workflow.Id, expectedVersion, -1);
+        }
+
+        AddNewEvents(workflow, existingEventCount);
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        context.ChangeTracker.Clear();
+    }
+
+    private void AddNewEvents(WorkflowState workflow, int existingCount)
+    {
+        for (var i = existingCount; i < workflow.Events.Count; i++)
+        {
+            var item = workflow.Events[i];
+            context.WorkflowEvents.Add(new WorkflowEventEntity
+            {
+                Id = Guid.NewGuid(),
+                WorkflowId = workflow.Id,
+                Sequence = i,
+                Type = item.Type,
+                Message = item.Message,
+                Timestamp = item.Timestamp,
+                Actor = item.Actor,
+                Details = item.Details
+            });
         }
     }
 
@@ -122,26 +149,4 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context) : IWorkf
             Version: entity.Version);
     }
 
-    // Appends events present in the domain state but not yet persisted.
-    // Uses position (entity event count) rather than identity comparison so
-    // the mapping stays O(n) with no allocation beyond the new entities.
-    private void AppendNewEvents(WorkflowEntity entity, WorkflowState workflow)
-    {
-        var existingCount = entity.Events.Count;
-        for (var i = existingCount; i < workflow.Events.Count; i++)
-        {
-            var e = workflow.Events[i];
-            context.WorkflowEvents.Add(new WorkflowEventEntity
-            {
-                Id = Guid.NewGuid(),
-                WorkflowId = workflow.Id,
-                Sequence = i,
-                Type = e.Type,
-                Message = e.Message,
-                Timestamp = e.Timestamp,
-                Actor = e.Actor,
-                Details = e.Details
-            });
-        }
-    }
 }

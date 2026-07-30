@@ -25,35 +25,50 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
         long expectedVersion,
         CancellationToken cancellationToken = default)
     {
-        var entity = await context.Workflows
-            .Include(w => w.Events)
-            .Include(w => w.Decisions)
-            .FirstOrDefaultAsync(w => w.Id == workflow.Id, cancellationToken)
-            ?? throw new WorkflowNotFoundException(workflow.Id);
-
-        // Idempotency and conflict check before touching any state.
-        var existing = entity.Decisions.SingleOrDefault();
+        var existing = await context.ApprovalDecisions
+            .AsNoTracking()
+            .SingleOrDefaultAsync(item => item.WorkflowId == workflow.Id, cancellationToken);
         if (existing is not null)
         {
             if (string.Equals(existing.Decision, decision.Decision, StringComparison.OrdinalIgnoreCase))
-                return; // Identical decision already recorded — idempotent success.
+                return;
 
             throw new ConflictingDecisionException(workflow.Id, existing.Decision, decision.Decision);
         }
 
-        if (entity.Version != expectedVersion)
-            throw new StaleVersionException(workflow.Id, expectedVersion, entity.Version);
+        var currentVersion = await context.Workflows
+            .AsNoTracking()
+            .Where(item => item.Id == workflow.Id)
+            .Select(item => (long?)item.Version)
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? throw new WorkflowNotFoundException(workflow.Id);
 
-        // Apply updated workflow scalar fields.
-        entity.Status = workflow.Status;
-        entity.ApprovalDecision = workflow.ApprovalDecision;
-        entity.ApprovalReason = workflow.ApprovalReason;
-        entity.UpdatedAt = workflow.UpdatedAt;
+        if (currentVersion != expectedVersion)
+            throw new StaleVersionException(workflow.Id, expectedVersion, currentVersion);
 
-        // Append new events (the approval event added by the service layer).
-        AppendNewEvents(entity, workflow);
+        var existingEventCount = await context.WorkflowEvents
+            .AsNoTracking()
+            .CountAsync(item => item.WorkflowId == workflow.Id, cancellationToken);
 
-        // Record the approval decision detail.
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var affectedRows = await context.Workflows
+            .Where(item => item.Id == workflow.Id && item.Version == expectedVersion)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(item => item.Status, workflow.Status)
+                    .SetProperty(item => item.ApprovalDecision, workflow.ApprovalDecision)
+                    .SetProperty(item => item.ApprovalReason, workflow.ApprovalReason)
+                    .SetProperty(item => item.UpdatedAt, workflow.UpdatedAt)
+                    .SetProperty(item => item.Version, workflow.Version),
+                cancellationToken);
+
+        if (affectedRows != 1)
+        {
+            throw new StaleVersionException(workflow.Id, expectedVersion, -1);
+        }
+
+        AddNewEvents(workflow, existingEventCount);
+
         context.ApprovalDecisions.Add(new ApprovalDecisionEntity
         {
             Id = decision.Id,
@@ -94,25 +109,15 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
             });
         }
 
-        context.Entry(entity).Property(item => item.Version).OriginalValue = expectedVersion;
-        entity.Version = workflow.Version;
-
         try
         {
             await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             context.ChangeTracker.Clear();
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            if (await DecisionWasRecordedAsync(decision, cancellationToken))
-            {
-                return;
-            }
-
-            throw new StaleVersionException(workflow.Id, expectedVersion, -1);
         }
         catch (DbUpdateException)
         {
+            await transaction.RollbackAsync(CancellationToken.None);
             if (await DecisionWasRecordedAsync(decision, cancellationToken))
             {
                 return;
@@ -152,9 +157,8 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
             decision.Decision);
     }
 
-    private void AppendNewEvents(WorkflowEntity entity, WorkflowState workflow)
+    private void AddNewEvents(WorkflowState workflow, int existingCount)
     {
-        var existingCount = entity.Events.Count;
         for (var i = existingCount; i < workflow.Events.Count; i++)
         {
             var e = workflow.Events[i];
