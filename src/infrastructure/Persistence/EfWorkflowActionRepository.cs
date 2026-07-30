@@ -54,7 +54,7 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
         AppendNewEvents(entity, workflow);
 
         // Record the approval decision detail.
-        entity.Decisions.Add(new ApprovalDecisionEntity
+        context.ApprovalDecisions.Add(new ApprovalDecisionEntity
         {
             Id = decision.Id,
             WorkflowId = decision.WorkflowId,
@@ -66,7 +66,7 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
 
         if (actionExecution is not null)
         {
-            entity.ActionExecutions.Add(new ActionExecutionEntity
+            context.ActionExecutions.Add(new ActionExecutionEntity
             {
                 Id = actionExecution.Id,
                 WorkflowId = actionExecution.WorkflowId,
@@ -82,7 +82,7 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
 
         if (supportCase is not null)
         {
-            entity.SupportCase = new SupportCaseEntity
+            context.SupportCases.Add(new SupportCaseEntity
             {
                 Id = supportCase.Id,
                 WorkflowId = supportCase.WorkflowId,
@@ -91,7 +91,7 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
                 Summary = supportCase.Summary,
                 CreatedAt = supportCase.CreatedAt,
                 UpdatedAt = supportCase.UpdatedAt
-            };
+            });
         }
 
         context.Entry(entity).Property(item => item.Version).OriginalValue = expectedVersion;
@@ -152,13 +152,13 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
             decision.Decision);
     }
 
-    private static void AppendNewEvents(WorkflowEntity entity, WorkflowState workflow)
+    private void AppendNewEvents(WorkflowEntity entity, WorkflowState workflow)
     {
         var existingCount = entity.Events.Count;
         for (var i = existingCount; i < workflow.Events.Count; i++)
         {
             var e = workflow.Events[i];
-            entity.Events.Add(new WorkflowEventEntity
+            context.WorkflowEvents.Add(new WorkflowEventEntity
             {
                 Id = Guid.NewGuid(),
                 WorkflowId = workflow.Id,

@@ -125,13 +125,13 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context) : IWorkf
     // Appends events present in the domain state but not yet persisted.
     // Uses position (entity event count) rather than identity comparison so
     // the mapping stays O(n) with no allocation beyond the new entities.
-    private static void AppendNewEvents(WorkflowEntity entity, WorkflowState workflow)
+    private void AppendNewEvents(WorkflowEntity entity, WorkflowState workflow)
     {
         var existingCount = entity.Events.Count;
         for (var i = existingCount; i < workflow.Events.Count; i++)
         {
             var e = workflow.Events[i];
-            entity.Events.Add(new WorkflowEventEntity
+            context.WorkflowEvents.Add(new WorkflowEventEntity
             {
                 Id = Guid.NewGuid(),
                 WorkflowId = workflow.Id,
