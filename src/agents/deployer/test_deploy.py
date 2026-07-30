@@ -51,7 +51,6 @@ class DeployerContractTests(unittest.TestCase):
                             "environment_variables": {
                                 "BANKING_AGENT_KIND": "workflow-planning",
                                 "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
-                                "FOUNDRY_PROJECT_ENDPOINT": "https://example.test/project",
                             },
                         },
                     }
@@ -84,7 +83,6 @@ class DeployerContractTests(unittest.TestCase):
                             "environment_variables": {
                                 "BANKING_AGENT_KIND": "workflow-planning",
                                 "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
-                                "FOUNDRY_PROJECT_ENDPOINT": "https://example.test/project",
                             },
                         },
                     }
@@ -117,9 +115,9 @@ class DeployerContractTests(unittest.TestCase):
 
         self.assertEqual("1", version)
         definition = client._request.call_args.args[2]["definition"]
-        self.assertEqual(
-            "https://example.test/project",
-            definition["environment_variables"]["FOUNDRY_PROJECT_ENDPOINT"],
+        self.assertNotIn(
+            "FOUNDRY_PROJECT_ENDPOINT",
+            definition["environment_variables"],
         )
 
     def test_version_falls_back_to_agent_version_id(self):

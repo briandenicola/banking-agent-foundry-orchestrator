@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/containerapp-job-logs.sh"
+
 job_name="$(terraform -chdir=./apps output -raw AGENT_DEPLOYER_JOB_NAME)"
 resource_group="$(terraform -chdir=./apps output -raw APPS_RESOURCE_GROUP_NAME)"
 
@@ -36,6 +38,11 @@ for _ in $(seq 1 90); do
       ;;
     Failed)
       echo "Hosted Agent deployment execution ${execution_name} failed." >&2
+      show_containerapp_job_execution_logs \
+        "${job_name}" \
+        "${resource_group}" \
+        "${execution_name}" \
+        "Hosted Agent deployment logs"
       exit 1
       ;;
     *)
@@ -46,4 +53,9 @@ for _ in $(seq 1 90); do
 done
 
 echo "Timed out waiting for Hosted Agent deployment execution ${execution_name}." >&2
+show_containerapp_job_execution_logs \
+  "${job_name}" \
+  "${resource_group}" \
+  "${execution_name}" \
+  "Hosted Agent deployment logs"
 exit 1
