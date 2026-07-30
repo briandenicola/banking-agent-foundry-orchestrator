@@ -130,6 +130,11 @@ tasks:
     cmds:
       - bash ./scripts/deploy-hosted-agents.sh
 
+  smoke:
+    desc: Run the deployed MVP health, Hosted Agent, workflow, and approval checks
+    cmds:
+      - python ./scripts/smoke-mvp.py {{.CLI_ARGS}}
+
   destroy:
     desc: Destroy the application Container Apps
     cmds:

@@ -36,6 +36,7 @@ class DeployerContractTests(unittest.TestCase):
 
     def test_matching_version_reuses_creating_deployment(self):
         client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
         client._agent_exists = Mock(return_value=True)
         client._request = Mock(
             return_value={
@@ -50,6 +51,7 @@ class DeployerContractTests(unittest.TestCase):
                             "environment_variables": {
                                 "BANKING_AGENT_KIND": "workflow-planning",
                                 "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
+                                "FOUNDRY_PROJECT_ENDPOINT": "https://example.test/project",
                             },
                         },
                     }
@@ -67,6 +69,7 @@ class DeployerContractTests(unittest.TestCase):
 
     def test_matching_version_reuses_running_deployment(self):
         client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
         client._agent_exists = Mock(return_value=True)
         client._request = Mock(
             return_value={
@@ -81,6 +84,7 @@ class DeployerContractTests(unittest.TestCase):
                             "environment_variables": {
                                 "BANKING_AGENT_KIND": "workflow-planning",
                                 "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
+                                "FOUNDRY_PROJECT_ENDPOINT": "https://example.test/project",
                             },
                         },
                     }
@@ -98,6 +102,7 @@ class DeployerContractTests(unittest.TestCase):
 
     def test_deploy_discovers_version_when_create_response_omits_it(self):
         client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
         client._find_matching_version = Mock(
             side_effect=[None, ("1", "active")]
         )
@@ -111,6 +116,11 @@ class DeployerContractTests(unittest.TestCase):
         )
 
         self.assertEqual("1", version)
+        definition = client._request.call_args.args[2]["definition"]
+        self.assertEqual(
+            "https://example.test/project",
+            definition["environment_variables"]["FOUNDRY_PROJECT_ENDPOINT"],
+        )
 
     def test_version_falls_back_to_agent_version_id(self):
         self.assertEqual("4", _version({"id": "workflow-planning:4"}))

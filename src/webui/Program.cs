@@ -1,5 +1,6 @@
 using Azure.Identity;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 var orchestratorApiBaseUrl = builder.Configuration["ORCHESTRATOR_API_BASE_URL"] ?? "http://localhost:5000";
@@ -12,6 +13,14 @@ if (!Uri.TryCreate(orchestratorApiBaseUrl, UriKind.Absolute, out var orchestrato
 }
 
 builder.Services.AddRazorPages();
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 builder.Services.AddAntiforgery(options =>
 {
     options.Cookie.Name = builder.Environment.IsDevelopment()
@@ -49,6 +58,8 @@ if (!string.IsNullOrWhiteSpace(dataProtectionBlobUri))
 }
 
 var app = builder.Build();
+
+app.UseForwardedHeaders();
 
 if (!app.Environment.IsDevelopment())
 {

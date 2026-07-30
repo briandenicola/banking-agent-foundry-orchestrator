@@ -67,6 +67,7 @@ class FoundryClient:
             "environment_variables": {
                 "BANKING_AGENT_KIND": agent.kind,
                 "AZURE_AI_MODEL_DEPLOYMENT_NAME": model_deployment,
+                "FOUNDRY_PROJECT_ENDPOINT": self._endpoint,
             },
         }
 
@@ -128,6 +129,7 @@ class FoundryClient:
                 container.get("image") == image
                 and environment.get("BANKING_AGENT_KIND") == agent.kind
                 and environment.get("AZURE_AI_MODEL_DEPLOYMENT_NAME") == model_deployment
+                and environment.get("FOUNDRY_PROJECT_ENDPOINT") == self._endpoint
             ):
                 return str(version.get("version")), status
 

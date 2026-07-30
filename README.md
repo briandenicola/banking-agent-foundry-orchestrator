@@ -109,6 +109,14 @@ The job idempotently creates or versions these four Hosted Agents:
 
 No `azd` deployment is used.
 
+Run the deployed MVP smoke checks after the job succeeds:
+
+```bash
+task app:smoke
+```
+
+The smoke runner verifies the web UI form, orchestrator health, all four Hosted Agents, informational and approval-required routing, and an approval transition. It emits machine-readable JSON and returns a nonzero exit code when a check fails.
+
 ## Complete deployment shortcut
 
 After the shared infrastructure exists, the following command builds all images, applies the application stack, and registers the Hosted Agents:
