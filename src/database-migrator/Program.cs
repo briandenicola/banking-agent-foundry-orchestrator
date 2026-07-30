@@ -91,7 +91,7 @@ static async Task EnsureRuntimePrincipalAsync(
         SELECT EXISTS (
             SELECT 1
             FROM pg_catalog.pgaadauth_list_principals(false)
-            WHERE "objectId" = @object_id
+            WHERE objectid = @object_id
         );
         """;
     exists.Parameters.AddWithValue("object_id", runtimePrincipalId);
