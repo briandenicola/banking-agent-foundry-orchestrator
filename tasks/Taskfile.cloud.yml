@@ -15,7 +15,6 @@ tasks:
     cmds:
       - task: _init
       - task: apply
-      - task: infra:config
 
   apply:
     desc: Apply Terraform infrastructure
