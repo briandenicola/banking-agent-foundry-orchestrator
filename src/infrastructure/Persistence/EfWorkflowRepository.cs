@@ -12,6 +12,7 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context) : IWorkf
         var entity = MapToEntity(workflow);
         context.Workflows.Add(entity);
         await context.SaveChangesAsync(cancellationToken);
+        context.ChangeTracker.Clear();
     }
 
     public async Task<WorkflowState?> GetAsync(Guid workflowId, CancellationToken cancellationToken = default)
@@ -45,12 +46,13 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context) : IWorkf
 
         AppendNewEvents(entity, workflow);
 
-        // entity.Version original value drives EF's WHERE version=@expected in the UPDATE
+        context.Entry(entity).Property(item => item.Version).OriginalValue = expectedVersion;
         entity.Version = workflow.Version;
 
         try
         {
             await context.SaveChangesAsync(cancellationToken);
+            context.ChangeTracker.Clear();
         }
         catch (DbUpdateConcurrencyException)
         {

@@ -94,12 +94,13 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
             };
         }
 
-        // Increment version; EF uses the original tracked value for WHERE version=@expected.
+        context.Entry(entity).Property(item => item.Version).OriginalValue = expectedVersion;
         entity.Version = workflow.Version;
 
         try
         {
             await context.SaveChangesAsync(cancellationToken);
+            context.ChangeTracker.Clear();
         }
         catch (DbUpdateConcurrencyException)
         {
