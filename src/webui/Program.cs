@@ -1,3 +1,5 @@
+using Azure.Core;
+using Azure.Identity;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 
@@ -32,10 +34,39 @@ builder.Services.AddAntiforgery(options =>
         ? CookieSecurePolicy.SameAsRequest
         : CookieSecurePolicy.Always;
 });
-builder.Services.AddHttpClient("orchestrator", client =>
+
+var orchestratorTokenScope = builder.Configuration["ORCHESTRATOR_TOKEN_SCOPE"];
+var azureClientId = builder.Configuration["AZURE_CLIENT_ID"];
+
+if (!builder.Environment.IsDevelopment())
 {
-    client.BaseAddress = orchestratorApiBaseUri;
-});
+    ArgumentException.ThrowIfNullOrWhiteSpace(azureClientId, "AZURE_CLIENT_ID");
+    ArgumentException.ThrowIfNullOrWhiteSpace(orchestratorTokenScope, "ORCHESTRATOR_TOKEN_SCOPE");
+}
+
+TokenCredential credential = builder.Environment.IsDevelopment()
+    ? new DefaultAzureCredential()
+    : new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(azureClientId!));
+
+builder.Services.AddSingleton(credential);
+
+if (!string.IsNullOrEmpty(orchestratorTokenScope))
+{
+    builder.Services.AddTransient(sp =>
+        new OrchestratorTokenHandler(sp.GetRequiredService<TokenCredential>(), orchestratorTokenScope));
+    builder.Services.AddHttpClient("orchestrator", client =>
+    {
+        client.BaseAddress = orchestratorApiBaseUri;
+    }).AddHttpMessageHandler<OrchestratorTokenHandler>();
+}
+else
+{
+    builder.Services.AddHttpClient("orchestrator", client =>
+    {
+        client.BaseAddress = orchestratorApiBaseUri;
+    });
+}
+
 Directory.CreateDirectory(dataProtectionKeysPath);
 builder.Services
     .AddDataProtection()

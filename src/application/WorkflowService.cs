@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BankingAgent.Domain;
@@ -10,6 +9,8 @@ public interface IWorkflowService
 {
     Task<WorkflowState> StartAsync(string userMessage, CancellationToken cancellationToken = default);
     Task<WorkflowState> ApproveAsync(Guid workflowId, string decision, string reason, CancellationToken cancellationToken = default);
+    Task<WorkflowState?> GetAsync(Guid workflowId, CancellationToken cancellationToken = default);
+    Task<SupportCase?> GetSupportCaseAsync(Guid workflowId, CancellationToken cancellationToken = default);
 }
 
 public sealed class WorkflowService : IWorkflowService
@@ -29,12 +30,19 @@ public sealed class WorkflowService : IWorkflowService
 
     private readonly IMcpClient _mcpClient;
     private readonly ILogger<WorkflowService> _logger;
-    private readonly ConcurrentDictionary<Guid, WorkflowState> _states = new();
+    private readonly IWorkflowRepository _workflowRepository;
+    private readonly IWorkflowActionRepository _workflowActionRepository;
 
-    public WorkflowService(IMcpClient mcpClient, ILogger<WorkflowService> logger)
+    public WorkflowService(
+        IMcpClient mcpClient,
+        ILogger<WorkflowService> logger,
+        IWorkflowRepository workflowRepository,
+        IWorkflowActionRepository workflowActionRepository)
     {
         _mcpClient = mcpClient;
         _logger = logger;
+        _workflowRepository = workflowRepository;
+        _workflowActionRepository = workflowActionRepository;
     }
 
     public async Task<WorkflowState> StartAsync(string userMessage, CancellationToken cancellationToken = default)
@@ -43,12 +51,26 @@ public sealed class WorkflowService : IWorkflowService
         var workflowId = Guid.NewGuid();
         var createdAt = DateTimeOffset.UtcNow;
 
-        var events = new List<WorkflowEvent>
-        {
-            new("workflow.started", "Workflow started", createdAt, "system")
-        };
+        // Phase 1 — persist draft before invoking any agent.
+        var draftState = new WorkflowState(
+            Id: workflowId,
+            TraceId: traceId,
+            UserMessage: userMessage,
+            Status: WorkflowStatus.Draft,
+            Intent: null,
+            RequiresApproval: false,
+            ApprovalDecision: null,
+            ApprovalReason: null,
+            CreatedAt: createdAt,
+            UpdatedAt: createdAt,
+            Events: [new WorkflowEvent("workflow.started", "Workflow started", createdAt, "system")],
+            Version: 0);
 
-        var parameters = new Dictionary<string, object?>
+        await _workflowRepository.AddAsync(draftState, cancellationToken);
+        var current = draftState;
+
+        // Phase 2 — planner agent.
+        var plannerParameters = new Dictionary<string, object?>
         {
             ["user_message"] = userMessage,
             ["trace_id"] = traceId,
@@ -56,30 +78,52 @@ public sealed class WorkflowService : IWorkflowService
             ["workflow_status"] = "planning"
         };
 
-        var plannerResult = await _mcpClient.InvokeAsync("workflow.plan", parameters, cancellationToken);
-        events.Add(CreateInvocationEvent(plannerResult));
+        McpToolResult plannerResult;
+        try
+        {
+            plannerResult = await _mcpClient.InvokeAsync(
+                "workflow.plan",
+                plannerParameters,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await PersistFailedAsync(
+                current,
+                [],
+                "Planner invocation was canceled.",
+                CancellationToken.None);
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TimeoutException)
+        {
+            _logger.LogError(
+                ex,
+                "Planner invocation failed for workflow {WorkflowId}",
+                workflowId);
+            return await PersistFailedAsync(
+                current,
+                [],
+                "Planner invocation failed.",
+                CancellationToken.None);
+        }
+        var plannerEvent = CreateInvocationEvent(plannerResult);
 
         if (!TryReadAgentResult(plannerResult, "workflow-planning", out var plannerDecision, out var plannerError))
-        {
-            return StoreFailedWorkflow(
-                workflowId,
-                traceId,
-                userMessage,
-                createdAt,
-                events,
-                plannerError);
-        }
+            return await PersistFailedAsync(current, [plannerEvent], plannerError, cancellationToken);
 
+        current = await AdvanceAndPersistAsync(current, [plannerEvent], cancellationToken);
+
+        // Phase 3 — routing.
         var route = WorkflowRoutingPolicy.Decide(userMessage);
+
         if (!SpecialistTools.TryGetValue(route.Agent, out var specialistTool))
         {
-            return StoreFailedWorkflow(
-                workflowId,
-                traceId,
-                userMessage,
-                createdAt,
-                events,
-                $"Routing policy selected unsupported agent '{route.Agent}'.");
+            return await PersistFailedAsync(
+                current,
+                [],
+                $"Routing policy selected unsupported agent '{route.Agent}'.",
+                cancellationToken);
         }
 
         if (!string.Equals(plannerDecision.SelectedAgent, route.Agent, StringComparison.OrdinalIgnoreCase) ||
@@ -94,14 +138,17 @@ public sealed class WorkflowService : IWorkflowService
                 route.RequiresApproval);
         }
 
-        events.Add(new WorkflowEvent(
+        var routeEvent = new WorkflowEvent(
             "workflow.route_selected",
             $"Selected specialist {route.Agent}",
             DateTimeOffset.UtcNow,
             "system",
-            $"Approval required: {route.RequiresApproval}"));
+            $"Approval required: {route.RequiresApproval}");
 
-        var specialistParameters = new Dictionary<string, object?>(parameters)
+        current = await AdvanceAndPersistAsync(current, [routeEvent], cancellationToken);
+
+        // Phase 4 — specialist agent.
+        var specialistParameters = new Dictionary<string, object?>(plannerParameters)
         {
             ["workflow_status"] = "specialist_processing",
             ["intent"] = plannerDecision.Intent,
@@ -114,86 +161,177 @@ public sealed class WorkflowService : IWorkflowService
             }
         };
 
-        var specialistResult = await _mcpClient.InvokeAsync(specialistTool, specialistParameters, cancellationToken);
-        events.Add(CreateInvocationEvent(specialistResult));
-
-        if (!TryReadAgentResult(
-                specialistResult,
-                route.Agent,
-                out var specialistDecision,
-                out var specialistError))
+        McpToolResult specialistResult;
+        try
         {
-            return StoreFailedWorkflow(
-                workflowId,
-                traceId,
-                userMessage,
-                createdAt,
-                events,
-                specialistError);
+            specialistResult = await _mcpClient.InvokeAsync(
+                specialistTool,
+                specialistParameters,
+                cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await PersistFailedAsync(
+                current,
+                [],
+                "Specialist invocation was canceled.",
+                CancellationToken.None);
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TimeoutException)
+        {
+            _logger.LogError(
+                ex,
+                "Specialist invocation failed for workflow {WorkflowId}",
+                workflowId);
+            return await PersistFailedAsync(
+                current,
+                [],
+                "Specialist invocation failed.",
+                CancellationToken.None);
+        }
+        var specialistEvent = CreateInvocationEvent(specialistResult);
 
+        if (!TryReadAgentResult(specialistResult, route.Agent, out var specialistDecision, out var specialistError))
+            return await PersistFailedAsync(current, [specialistEvent], specialistError, cancellationToken);
+
+        // Phase 5 — terminal state.
         var requiresApproval = route.RequiresApproval;
-        var status = requiresApproval
-            ? WorkflowStatus.WaitingForApproval
-            : WorkflowStatus.Completed;
-        var updatedAt = DateTimeOffset.UtcNow;
-
-        events.Add(new WorkflowEvent(
+        var terminalStatus = requiresApproval ? WorkflowStatus.WaitingForApproval : WorkflowStatus.Completed;
+        var now = DateTimeOffset.UtcNow;
+        var terminalEvent = new WorkflowEvent(
             requiresApproval ? "workflow.approval_required" : "workflow.completed",
             requiresApproval ? "Workflow requires explicit approval" : "Workflow completed without approval",
-            updatedAt,
+            now,
             "system",
-            specialistDecision.Summary));
+            specialistDecision.Summary);
 
-        var workflow = new WorkflowState(
-            Id: workflowId,
-            TraceId: traceId,
-            UserMessage: userMessage,
-            Status: status,
-            Intent: specialistDecision.Intent,
-            RequiresApproval: requiresApproval,
-            ApprovalDecision: null,
-            ApprovalReason: null,
-            CreatedAt: createdAt,
-            UpdatedAt: updatedAt,
-            Events: events);
+        var finalEvents = current.Events.Concat([specialistEvent, terminalEvent]).ToList();
+        var finalState = current with
+        {
+            Status = terminalStatus,
+            Intent = specialistDecision.Intent,
+            RequiresApproval = requiresApproval,
+            UpdatedAt = now,
+            Events = finalEvents,
+            Version = current.Version + 1
+        };
 
-        _states[workflow.Id] = workflow;
+        await _workflowRepository.UpdateAsync(finalState, current.Version, cancellationToken);
+
         _logger.LogInformation(
             "Workflow {WorkflowId} completed routing for trace {TraceId} with status {Status} and specialist {Specialist}",
-            workflow.Id,
-            workflow.TraceId,
-            workflow.Status,
-            route.Agent);
-        return workflow;
+            workflowId, traceId, finalState.Status, route.Agent);
+
+        return finalState;
     }
 
-    public Task<WorkflowState> ApproveAsync(Guid workflowId, string decision, string reason, CancellationToken cancellationToken = default)
+    public async Task<WorkflowState> ApproveAsync(
+        Guid workflowId,
+        string decision,
+        string reason,
+        CancellationToken cancellationToken = default)
     {
-        if (!_states.TryGetValue(workflowId, out var workflow))
+        var current = await _workflowRepository.GetAsync(workflowId, cancellationToken)
+            ?? throw new WorkflowNotFoundException(workflowId);
+
+        // Idempotency — return immediately if the same decision is already recorded.
+        if (current.ApprovalDecision is not null)
         {
-            throw new InvalidOperationException($"Workflow {workflowId} was not found.");
+            if (string.Equals(current.ApprovalDecision, decision, StringComparison.OrdinalIgnoreCase))
+                return current;
+
+            throw new ConflictingDecisionException(workflowId, current.ApprovalDecision, decision);
         }
 
-        if (workflow.Status != WorkflowStatus.WaitingForApproval)
-        {
-            throw new InvalidOperationException("Workflow is not awaiting approval.");
-        }
+        if (current.Status != WorkflowStatus.WaitingForApproval)
+            throw new InvalidTransitionException(workflowId, current.Status, WorkflowStatus.WaitingForApproval.ToString());
 
         var isApproved = decision.Equals("approve", StringComparison.OrdinalIgnoreCase);
         var finalStatus = isApproved ? WorkflowStatus.Completed : WorkflowStatus.Rejected;
-        var updated = workflow with
+        var now = DateTimeOffset.UtcNow;
+        var approvalEvent = new WorkflowEvent("workflow.approval", $"Approval {decision}", now, "user", reason);
+
+        var newState = current with
         {
             Status = finalStatus,
             ApprovalDecision = decision,
             ApprovalReason = reason,
-            UpdatedAt = DateTimeOffset.UtcNow,
-            Events = workflow.Events.Append(new WorkflowEvent("workflow.approval", $"Approval {decision}", DateTimeOffset.UtcNow, "user", reason)).ToList()
+            UpdatedAt = now,
+            Events = current.Events.Append(approvalEvent).ToList(),
+            Version = current.Version + 1
         };
 
-        _states[updated.Id] = updated;
-        _logger.LogInformation("Workflow {WorkflowId} was {Decision}d", workflow.Id, decision);
-        return Task.FromResult(updated);
+        var approvalRecord = new ApprovalDecision(
+            Id: Guid.NewGuid(),
+            WorkflowId: workflowId,
+            Decision: decision,
+            Reason: reason,
+            Actor: "user",
+            CreatedAt: now);
+
+        await _workflowActionRepository.RecordDecisionAsync(
+            newState,
+            approvalRecord,
+            actionExecution: null,
+            supportCase: null,
+            expectedVersion: current.Version,
+            cancellationToken);
+
+        _logger.LogInformation("Workflow {WorkflowId} decision recorded: {Decision}", workflowId, decision);
+        return newState;
+    }
+
+    public Task<WorkflowState?> GetAsync(Guid workflowId, CancellationToken cancellationToken = default)
+        => _workflowRepository.GetAsync(workflowId, cancellationToken);
+
+    public Task<SupportCase?> GetSupportCaseAsync(Guid workflowId, CancellationToken cancellationToken = default)
+        => _workflowActionRepository.GetSupportCaseAsync(workflowId, cancellationToken);
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private async Task<WorkflowState> AdvanceAndPersistAsync(
+        WorkflowState current,
+        WorkflowEvent[] newEvents,
+        CancellationToken cancellationToken)
+    {
+        var next = current with
+        {
+            Events = current.Events.Concat(newEvents).ToList(),
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Version = current.Version + 1
+        };
+        await _workflowRepository.UpdateAsync(next, current.Version, cancellationToken);
+        return next;
+    }
+
+    private async Task<WorkflowState> PersistFailedAsync(
+        WorkflowState current,
+        WorkflowEvent[] additionalEvents,
+        string error,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var failEvent = new WorkflowEvent("workflow.failed", "Workflow routing failed", now, "system", error);
+        var allEvents = current.Events.Concat(additionalEvents).Append(failEvent).ToList();
+
+        var failedState = current with
+        {
+            Status = WorkflowStatus.Failed,
+            UpdatedAt = now,
+            Events = allEvents,
+            Version = current.Version + 1
+        };
+
+        await _workflowRepository.UpdateAsync(failedState, current.Version, cancellationToken);
+
+        _logger.LogError(
+            "Workflow {WorkflowId} failed for trace {TraceId}: {Error}",
+            current.Id, current.TraceId, error);
+
+        return failedState;
     }
 
     private static WorkflowEvent CreateInvocationEvent(McpToolResult result) =>
@@ -253,39 +391,6 @@ public sealed class WorkflowService : IWorkflowService
             error = $"Tool {result.ToolName} returned malformed JSON: {ex.Message}";
             return false;
         }
-    }
-
-    private WorkflowState StoreFailedWorkflow(
-        Guid workflowId,
-        string traceId,
-        string userMessage,
-        DateTimeOffset createdAt,
-        List<WorkflowEvent> events,
-        string error)
-    {
-        var updatedAt = DateTimeOffset.UtcNow;
-        events.Add(new WorkflowEvent("workflow.failed", "Workflow routing failed", updatedAt, "system", error));
-
-        var workflow = new WorkflowState(
-            Id: workflowId,
-            TraceId: traceId,
-            UserMessage: userMessage,
-            Status: WorkflowStatus.Failed,
-            Intent: null,
-            RequiresApproval: false,
-            ApprovalDecision: null,
-            ApprovalReason: null,
-            CreatedAt: createdAt,
-            UpdatedAt: updatedAt,
-            Events: events);
-
-        _states[workflow.Id] = workflow;
-        _logger.LogError(
-            "Workflow {WorkflowId} failed routing for trace {TraceId}: {Error}",
-            workflowId,
-            traceId,
-            error);
-        return workflow;
     }
 
     private sealed record AgentDecision(

@@ -23,3 +23,5 @@ data "azurerm_application_insights" "this" {
   name                = "${var.app_name}-appinsights"
   resource_group_name = local.core_rg_name
 }
+
+data "azurerm_client_config" "current" {}

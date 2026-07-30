@@ -43,8 +43,18 @@ resource "azurerm_container_app" "webui" {
       }
 
       env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.this["webui"].client_id
+      }
+
+      env {
         name  = "ORCHESTRATOR_API_BASE_URL"
         value = "https://${azurerm_container_app.orchestrator.ingress[0].fqdn}"
+      }
+
+      env {
+        name  = "ORCHESTRATOR_TOKEN_SCOPE"
+        value = local.orchestrator_token_scope
       }
 
       env {
@@ -61,5 +71,6 @@ resource "azurerm_container_app" "webui" {
 
   depends_on = [
     azurerm_role_assignment.acr_pull,
+    azuread_app_role_assignment.webui_workflow_invoke,
   ]
 }

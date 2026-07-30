@@ -21,3 +21,8 @@ output "DATABASE_MIGRATOR_JOB_NAME" {
 output "APPS_RESOURCE_GROUP_NAME" {
   value = azurerm_resource_group.this.name
 }
+
+output "ORCHESTRATOR_TOKEN_SCOPE" {
+  description = "Token scope the Web UI requests when calling the orchestrator API."
+  value       = local.orchestrator_token_scope
+}

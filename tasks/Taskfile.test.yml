@@ -1,0 +1,34 @@
+version: "3"
+
+tasks:
+  default:
+    cmds:
+      - task --list --taskfile ./tasks/Taskfile.test.yml
+
+  unit:
+    desc: Run all unit and contract tests (no live Azure dependencies)
+    cmds:
+      - dotnet test tests/BankingAgent.Domain.Tests --configuration Release --logger "console;verbosity=normal"
+      - dotnet test tests/BankingAgent.Application.Tests --configuration Release --logger "console;verbosity=normal"
+      - dotnet test tests/BankingAgent.Api.Tests --configuration Release --logger "console;verbosity=normal"
+      - dotnet test tests/BankingAgent.WebUi.Tests --configuration Release --logger "console;verbosity=normal"
+
+  domain:
+    desc: Run WorkflowRoutingPolicy unit tests only
+    cmds:
+      - dotnet test tests/BankingAgent.Domain.Tests --configuration Release --logger "console;verbosity=normal"
+
+  application:
+    desc: Run WorkflowService and repository contract tests
+    cmds:
+      - dotnet test tests/BankingAgent.Application.Tests --configuration Release --logger "console;verbosity=normal"
+
+  api:
+    desc: Run orchestrator endpoint and authentication contract tests
+    cmds:
+      - dotnet test tests/BankingAgent.Api.Tests --configuration Release --logger "console;verbosity=normal"
+
+  webui:
+    desc: Run Web UI token handler contract tests
+    cmds:
+      - dotnet test tests/BankingAgent.WebUi.Tests --configuration Release --logger "console;verbosity=normal"

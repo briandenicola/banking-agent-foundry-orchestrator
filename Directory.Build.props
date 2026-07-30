@@ -1,0 +1,18 @@
+<Project>
+  <!--
+    Redirect all MSBuild intermediate output to a user-writable artifacts directory
+    under the user's home directory to avoid permission conflicts in shared environments.
+    The legacy per-project obj/ directories are also excluded from compile globs
+    because changing BaseIntermediateOutputPath removes them from DefaultItemExcludes.
+  -->
+  <PropertyGroup>
+    <_UserHome Condition="'$(HOME)' != ''">$(HOME)</_UserHome>
+    <_UserHome Condition="'$(_UserHome)' == '' and '$(USERPROFILE)' != ''">$(USERPROFILE)</_UserHome>
+    <_UserHome Condition="'$(_UserHome)' == ''">$(MSBuildThisFileDirectory)</_UserHome>
+    <ArtifactsRoot>$(_UserHome)/.dotnet/banking-agent-artifacts</ArtifactsRoot>
+    <BaseIntermediateOutputPath>$(ArtifactsRoot)/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(ArtifactsRoot)/bin/$(MSBuildProjectName)/</BaseOutputPath>
+    <!-- Re-add the per-project legacy obj/ directory to default item exclusions. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;obj\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

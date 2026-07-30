@@ -48,6 +48,16 @@ resource "azurerm_container_app" "orchestrator" {
       }
 
       env {
+        name  = "AZURE_TENANT_ID"
+        value = data.azurerm_client_config.current.tenant_id
+      }
+
+      env {
+        name  = "ORCHESTRATOR_APP_ID"
+        value = azuread_application.orchestrator_api.client_id
+      }
+
+      env {
         name  = "FOUNDRY_AGENT_ENDPOINT"
         value = local.foundry_project_endpoint
       }

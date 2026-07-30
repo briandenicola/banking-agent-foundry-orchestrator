@@ -15,6 +15,10 @@ includes:
     taskfile: ./tasks/Taskfile.cloud.yml
     internal: false
 
+  test:
+    taskfile: ./tasks/Taskfile.test.yml
+    internal: false
+
 tasks:
   up:
     desc: Create the Azure environment for {{.TITLE}}

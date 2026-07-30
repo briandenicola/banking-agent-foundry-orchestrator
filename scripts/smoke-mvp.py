@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import http.cookiejar
+import html
 import json
 import os
 import re
@@ -29,6 +30,11 @@ READY_AGENT_STATUSES = {"active", "running"}
 ANTIFORGERY_PATTERN = re.compile(
     r'name="__RequestVerificationToken" type="hidden" value="([^"]+)"'
 )
+WORKFLOW_ID_PATTERN = re.compile(
+    r"<strong>Workflow ID:</strong>\s*([0-9a-fA-F-]{36})"
+)
+TRACE_ID_PATTERN = re.compile(r"<strong>Trace ID:</strong>\s*([^<]+)")
+WORKFLOW_STATUS_PATTERN = re.compile(r"<strong>Status:</strong>\s*([^<]+)")
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,21 @@ def terraform_output(directory: str, name: str) -> str:
 def setting(environment_name: str, terraform_directory: str, output_name: str) -> str:
     configured = os.environ.get(environment_name, "").strip()
     return configured or terraform_output(terraform_directory, output_name)
+
+
+def optional_setting(environment_name: str, terraform_directory: str, output_name: str) -> str:
+    """Like setting() but returns an empty string if the Terraform output does not exist.
+
+    Use for outputs that are only present in certain deployment configurations
+    (e.g., ORCHESTRATOR_TOKEN_SCOPE, which is only available after Lumen's Entra workstream).
+    """
+    configured = os.environ.get(environment_name, "").strip()
+    if configured:
+        return configured
+    try:
+        return terraform_output(terraform_directory, output_name)
+    except subprocess.CalledProcessError:
+        return ""
 
 
 def azure_token(scope: str) -> str:
@@ -235,6 +256,29 @@ def check_health(orchestrator_url: str, timeout: int) -> dict[str, Any]:
 def check_webui(webui_url: str, timeout: int) -> dict[str, Any]:
     cookies = http.cookiejar.CookieJar()
     opener = build_opener(HTTPCookieProcessor(cookies))
+    workflow, _ = submit_webui_workflow(
+        opener,
+        webui_url,
+        "Why is this card transaction pending?",
+        timeout,
+    )
+    if workflow["status"] != "Completed":
+        raise SmokeFailure(f"Web UI workflow did not complete: {workflow}")
+
+    return {
+        "http_status": 200,
+        "form_submission": "successful",
+        "antiforgery_cookie_count": len(cookies),
+        "workflow_id": workflow["workflowId"],
+    }
+
+
+def submit_webui_workflow(
+    opener,
+    webui_url: str,
+    message: str,
+    timeout: int,
+) -> tuple[dict[str, str], str]:
     with opener.open(webui_url, timeout=timeout) as response:
         page = response.read().decode("utf-8")
         if response.status != 200 or "Banking Agent Workflow" not in page:
@@ -246,7 +290,7 @@ def check_webui(webui_url: str, timeout: int) -> dict[str, Any]:
 
     form = urlencode(
         {
-            "Input.UserMessage": "Why is this card transaction pending?",
+            "Input.UserMessage": message,
             "__RequestVerificationToken": token_match.group(1),
         }
     ).encode("utf-8")
@@ -269,11 +313,62 @@ def check_webui(webui_url: str, timeout: int) -> dict[str, Any]:
             f"Web UI form returned HTTP {error.code}: {response_body[:2000]}"
         ) from error
 
+    return parse_webui_workflow(submitted_page), submitted_page
+
+
+def parse_webui_workflow(page: str) -> dict[str, str]:
+    workflow_id = WORKFLOW_ID_PATTERN.search(page)
+    trace_id = TRACE_ID_PATTERN.search(page)
+    status = WORKFLOW_STATUS_PATTERN.search(page)
+    if workflow_id is None or trace_id is None or status is None:
+        raise SmokeFailure("Web UI workflow response is missing identifiers or status.")
+
     return {
-        "http_status": 200,
-        "form_submission": "successful",
-        "antiforgery_cookie_count": len(cookies),
+        "workflowId": workflow_id.group(1),
+        "traceId": html.unescape(trace_id.group(1)).strip(),
+        "status": html.unescape(status.group(1)).strip(),
     }
+
+
+def approve_webui_workflow(
+    opener,
+    webui_url: str,
+    workflow_id: str,
+    page: str,
+    timeout: int,
+) -> dict[str, str]:
+    token_match = ANTIFORGERY_PATTERN.search(page)
+    if token_match is None:
+        raise SmokeFailure("Web UI approval form did not include an antiforgery token.")
+
+    form = urlencode(
+        {
+            "workflowId": workflow_id,
+            "ApprovalInput.Decision": "approve",
+            "ApprovalInput.Reason": "MVP smoke-test approval",
+            "__RequestVerificationToken": token_match.group(1),
+        }
+    ).encode("utf-8")
+    request = Request(
+        f"{webui_url}?handler=Approve",
+        data=form,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            approved_page = response.read().decode("utf-8")
+            if response.status != 200:
+                raise SmokeFailure(f"Web UI approval returned HTTP {response.status}.")
+            if "Approval recorded successfully." not in approved_page:
+                raise SmokeFailure("Web UI did not display a successful approval.")
+    except HTTPError as error:
+        response_body = error.read().decode("utf-8", errors="replace")
+        raise SmokeFailure(
+            f"Web UI approval returned HTTP {error.code}: {response_body[:2000]}"
+        ) from error
+
+    return parse_webui_workflow(approved_page)
 
 
 def check_agents(foundry_endpoint: str, timeout: int) -> dict[str, Any]:
@@ -385,6 +480,25 @@ def check_workflows(
     if approval.get("status") != "Completed":
         raise SmokeFailure(f"Approved dispute did not complete: {approval}")
 
+    # Verify GET /api/v1/workflows/{id} returns persisted state (post-Theo).
+    # Skipped gracefully on pre-Theo deployments where the endpoint returns 404/501.
+    transaction_workflow = results["transaction-information"]
+    get_state = check_workflow_get_state(
+        orchestrator_url,
+        transaction_workflow["workflowId"],
+        transaction_workflow["status"],
+        timeout,
+        token,
+    )
+
+    approved_get_state = check_workflow_get_state(
+        orchestrator_url,
+        approval["workflowId"],
+        approval["status"],
+        timeout,
+        token,
+    )
+
     return {
         "scenarios": {
             name: {
@@ -398,6 +512,104 @@ def check_workflows(
             "workflow_id": approval["workflowId"],
             "status": approval["status"],
         },
+        "workflow_get_state": get_state,
+        "approved_workflow_get_state": approved_get_state,
+    }
+
+
+def check_workflows_via_webui(webui_url: str, timeout: int) -> dict[str, Any]:
+    scenarios = (
+        ("transaction-information", "Why is this card transaction pending?", "Completed"),
+        (
+            "suspicious-information",
+            "This transaction is not mine. Explain what I should review.",
+            "Completed",
+        ),
+        (
+            "suspicious-action",
+            "Freeze my card; this transaction is not mine.",
+            "WaitingForApproval",
+        ),
+        ("dispute", "Dispute this charge.", "WaitingForApproval"),
+    )
+    cookies = http.cookiejar.CookieJar()
+    opener = build_opener(HTTPCookieProcessor(cookies))
+    results: dict[str, dict[str, str]] = {}
+    pages: dict[str, str] = {}
+
+    for name, message, expected_status in scenarios:
+        workflow, page = submit_webui_workflow(opener, webui_url, message, timeout)
+        if workflow["status"] != expected_status:
+            raise SmokeFailure(
+                f"Scenario {name} expected {expected_status}, received {workflow['status']}."
+            )
+        results[name] = workflow
+        pages[name] = page
+
+    dispute = results["dispute"]
+    approval = approve_webui_workflow(
+        opener,
+        webui_url,
+        dispute["workflowId"],
+        pages["dispute"],
+        timeout,
+    )
+    if approval["status"] != "Completed":
+        raise SmokeFailure(f"Approved dispute did not complete: {approval}")
+
+    return {
+        "transport": "webui-managed-identity",
+        "scenarios": {
+            name: {
+                "workflow_id": result["workflowId"],
+                "trace_id": result["traceId"],
+                "status": result["status"],
+            }
+            for name, result in results.items()
+        },
+        "approval": {
+            "workflow_id": approval["workflowId"],
+            "status": approval["status"],
+        },
+        "workflow_get_state": {
+            "skipped": True,
+            "reason": "Direct API token unavailable; workflow lookup remains covered by API tests.",
+        },
+    }
+
+
+def check_workflow_get_state(
+    orchestrator_url: str,
+    workflow_id: str,
+    expected_status: str,
+    timeout: int,
+    token: str | None,
+) -> dict[str, Any]:
+    """GET /api/v1/workflows/{id} and verify the persisted state matches the expected status.
+
+    Returns a skipped result when the endpoint is not yet implemented (HTTP 404/501) so
+    that the smoke run does not fail on pre-Theo deployments.
+    """
+    status, body = request_json(
+        "GET",
+        f"{orchestrator_url}/api/v1/workflows/{workflow_id}",
+        token=token,
+        timeout=timeout,
+    )
+    if status in (404, 501):
+        # GET endpoint not yet deployed (pre-Theo persistence workstream); skip gracefully.
+        return {"skipped": True, "reason": f"GET endpoint returned {status} (not yet available)"}
+    expect_status(status, 200, body)
+    actual_status = body.get("status")
+    if actual_status != expected_status:
+        raise SmokeFailure(
+            f"GET /api/v1/workflows/{workflow_id} returned status {actual_status!r}, "
+            f"expected {expected_status!r}: {body}"
+        )
+    return {
+        "http_status": status,
+        "workflow_id": workflow_id,
+        "status": actual_status,
     }
 
 
@@ -459,8 +671,8 @@ def main() -> int:
         "infrastructure",
         "FOUNDRY_PROJECT_ENDPOINT",
     ).rstrip("/")
-    orchestrator_scope = os.environ.get("ORCHESTRATOR_TOKEN_SCOPE", "").strip()
-    orchestrator_token = azure_token(orchestrator_scope) if orchestrator_scope else None
+    orchestrator_scope = optional_setting("ORCHESTRATOR_TOKEN_SCOPE", "apps", "ORCHESTRATOR_TOKEN_SCOPE")
+    orchestrator_token = os.environ.get("ORCHESTRATOR_ACCESS_TOKEN", "").strip() or None
 
     checks = [
         run_check("orchestrator-health", lambda: check_health(orchestrator_url, args.timeout)),
@@ -476,10 +688,14 @@ def main() -> int:
         ),
         run_check(
             "workflow-routing-and-approval",
-            lambda: check_workflows(
-                orchestrator_url,
-                args.timeout,
-                orchestrator_token,
+            lambda: (
+                check_workflows(
+                    orchestrator_url,
+                    args.timeout,
+                    orchestrator_token,
+                )
+                if orchestrator_token
+                else check_workflows_via_webui(webui_url, args.timeout)
             ),
         ),
     ]

@@ -26,6 +26,8 @@ This repository contains a banking-focused agentic application built around:
 - .NET 10 SDK
 - Python 3
 - Permission to create Azure resources and role assignments in the target subscription
+- Entra permission to create application registrations and service principals and assign app roles
+  (for example, Cloud Application Administrator or equivalent Microsoft Graph permissions)
 
 Copy the environment template before using Task:
 
