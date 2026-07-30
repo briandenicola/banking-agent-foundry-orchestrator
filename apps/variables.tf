@@ -14,3 +14,9 @@ variable "image_tag" {
   type        = string
   default     = "latest"
 }
+
+variable "enable_service_auth" {
+  description = "Provision Entra API resources and require Workflow.Invoke tokens for orchestrator workflow endpoints."
+  type        = bool
+  default     = false
+}

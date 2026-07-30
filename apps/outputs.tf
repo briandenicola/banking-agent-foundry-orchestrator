@@ -23,6 +23,6 @@ output "APPS_RESOURCE_GROUP_NAME" {
 }
 
 output "ORCHESTRATOR_TOKEN_SCOPE" {
-  description = "Token scope the Web UI requests when calling the orchestrator API."
+  description = "Token scope the Web UI requests when service authentication is enabled; otherwise empty."
   value       = local.orchestrator_token_scope
 }

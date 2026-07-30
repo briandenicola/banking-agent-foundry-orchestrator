@@ -26,8 +26,8 @@ This repository contains a banking-focused agentic application built around:
 - .NET 10 SDK
 - Python 3
 - Permission to create Azure resources and role assignments in the target subscription
-- Entra permission to create application registrations and service principals and assign app roles
-  (for example, Cloud Application Administrator or equivalent Microsoft Graph permissions)
+- Entra permission to create application registrations, service principals, and app-role assignments
+  only when optional service authentication is enabled
 
 Copy the environment template before using Task:
 
@@ -81,6 +81,8 @@ task app:apply -- swedencentral
 ```
 
 This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, and the manual database migration and Hosted Agent deployment jobs. For the MVP, the web UI runs one replica and keeps ASP.NET Data Protection keys in local container storage because subscription policy disables public Storage access. Replacing the web UI replica invalidates existing antiforgery cookies.
+
+Service-to-service API authentication is disabled by default so deployment does not require Entra directory administration. To enable it in a tenant where the deployer has suitable directory permissions, set `TF_VAR_enable_service_auth=true` before planning and applying the `apps/` stack.
 
 Run the Entra-authenticated database migration job before sending application traffic:
 

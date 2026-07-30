@@ -38,20 +38,18 @@ builder.Services.AddAntiforgery(options =>
 var orchestratorTokenScope = builder.Configuration["ORCHESTRATOR_TOKEN_SCOPE"];
 var azureClientId = builder.Configuration["AZURE_CLIENT_ID"];
 
-if (!builder.Environment.IsDevelopment())
+if (!string.IsNullOrWhiteSpace(orchestratorTokenScope))
 {
-    ArgumentException.ThrowIfNullOrWhiteSpace(azureClientId, "AZURE_CLIENT_ID");
-    ArgumentException.ThrowIfNullOrWhiteSpace(orchestratorTokenScope, "ORCHESTRATOR_TOKEN_SCOPE");
-}
+    if (!builder.Environment.IsDevelopment())
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(azureClientId, "AZURE_CLIENT_ID");
+    }
 
-TokenCredential credential = builder.Environment.IsDevelopment()
-    ? new DefaultAzureCredential()
-    : new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(azureClientId!));
+    TokenCredential credential = builder.Environment.IsDevelopment()
+        ? new DefaultAzureCredential()
+        : new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(azureClientId!));
 
-builder.Services.AddSingleton(credential);
-
-if (!string.IsNullOrEmpty(orchestratorTokenScope))
-{
+    builder.Services.AddSingleton(credential);
     builder.Services.AddTransient(sp =>
         new OrchestratorTokenHandler(sp.GetRequiredService<TokenCredential>(), orchestratorTokenScope));
     builder.Services.AddHttpClient("orchestrator", client =>

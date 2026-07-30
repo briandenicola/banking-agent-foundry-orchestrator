@@ -16,10 +16,7 @@ const string PostgreSqlScope = "https://ossrdbms-aad.database.windows.net/.defau
 var builder = WebApplication.CreateBuilder(args);
 var applicationInsightsConnectionString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
 var managedIdentityClientId = builder.Configuration["AZURE_CLIENT_ID"];
-var tenantId = builder.Configuration["AZURE_TENANT_ID"]
-    ?? throw new InvalidOperationException("AZURE_TENANT_ID is required.");
-var orchestratorAppId = builder.Configuration["ORCHESTRATOR_APP_ID"]
-    ?? throw new InvalidOperationException("ORCHESTRATOR_APP_ID is required.");
+var serviceAuthEnabled = builder.Configuration.GetValue<bool>("SERVICE_AUTH_ENABLED");
 
 // -----------------------------------------------------------------------
 // PostgreSQL / EF Core
@@ -69,26 +66,44 @@ builder.Services.AddDbContext<BankingAgentDbContext>((sp, options) =>
 builder.Services.AddScoped<IWorkflowRepository, EfWorkflowRepository>();
 builder.Services.AddScoped<IWorkflowActionRepository, EfWorkflowActionRepository>();
 
-builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.Authority = $"https://login.microsoftonline.com/{tenantId}/v2.0";
-        options.Audience = $"api://{orchestratorAppId}";
-        options.TokenValidationParameters = new TokenValidationParameters
+if (serviceAuthEnabled)
+{
+    var tenantId = builder.Configuration["AZURE_TENANT_ID"]
+        ?? throw new InvalidOperationException("AZURE_TENANT_ID is required when service authentication is enabled.");
+    var orchestratorAppId = builder.Configuration["ORCHESTRATOR_APP_ID"]
+        ?? throw new InvalidOperationException("ORCHESTRATOR_APP_ID is required when service authentication is enabled.");
+
+    builder.Services
+        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
         {
-            ValidateIssuer = true,
-            ValidIssuer = $"https://login.microsoftonline.com/{tenantId}/v2.0",
-            ValidateAudience = true,
-            ValidAudience = $"api://{orchestratorAppId}",
-            ValidateLifetime = true,
-            ClockSkew = TimeSpan.FromMinutes(1)
-        };
-    });
+            options.Authority = $"https://login.microsoftonline.com/{tenantId}/v2.0";
+            options.Audience = $"api://{orchestratorAppId}";
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = $"https://login.microsoftonline.com/{tenantId}/v2.0",
+                ValidateAudience = true,
+                ValidAudience = $"api://{orchestratorAppId}",
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.FromMinutes(1)
+            };
+        });
+}
+
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("WorkflowInvoke", policy =>
-        policy.RequireRole("Workflow.Invoke"));
+    {
+        if (serviceAuthEnabled)
+        {
+            policy.RequireRole("Workflow.Invoke");
+        }
+        else
+        {
+            policy.RequireAssertion(_ => true);
+        }
+    });
 });
 
 // -----------------------------------------------------------------------
@@ -125,7 +140,10 @@ var app = builder.Build();
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();
-app.UseAuthentication();
+if (serviceAuthEnabled)
+{
+    app.UseAuthentication();
+}
 app.UseAuthorization();
 
 if (app.Environment.IsDevelopment())

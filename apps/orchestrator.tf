@@ -48,13 +48,18 @@ resource "azurerm_container_app" "orchestrator" {
       }
 
       env {
+        name  = "SERVICE_AUTH_ENABLED"
+        value = tostring(var.enable_service_auth)
+      }
+
+      env {
         name  = "AZURE_TENANT_ID"
-        value = data.azurerm_client_config.current.tenant_id
+        value = var.enable_service_auth ? data.azurerm_client_config.current.tenant_id : ""
       }
 
       env {
         name  = "ORCHESTRATOR_APP_ID"
-        value = azuread_application.orchestrator_api.client_id
+        value = var.enable_service_auth ? azuread_application.orchestrator_api[0].client_id : ""
       }
 
       env {
