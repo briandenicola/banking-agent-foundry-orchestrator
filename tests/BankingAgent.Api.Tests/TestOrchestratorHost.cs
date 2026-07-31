@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using BankingAgent.Api;
 using BankingAgent.Application;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
@@ -90,7 +91,7 @@ public sealed class TestOrchestratorHost : IDisposable
         Mock<IWorkflowEvidenceService> evidenceService)
     {
         services.AddRouting();
-        services.AddProblemDetails();
+        services.AddBankingAgentProblemDetails();
         services.AddSingleton(workflowServiceMock.Object);
         services.AddSingleton(evidenceService.Object);
 
@@ -134,9 +135,9 @@ public sealed class TestOrchestratorHost : IDisposable
     private static void ConfigurePipeline(IApplicationBuilder app)
     {
         app.UseRouting();
+        app.UseBankingAgentProblemDetails();
         app.UseAuthentication();
         app.UseAuthorization();
-        app.UseExceptionHandler(new ExceptionHandlerOptions { AllowStatusCode404Response = true });
 
         app.UseEndpoints(endpoints =>
         {

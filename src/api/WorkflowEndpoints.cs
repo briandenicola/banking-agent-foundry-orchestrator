@@ -16,15 +16,9 @@ public static class WorkflowEndpoints
             IWorkflowService workflowService,
             CancellationToken cancellationToken) =>
         {
-            try
-            {
-                var workflow = await workflowService.StartAsync(request.UserMessage, cancellationToken);
-                return Results.Ok(new WorkflowResponse(workflow.Id, workflow.TraceId, workflow.Status.ToString(), "Workflow accepted."));
-            }
-            catch (Exception ex)
-            {
-                return Results.Problem(title: "Workflow creation failed", detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
-            }
+            ValidateWorkflowRequest(request);
+            var workflow = await workflowService.StartAsync(request.UserMessage, cancellationToken);
+            return Results.Ok(new WorkflowResponse(workflow.Id, workflow.TraceId, workflow.Status.ToString(), "Workflow accepted."));
         }).RequireAuthorization("WorkflowInvoke");
 
         app.MapPost("/api/v1/workflows/{workflowId:guid}/approval", async (
@@ -33,29 +27,13 @@ public static class WorkflowEndpoints
             IWorkflowService workflowService,
             CancellationToken cancellationToken) =>
         {
-            try
-            {
-                var workflow = await workflowService.ApproveAsync(workflowId, request.Decision, request.Reason, cancellationToken);
-                return Results.Ok(new WorkflowResponse(workflow.Id, workflow.TraceId, workflow.Status.ToString(), "Approval recorded."));
-            }
-            catch (WorkflowNotFoundException ex)
-            {
-                return Results.Problem(
-                    title: "Workflow not found",
-                    detail: ex.Message,
-                    statusCode: StatusCodes.Status404NotFound);
-            }
-            catch (WorkflowConflictException ex)
-            {
-                return Results.Problem(
-                    title: "Approval conflict",
-                    detail: ex.Message,
-                    statusCode: StatusCodes.Status409Conflict);
-            }
-            catch (Exception ex)
-            {
-                return Results.Problem(title: "Approval failed", detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
-            }
+            ValidateApprovalRequest(request);
+            var workflow = await workflowService.ApproveAsync(
+                workflowId,
+                request.Decision,
+                request.Reason,
+                cancellationToken);
+            return Results.Ok(new WorkflowResponse(workflow.Id, workflow.TraceId, workflow.Status.ToString(), "Approval recorded."));
         }).RequireAuthorization("WorkflowInvoke");
 
         app.MapGet("/api/v1/workflows/{workflowId:guid}", async (
@@ -67,10 +45,7 @@ public static class WorkflowEndpoints
             var workflow = await workflowService.GetAsync(workflowId, cancellationToken);
             if (workflow is null)
             {
-                return Results.Problem(
-                    title: "Workflow not found",
-                    detail: $"Workflow {workflowId} does not exist.",
-                    statusCode: StatusCodes.Status404NotFound);
+                throw new WorkflowNotFoundException(workflowId);
             }
 
             var supportCase = await workflowService.GetSupportCaseAsync(workflowId, cancellationToken);
@@ -84,59 +59,43 @@ public static class WorkflowEndpoints
             IWorkflowEvidenceService evidenceService,
             CancellationToken cancellationToken) =>
         {
-            try
+            if (!request.HasFormContentType)
             {
-                if (!request.HasFormContentType)
+                throw new RequestValidationException(new Dictionary<string, string[]>
                 {
-                    return Results.Problem(
-                        title: "Evidence upload requires multipart form data",
-                        statusCode: StatusCodes.Status400BadRequest);
-                }
+                    ["contentType"] = ["Evidence uploads require multipart form data."]
+                });
+            }
 
-                var form = await request.ReadFormAsync(cancellationToken);
-                if (form.Files.Count > WorkflowEvidenceService.MaximumFiles)
+            var form = await request.ReadFormAsync(cancellationToken);
+            if (form.Files.Count > WorkflowEvidenceService.MaximumFiles)
+            {
+                throw new EvidenceValidationException(
+                    $"A dispute workflow can contain at most {WorkflowEvidenceService.MaximumFiles} evidence files.");
+            }
+
+            var uploads = new List<WorkflowEvidenceUpload>(form.Files.Count);
+            foreach (var file in form.Files)
+            {
+                if (file.Length > WorkflowEvidenceService.MaximumFileBytes)
                 {
                     throw new EvidenceValidationException(
-                        $"A dispute workflow can contain at most {WorkflowEvidenceService.MaximumFiles} evidence files.");
+                        "Each evidence file must be 10 MB or smaller.");
                 }
 
-                var uploads = new List<WorkflowEvidenceUpload>(form.Files.Count);
-                foreach (var file in form.Files)
-                {
-                    if (file.Length > WorkflowEvidenceService.MaximumFileBytes)
-                    {
-                        throw new EvidenceValidationException(
-                            "Each evidence file must be 10 MB or smaller.");
-                    }
+                await using var content = new MemoryStream((int)file.Length);
+                await file.CopyToAsync(content, cancellationToken);
+                uploads.Add(new WorkflowEvidenceUpload(file.FileName, content.ToArray()));
+            }
 
-                    await using var content = new MemoryStream((int)file.Length);
-                    await file.CopyToAsync(content, cancellationToken);
-                    uploads.Add(new WorkflowEvidenceUpload(file.FileName, content.ToArray()));
-                }
-
-                var added = await evidenceService.AddAsync(workflowId, uploads, cancellationToken);
-                return Results.Ok(added.Select(item => new WorkflowEvidenceResponse(
-                    item.Id,
-                    item.FileName,
-                    item.ContentType,
-                    item.Length,
-                    item.Sha256,
-                    item.UploadedAt)));
-            }
-            catch (WorkflowNotFoundException ex)
-            {
-                return Results.Problem(
-                    title: "Workflow not found",
-                    detail: ex.Message,
-                    statusCode: StatusCodes.Status404NotFound);
-            }
-            catch (WorkflowConflictException ex)
-            {
-                return Results.Problem(
-                    title: "Evidence upload rejected",
-                    detail: ex.Message,
-                    statusCode: StatusCodes.Status400BadRequest);
-            }
+            var added = await evidenceService.AddAsync(workflowId, uploads, cancellationToken);
+            return Results.Ok(added.Select(item => new WorkflowEvidenceResponse(
+                item.Id,
+                item.FileName,
+                item.ContentType,
+                item.Length,
+                item.Sha256,
+                item.UploadedAt)));
         }).RequireAuthorization("WorkflowInvoke");
 
         app.MapGet("/api/v1/workflows/{workflowId:guid}/evidence/{evidenceId:guid}", async (
@@ -145,25 +104,57 @@ public static class WorkflowEndpoints
             IWorkflowEvidenceService evidenceService,
             CancellationToken cancellationToken) =>
         {
-            try
-            {
-                var evidence = await evidenceService.GetAsync(
-                    workflowId,
-                    evidenceId,
-                    cancellationToken);
-                return Results.File(
-                    evidence.Content,
-                    evidence.ContentType,
-                    evidence.FileName,
-                    enableRangeProcessing: true);
-            }
-            catch (EvidenceNotFoundException ex)
-            {
-                return Results.Problem(
-                    title: "Evidence not found",
-                    detail: ex.Message,
-                    statusCode: StatusCodes.Status404NotFound);
-            }
+            var evidence = await evidenceService.GetAsync(
+                workflowId,
+                evidenceId,
+                cancellationToken);
+            return Results.File(
+                evidence.Content,
+                evidence.ContentType,
+                evidence.FileName,
+                enableRangeProcessing: true);
         }).RequireAuthorization("WorkflowInvoke");
+    }
+
+    private static void ValidateWorkflowRequest(WorkflowRequest request)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (string.IsNullOrWhiteSpace(request.UserMessage))
+        {
+            errors["userMessage"] = ["A workflow message is required."];
+        }
+        else if (request.UserMessage.Length > 4000)
+        {
+            errors["userMessage"] = ["A workflow message must be 4,000 characters or fewer."];
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new RequestValidationException(errors);
+        }
+    }
+
+    private static void ValidateApprovalRequest(ApprovalRequest request)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (!string.Equals(request.Decision, "approve", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(request.Decision, "reject", StringComparison.OrdinalIgnoreCase))
+        {
+            errors["decision"] = ["Decision must be either 'approve' or 'reject'."];
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Reason))
+        {
+            errors["reason"] = ["An approval reason is required."];
+        }
+        else if (request.Reason.Length > 1000)
+        {
+            errors["reason"] = ["An approval reason must be 1,000 characters or fewer."];
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new RequestValidationException(errors);
+        }
     }
 }

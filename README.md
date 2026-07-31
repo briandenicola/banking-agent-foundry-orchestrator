@@ -97,6 +97,14 @@ Dispute workflows can include up to five supporting PDF, PNG, JPG, or JPEG files
 PostgreSQL with the workflow rather than Azure Storage, avoiding public-network
 storage dependencies. Uploaded evidence is available from the durable workflow view.
 
+API failures use RFC-compatible `application/problem+json` responses with a stable
+`code` and request `traceId`. Boundary validation returns `validation_failed`;
+missing resources return `workflow_not_found` or `evidence_not_found`; state
+conflicts return `workflow_conflict`; downstream connection failures and timeouts
+return `dependency_unavailable` (502) and `dependency_timeout` (504). Authentication
+failures use `authentication_required` (401) and `access_forbidden` (403). Internal
+exceptions are never returned to callers.
+
 Review the Terraform plan before applying when changing infrastructure:
 
 ```bash

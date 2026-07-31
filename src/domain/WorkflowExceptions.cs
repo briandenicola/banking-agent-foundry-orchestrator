@@ -1,5 +1,12 @@
 namespace BankingAgent.Domain;
 
+public sealed class RequestValidationException(
+    IReadOnlyDictionary<string, string[]> errors)
+    : Exception("One or more request values are invalid.")
+{
+    public IReadOnlyDictionary<string, string[]> Errors { get; } = errors;
+}
+
 public sealed class WorkflowNotFoundException(Guid workflowId)
     : Exception($"Workflow {workflowId} was not found.")
 {

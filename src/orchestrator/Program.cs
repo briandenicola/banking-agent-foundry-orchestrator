@@ -120,7 +120,7 @@ builder.Services.AddAuthorization(options =>
 // IWorkflowService is Scoped because it depends on scoped BankingAgentDbContext
 // via the repository chain.
 // -----------------------------------------------------------------------
-builder.Services.AddProblemDetails();
+builder.Services.AddBankingAgentProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHttpClient<IMcpClient, FoundryMcpClient>();
@@ -148,7 +148,7 @@ builder.Logging.AddSimpleConsole(options =>
 var app = builder.Build();
 
 app.UseMiddleware<CorrelationIdMiddleware>();
-app.UseExceptionHandler();
+app.UseBankingAgentProblemDetails();
 if (serviceAuthEnabled)
 {
     app.UseAuthentication();

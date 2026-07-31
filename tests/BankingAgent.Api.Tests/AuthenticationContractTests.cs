@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using BankingAgent.Application;
 using BankingAgent.Domain;
 using Moq;
@@ -68,6 +69,7 @@ public sealed class AuthenticationContractTests : IDisposable
             new { userMessage = "Why is this charge pending?" });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal("authentication_required", await ReadProblemCodeAsync(response));
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -103,6 +105,7 @@ public sealed class AuthenticationContractTests : IDisposable
             new { userMessage = "Wrong role test" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("access_forbidden", await ReadProblemCodeAsync(response));
     }
 
     [Fact]
@@ -155,7 +158,7 @@ public sealed class AuthenticationContractTests : IDisposable
             "/api/v1/workflows",
             new { userMessage = "Valid token test" });
 
-        // 400 (from exception handler) proves auth passed — not 401/403
+        // A business-logic response proves auth passed — not 401/403.
         Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -191,6 +194,12 @@ public sealed class AuthenticationContractTests : IDisposable
     // ──────────────────────────────────────────────────────────────────
     // Cleanup
     // ──────────────────────────────────────────────────────────────────
+
+    private static async Task<string?> ReadProblemCodeAsync(HttpResponseMessage response)
+    {
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return document.RootElement.GetProperty("code").GetString();
+    }
 
     public void Dispose()
     {
