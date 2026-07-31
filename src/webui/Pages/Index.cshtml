@@ -58,10 +58,24 @@
                       required></textarea>
             <span asp-validation-for="Input.UserMessage" class="field-error"></span>
 
-            <div class="prompt-list" aria-label="Example requests">
-                <button type="button" class="prompt-chip" data-prompt="Why is this card transaction pending?">Explain a transaction</button>
-                <button type="button" class="prompt-chip" data-prompt="This transaction is not mine. Explain what I should review.">Review suspicious activity</button>
-                <button type="button" class="prompt-chip" data-prompt="Dispute this charge.">Dispute a charge</button>
+            <input asp-for="Input.DemoScenario" type="hidden" />
+            <div class="scenario-heading">
+                <span>Guided demo scenarios</span>
+                <a asp-page="/Index">Reset workspace</a>
+            </div>
+            <div class="scenario-grid" aria-label="Demo scenarios">
+                @foreach (var scenario in Model.DemoScenarios)
+                {
+                    <button type="button"
+                            class="scenario-card"
+                            data-prompt="@scenario.UserMessage"
+                            data-scenario="@scenario.Id"
+                            aria-pressed="false">
+                        <strong>@scenario.Title</strong>
+                        <small>@scenario.Description</small>
+                        <span>Expected: @scenario.ExpectedInitialStatus</span>
+                    </button>
+                }
             </div>
 
             <div class="evidence-upload">

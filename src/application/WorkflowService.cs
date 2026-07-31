@@ -9,6 +9,7 @@ namespace BankingAgent.Application;
 public interface IWorkflowService
 {
     Task<WorkflowState> StartAsync(string userMessage, CancellationToken cancellationToken = default);
+    Task<WorkflowState> StartDemoAsync(string scenarioId, CancellationToken cancellationToken = default);
     Task<WorkflowState> ApproveAsync(Guid workflowId, string decision, string reason, CancellationToken cancellationToken = default);
     Task<WorkflowState?> GetAsync(Guid workflowId, CancellationToken cancellationToken = default);
     Task<SupportCase?> GetSupportCaseAsync(Guid workflowId, CancellationToken cancellationToken = default);
@@ -33,20 +34,39 @@ public sealed class WorkflowService : IWorkflowService
     private readonly ILogger<WorkflowService> _logger;
     private readonly IWorkflowRepository _workflowRepository;
     private readonly IWorkflowActionRepository _workflowActionRepository;
+    private readonly IDemoScenarioPolicy _demoScenarioPolicy;
 
     public WorkflowService(
         IMcpClient mcpClient,
         ILogger<WorkflowService> logger,
         IWorkflowRepository workflowRepository,
-        IWorkflowActionRepository workflowActionRepository)
+        IWorkflowActionRepository workflowActionRepository,
+        IDemoScenarioPolicy? demoScenarioPolicy = null)
     {
         _mcpClient = mcpClient;
         _logger = logger;
         _workflowRepository = workflowRepository;
         _workflowActionRepository = workflowActionRepository;
+        _demoScenarioPolicy = demoScenarioPolicy ?? DemoScenarioPolicy.Disabled;
     }
 
-    public async Task<WorkflowState> StartAsync(string userMessage, CancellationToken cancellationToken = default)
+    public Task<WorkflowState> StartAsync(
+        string userMessage,
+        CancellationToken cancellationToken = default) =>
+        StartCoreAsync(userMessage, null, cancellationToken);
+
+    public Task<WorkflowState> StartDemoAsync(
+        string scenarioId,
+        CancellationToken cancellationToken = default)
+    {
+        var scenario = _demoScenarioPolicy.Resolve(scenarioId);
+        return StartCoreAsync(scenario.UserMessage, scenario, cancellationToken);
+    }
+
+    private async Task<WorkflowState> StartCoreAsync(
+        string userMessage,
+        DemoScenarioDefinition? demoScenario,
+        CancellationToken cancellationToken)
     {
         var workflowId = Guid.NewGuid();
         using var workflowActivity = WorkflowTelemetry.StartActivity(
@@ -55,8 +75,22 @@ public sealed class WorkflowService : IWorkflowService
         var traceId = Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N");
         workflowActivity?.SetTag("workflow.trace_id", traceId);
         workflowActivity?.SetTag("workflow.operation", "start");
+        workflowActivity?.SetTag("demo.scenario", demoScenario?.Id);
         var startedAt = Stopwatch.GetTimestamp();
         var createdAt = DateTimeOffset.UtcNow;
+        var initialEvents = new List<WorkflowEvent>
+        {
+            new("workflow.started", "Workflow started", createdAt, "system")
+        };
+        if (demoScenario is not null)
+        {
+            initialEvents.Add(new WorkflowEvent(
+                "workflow.demo_scenario",
+                $"Demo scenario: {demoScenario.Title}",
+                createdAt,
+                "system",
+                $"Expected initial status: {demoScenario.ExpectedInitialStatus}; expected decision: {demoScenario.ExpectedDecision ?? "none"}"));
+        }
 
         // Phase 1 — persist draft before invoking any agent.
         var draftState = new WorkflowState(
@@ -70,7 +104,7 @@ public sealed class WorkflowService : IWorkflowService
             ApprovalReason: null,
             CreatedAt: createdAt,
             UpdatedAt: createdAt,
-            Events: [new WorkflowEvent("workflow.started", "Workflow started", createdAt, "system")],
+            Events: initialEvents,
             Version: 0);
 
         await AddWorkflowAsync(draftState, cancellationToken);
@@ -95,6 +129,7 @@ public sealed class WorkflowService : IWorkflowService
                 workflowId,
                 traceId,
                 plannerParameters,
+                DemoScenarioFault.None,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -181,6 +216,7 @@ public sealed class WorkflowService : IWorkflowService
                 workflowId,
                 traceId,
                 specialistParameters,
+                demoScenario?.Fault ?? DemoScenarioFault.None,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -457,6 +493,7 @@ public sealed class WorkflowService : IWorkflowService
         Guid workflowId,
         string traceId,
         IDictionary<string, object?> parameters,
+        DemoScenarioFault demoFault,
         CancellationToken cancellationToken)
     {
         using var activity = WorkflowTelemetry.StartActivity(
@@ -469,7 +506,17 @@ public sealed class WorkflowService : IWorkflowService
 
         try
         {
-            var result = await _mcpClient.InvokeAsync(toolName, parameters, cancellationToken);
+            var result = demoFault switch
+            {
+                DemoScenarioFault.HostedAgentFailure => new McpToolResult(
+                    toolName,
+                    "error",
+                    "The demo scenario simulated a Hosted Agent failure.",
+                    new Dictionary<string, object?>()),
+                DemoScenarioFault.HostedAgentTimeout => throw new TimeoutException(
+                    "The demo scenario simulated a Hosted Agent timeout."),
+                _ => await _mcpClient.InvokeAsync(toolName, parameters, cancellationToken)
+            };
             activity?.SetTag("agent.status", result.Status);
             activity?.SetTag("duration_ms", Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
             if (result.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))

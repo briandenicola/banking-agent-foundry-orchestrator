@@ -16,6 +16,7 @@
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="../../src/application/application.csproj" />
     <ProjectReference Include="../../src/webui/webui.csproj" />
   </ItemGroup>
 </Project>

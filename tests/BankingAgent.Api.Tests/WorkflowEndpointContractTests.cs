@@ -272,6 +272,48 @@ public sealed class WorkflowEndpointContractTests : IDisposable
         Assert.Equal(expectedId.ToString(), doc.RootElement.GetProperty("workflowId").GetString());
     }
 
+    [Fact]
+    public async Task PostWorkflow_DemoScenario_UsesServerCatalog()
+    {
+        var expectedId = Guid.NewGuid();
+        _workflowServiceMock
+            .Setup(service => service.StartDemoAsync(
+                "hosted-agent-failure",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorkflowState(
+                expectedId,
+                "demo-trace",
+                "Synthetic demo request",
+                WorkflowStatus.Failed,
+                "transaction-explanation",
+                false,
+                null,
+                null,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow,
+                []));
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/workflows",
+            new
+            {
+                userMessage = "Synthetic demo request",
+                demoScenario = "hosted-agent-failure"
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        _workflowServiceMock.Verify(
+            service => service.StartDemoAsync(
+                "hosted-agent-failure",
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _workflowServiceMock.Verify(
+            service => service.StartAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Cleanup
     // ──────────────────────────────────────────────────────────────────

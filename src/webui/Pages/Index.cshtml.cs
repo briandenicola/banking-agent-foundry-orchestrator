@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using BankingAgent.Application;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
@@ -29,6 +30,7 @@ public class IndexModel : PageModel
     public string? ErrorMessage { get; set; }
 
     public WorkflowDetailResponse? Workflow { get; private set; }
+    public IReadOnlyList<DemoScenarioDefinition> DemoScenarios => DemoScenarioCatalog.All;
 
     public async Task OnGetAsync(Guid? workflowId)
     {
@@ -50,7 +52,11 @@ public class IndexModel : PageModel
         {
             var response = await _httpClient.PostAsJsonAsync(
                 "/api/v1/workflows",
-                new { userMessage = Input.UserMessage });
+                new
+                {
+                    userMessage = Input.UserMessage,
+                    demoScenario = Input.DemoScenario
+                });
             if (!response.IsSuccessStatusCode)
             {
                 ErrorMessage = await ReadFailureAsync(response, "The workflow service rejected the request.");
@@ -248,6 +254,9 @@ public class IndexModel : PageModel
     {
         [BindProperty]
         public string? UserMessage { get; set; }
+
+        [BindProperty]
+        public string? DemoScenario { get; set; }
 
         [BindProperty]
         public List<IFormFile> EvidenceFiles { get; set; } = [];

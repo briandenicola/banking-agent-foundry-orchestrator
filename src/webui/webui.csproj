@@ -14,6 +14,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../application/application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
       <_Parameter1>BankingAgent.WebUi.Tests</_Parameter1>
     </AssemblyAttribute>

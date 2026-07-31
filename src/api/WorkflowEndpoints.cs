@@ -17,7 +17,9 @@ public static class WorkflowEndpoints
             CancellationToken cancellationToken) =>
         {
             ValidateWorkflowRequest(request);
-            var workflow = await workflowService.StartAsync(request.UserMessage, cancellationToken);
+            var workflow = string.IsNullOrWhiteSpace(request.DemoScenario)
+                ? await workflowService.StartAsync(request.UserMessage, cancellationToken)
+                : await workflowService.StartDemoAsync(request.DemoScenario, cancellationToken);
             return Results.Ok(new WorkflowResponse(workflow.Id, workflow.TraceId, workflow.Status.ToString(), "Workflow accepted."));
         }).RequireAuthorization("WorkflowInvoke");
 

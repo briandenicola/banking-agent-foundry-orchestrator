@@ -3,6 +3,7 @@ using System;
 using BankingAgent.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(BankingAgentDbContext))]
-    partial class BankingAgentDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260731105125_SeedDemoTransactions")]
+    partial class SeedDemoTransactions
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

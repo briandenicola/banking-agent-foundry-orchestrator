@@ -1,10 +1,28 @@
-document.querySelectorAll("[data-prompt]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const input = document.querySelector("#Input_UserMessage");
-    if (!input) return;
+const requestInput = document.querySelector("#Input_UserMessage");
+const demoScenarioInput = document.querySelector("#Input_DemoScenario");
+const scenarioButtons = document.querySelectorAll("[data-scenario]");
 
-    input.value = button.dataset.prompt ?? "";
-    input.focus();
+scenarioButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!requestInput || !demoScenarioInput) return;
+
+    requestInput.value = button.dataset.prompt ?? "";
+    demoScenarioInput.value = button.dataset.scenario ?? "";
+    scenarioButtons.forEach((candidate) => {
+      candidate.classList.toggle("is-selected", candidate === button);
+      candidate.setAttribute("aria-pressed", candidate === button ? "true" : "false");
+    });
+    requestInput.focus();
+  });
+});
+
+requestInput?.addEventListener("input", () => {
+  if (!demoScenarioInput) return;
+
+  demoScenarioInput.value = "";
+  scenarioButtons.forEach((button) => {
+    button.classList.remove("is-selected");
+    button.setAttribute("aria-pressed", "false");
   });
 });
 

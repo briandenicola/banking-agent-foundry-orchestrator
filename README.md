@@ -18,6 +18,7 @@ This repository contains a banking-focused agentic application built around:
 - `tasks/` - Taskfile definitions for infrastructure, image builds, and deployments
 - `docs/` - project constitution and specifications
 - `docs/observability.md` - workflow tracing, safe telemetry fields, and Application Insights queries
+- `docs/demo-scenarios.md` - non-PII seed data and expected guided scenario outcomes
 
 ## Prerequisites
 
@@ -97,6 +98,12 @@ Dispute workflows can include up to five supporting PDF, PNG, JPG, or JPEG files
 10 MB each. Evidence content, validated metadata, and SHA-256 hashes are stored in
 PostgreSQL with the workflow rather than Azure Storage, avoiding public-network
 storage dependencies. Uploaded evidence is available from the durable workflow view.
+
+The Web UI includes six repeatable guided scenarios covering transaction explanation,
+suspicious activity, approved and rejected disputes, Hosted Agent failure, and
+timeout. Deployed environments enable these server-controlled scenarios with
+`DEMO_SCENARIOS_ENABLED=true`; see [`docs/demo-scenarios.md`](docs/demo-scenarios.md)
+for expected workflow, audit, and telemetry outcomes.
 
 API failures use RFC-compatible `application/problem+json` responses with a stable
 `code` and request `traceId`. Boundary validation returns `validation_failed`;

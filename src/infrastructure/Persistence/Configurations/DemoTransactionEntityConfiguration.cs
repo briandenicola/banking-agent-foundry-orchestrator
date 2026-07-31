@@ -38,5 +38,43 @@ public sealed class DemoTransactionEntityConfiguration
             .HasColumnName("description")
             .HasMaxLength(1024)
             .IsRequired();
+
+        builder.HasData(
+            new DemoTransactionEntity
+            {
+                Id = Guid.Parse("10000000-0000-0000-0000-000000000001"),
+                AccountReference = "DEMO-CHECKING-001",
+                Merchant = "Northwind Market",
+                Amount = 84.27m,
+                Currency = "USD",
+                Status = "Settled",
+                OccurredAt = new DateTimeOffset(2026, 7, 28, 16, 30, 0, TimeSpan.Zero),
+                IsSuspicious = false,
+                Description = "DEMO-TXN-1001 synthetic grocery purchase"
+            },
+            new DemoTransactionEntity
+            {
+                Id = Guid.Parse("10000000-0000-0000-0000-000000000002"),
+                AccountReference = "DEMO-CHECKING-001",
+                Merchant = "Metro Transit",
+                Amount = 12.40m,
+                Currency = "USD",
+                Status = "Pending",
+                OccurredAt = new DateTimeOffset(2026, 7, 30, 8, 15, 0, TimeSpan.Zero),
+                IsSuspicious = false,
+                Description = "DEMO-TXN-1002 synthetic transit authorization"
+            },
+            new DemoTransactionEntity
+            {
+                Id = Guid.Parse("10000000-0000-0000-0000-000000000003"),
+                AccountReference = "DEMO-CHECKING-001",
+                Merchant = "Alpine Digital",
+                Amount = 249.99m,
+                Currency = "USD",
+                Status = "Settled",
+                OccurredAt = new DateTimeOffset(2026, 7, 29, 22, 5, 0, TimeSpan.Zero),
+                IsSuspicious = true,
+                Description = "DEMO-TXN-1003 synthetic card-not-present purchase"
+            });
     }
 }

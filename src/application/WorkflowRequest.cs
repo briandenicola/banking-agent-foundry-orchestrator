@@ -2,7 +2,7 @@ using BankingAgent.Domain;
 
 namespace BankingAgent.Application;
 
-public sealed record WorkflowRequest(string UserMessage);
+public sealed record WorkflowRequest(string UserMessage, string? DemoScenario = null);
 
 public sealed record ApprovalRequest(string Decision, string Reason);
 

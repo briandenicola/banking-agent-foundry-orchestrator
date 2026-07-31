@@ -53,6 +53,11 @@ resource "azurerm_container_app" "orchestrator" {
       }
 
       env {
+        name  = "DEMO_SCENARIOS_ENABLED"
+        value = "true"
+      }
+
+      env {
         name  = "AZURE_TENANT_ID"
         value = var.enable_service_auth ? data.azurerm_client_config.current.tenant_id : ""
       }

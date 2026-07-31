@@ -69,6 +69,8 @@ builder.Services.AddScoped<IWorkflowRepository, EfWorkflowRepository>();
 builder.Services.AddScoped<IWorkflowActionRepository, EfWorkflowActionRepository>();
 builder.Services.AddScoped<IWorkflowEvidenceRepository, EfWorkflowEvidenceRepository>();
 builder.Services.AddScoped<IWorkflowEvidenceService, WorkflowEvidenceService>();
+builder.Services.AddSingleton<IDemoScenarioPolicy>(
+    new DemoScenarioPolicy(builder.Configuration.GetValue<bool>("DEMO_SCENARIOS_ENABLED")));
 builder.Services.Configure<FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit =
