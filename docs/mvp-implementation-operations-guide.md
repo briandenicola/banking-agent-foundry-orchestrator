@@ -70,6 +70,43 @@ PostgreSQL and resumes eligible work.
 The Web UI polls through [`site.js`](../src/webui/wwwroot/js/site.js) with bounded
 exponential backoff. It renders persisted events rather than inventing progress.
 
+### UI workflow walkthrough
+
+The following screenshots were captured with Playwright against the deployed Web UI
+using the non-PII **Approve a dispute** guided scenario. They show the durable states
+an operator or demonstrator should expect during a successful approval-controlled
+workflow.
+
+#### 1. Request ready
+
+The guided scenario fills the customer request while leaving evidence optional. No
+workflow exists until **Start workflow** is selected.
+
+![Approved-dispute guided scenario selected and ready to submit](images/workflow-ui/01-request-ready.png)
+
+#### 2. Workflow processing
+
+After submission, the UI displays the persisted workflow and its `Recovering` status.
+The stage tracker and audit timeline are driven by status and events returned by the
+workflow API.
+
+![Workflow in Recovering status with planning progress and durable audit events](images/workflow-ui/02-workflow-processing.png)
+
+#### 3. Waiting for approval
+
+The dispute specialist result requires a human decision. The workflow is durably
+paused in `WaitingForApproval`; the page shows the proposed action, current timeline,
+and approval form.
+
+![Workflow paused in WaitingForApproval with decision form and audit timeline](images/workflow-ui/03-waiting-for-approval.png)
+
+#### 4. Completed
+
+After approval, the workflow reaches `Completed`. The UI displays the simulated
+support case and the complete audit trail, including the approval and action events.
+
+![Completed approved-dispute workflow with support case and full audit trail](images/workflow-ui/04-workflow-completed.png)
+
 ### Planning and authoritative routing
 
 `WorkflowService.ExecuteRoutingAsync` performs this sequence:
