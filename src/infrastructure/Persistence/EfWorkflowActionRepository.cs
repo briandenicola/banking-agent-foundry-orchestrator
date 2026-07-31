@@ -64,6 +64,13 @@ public sealed class EfWorkflowActionRepository(BankingAgentDbContext context) : 
 
         if (affectedRows != 1)
         {
+            await transaction.RollbackAsync(CancellationToken.None);
+            context.ChangeTracker.Clear();
+            if (await DecisionWasRecordedAsync(decision, cancellationToken))
+            {
+                return;
+            }
+
             throw new StaleVersionException(workflow.Id, expectedVersion, -1);
         }
 

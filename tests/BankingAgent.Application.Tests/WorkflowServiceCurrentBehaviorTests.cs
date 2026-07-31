@@ -210,11 +210,19 @@ public sealed class WorkflowServiceCurrentBehaviorTests
     public async Task ApproveAsync_WaitingWorkflow_ApproveDecision_SetsCompletedStatus()
     {
         var workflow = BuildWorkflow(WorkflowStatus.WaitingForApproval);
-        _repo.Setup(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
-             .ReturnsAsync(workflow);
+        _repo.SetupSequence(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
+             .ReturnsAsync(workflow)
+             .ReturnsAsync(workflow with
+             {
+                 Status = WorkflowStatus.Completed,
+                 ApprovalDecision = "approve",
+                 ApprovalReason = "all clear",
+                 Version = workflow.Version + 1
+             });
         _actionRepo.Setup(r => r.RecordDecisionAsync(
                 It.IsAny<WorkflowState>(), It.IsAny<ApprovalDecision>(),
-                null, null, It.IsAny<long>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ActionExecution>(), It.IsAny<SupportCase>(),
+                It.IsAny<long>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var result = await _sut.ApproveAsync(workflow.Id, "approve", "all clear");
@@ -228,8 +236,14 @@ public sealed class WorkflowServiceCurrentBehaviorTests
     public async Task ApproveAsync_WaitingWorkflow_RejectDecision_SetsRejectedStatus()
     {
         var workflow = BuildWorkflow(WorkflowStatus.WaitingForApproval);
-        _repo.Setup(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
-             .ReturnsAsync(workflow);
+        _repo.SetupSequence(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
+             .ReturnsAsync(workflow)
+             .ReturnsAsync(workflow with
+             {
+                 Status = WorkflowStatus.Rejected,
+                 ApprovalDecision = "reject",
+                 Version = workflow.Version + 1
+             });
         _actionRepo.Setup(r => r.RecordDecisionAsync(
                 It.IsAny<WorkflowState>(), It.IsAny<ApprovalDecision>(),
                 null, null, It.IsAny<long>(), It.IsAny<CancellationToken>()))
@@ -241,19 +255,88 @@ public sealed class WorkflowServiceCurrentBehaviorTests
     }
 
     [Fact]
-    public async Task ApproveAsync_WaitingWorkflow_AppendsApprovalEvent()
+    public async Task ApproveAsync_ApprovedDispute_CreatesCompletedActionAndSupportCase()
     {
         var workflow = BuildWorkflow(WorkflowStatus.WaitingForApproval);
-        _repo.Setup(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
-             .ReturnsAsync(workflow);
+        _repo.SetupSequence(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
+             .ReturnsAsync(workflow)
+             .ReturnsAsync((WorkflowState?)null);
         _actionRepo.Setup(r => r.RecordDecisionAsync(
                 It.IsAny<WorkflowState>(), It.IsAny<ApprovalDecision>(),
-                null, null, It.IsAny<long>(), It.IsAny<CancellationToken>()))
+                It.IsAny<ActionExecution>(), It.IsAny<SupportCase>(),
+                It.IsAny<long>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var result = await _sut.ApproveAsync(workflow.Id, "approve", "smoke approval");
 
         Assert.Contains(result.Events, e => e.Type == "workflow.approval");
+        Assert.Contains(result.Events, e => e.Type == "workflow.action_completed");
+        _actionRepo.Verify(r => r.RecordDecisionAsync(
+            It.Is<WorkflowState>(state => state.Status == WorkflowStatus.Completed),
+            It.Is<ApprovalDecision>(approval => approval.Decision == "approve"),
+            It.Is<ActionExecution>(action =>
+                action.ActionType == "dispute.support_case.create" &&
+                action.Status == ActionExecutionStatus.Completed &&
+                action.IdempotencyKey == $"dispute-support-case:{workflow.Id:N}"),
+            It.Is<SupportCase>(supportCase =>
+                supportCase.WorkflowId == workflow.Id &&
+                supportCase.CaseNumber == $"DSP-{workflow.Id:N}" &&
+                supportCase.Status == "Open"),
+            workflow.Version,
+            It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ApproveAsync_RejectedDispute_CreatesNoActionOrSupportCase()
+    {
+        var workflow = BuildWorkflow(WorkflowStatus.WaitingForApproval);
+        _repo.SetupSequence(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
+             .ReturnsAsync(workflow)
+             .ReturnsAsync((WorkflowState?)null);
+        _actionRepo.Setup(r => r.RecordDecisionAsync(
+                It.IsAny<WorkflowState>(), It.IsAny<ApprovalDecision>(),
+                null, null, It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var result = await _sut.ApproveAsync(workflow.Id, "reject", "insufficient evidence");
+
+        Assert.Equal(WorkflowStatus.Rejected, result.Status);
+        Assert.DoesNotContain(result.Events, e => e.Type == "workflow.action_completed");
+        _actionRepo.Verify(r => r.RecordDecisionAsync(
+            It.IsAny<WorkflowState>(),
+            It.IsAny<ApprovalDecision>(),
+            null,
+            null,
+            workflow.Version,
+            It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ApproveAsync_ApprovedSuspiciousAction_CreatesNoSupportCase()
+    {
+        var workflow = BuildWorkflow(
+            WorkflowStatus.WaitingForApproval,
+            userMessage: "Freeze my card because this charge looks fraudulent.");
+        _repo.SetupSequence(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
+             .ReturnsAsync(workflow)
+             .ReturnsAsync((WorkflowState?)null);
+        _actionRepo.Setup(r => r.RecordDecisionAsync(
+                It.IsAny<WorkflowState>(), It.IsAny<ApprovalDecision>(),
+                null, null, It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        await _sut.ApproveAsync(workflow.Id, "approve", "Customer confirmed");
+
+        _actionRepo.Verify(r => r.RecordDecisionAsync(
+            It.IsAny<WorkflowState>(),
+            It.IsAny<ApprovalDecision>(),
+            null,
+            null,
+            workflow.Version,
+            It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -292,11 +375,12 @@ public sealed class WorkflowServiceCurrentBehaviorTests
     private static WorkflowState BuildWorkflow(
         WorkflowStatus status,
         string? approvalDecision = null,
-        long version = 1) =>
+        long version = 1,
+        string userMessage = "Dispute this charge.") =>
         new(
             Id: Guid.NewGuid(),
             TraceId: Guid.NewGuid().ToString("N"),
-            UserMessage: "Dispute this charge.",
+            UserMessage: userMessage,
             Status: status,
             Intent: "dispute",
             RequiresApproval: true,

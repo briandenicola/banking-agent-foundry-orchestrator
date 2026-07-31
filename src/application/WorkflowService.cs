@@ -251,6 +251,28 @@ public sealed class WorkflowService : IWorkflowService
         var finalStatus = isApproved ? WorkflowStatus.Completed : WorkflowStatus.Rejected;
         var now = DateTimeOffset.UtcNow;
         var approvalEvent = new WorkflowEvent("workflow.approval", $"Approval {decision}", now, "user", reason);
+        var isDispute = string.Equals(
+            WorkflowRoutingPolicy.Decide(current.UserMessage).Agent,
+            "dispute-planning",
+            StringComparison.OrdinalIgnoreCase);
+        var supportCase = isApproved && isDispute
+            ? CreateSupportCase(current, now)
+            : null;
+        var actionExecution = supportCase is not null
+            ? CreateActionExecution(current, supportCase, now)
+            : null;
+        var decisionEvents = actionExecution is null
+            ? [approvalEvent]
+            : new[]
+            {
+                approvalEvent,
+                new WorkflowEvent(
+                    "workflow.action_completed",
+                    "Simulated dispute support case created",
+                    now,
+                    "system",
+                    supportCase!.CaseNumber)
+            };
 
         var newState = current with
         {
@@ -258,7 +280,7 @@ public sealed class WorkflowService : IWorkflowService
             ApprovalDecision = decision,
             ApprovalReason = reason,
             UpdatedAt = now,
-            Events = current.Events.Append(approvalEvent).ToList(),
+            Events = current.Events.Concat(decisionEvents).ToList(),
             Version = current.Version + 1
         };
 
@@ -273,13 +295,13 @@ public sealed class WorkflowService : IWorkflowService
         await _workflowActionRepository.RecordDecisionAsync(
             newState,
             approvalRecord,
-            actionExecution: null,
-            supportCase: null,
+            actionExecution,
+            supportCase,
             expectedVersion: current.Version,
             cancellationToken);
 
         _logger.LogInformation("Workflow {WorkflowId} decision recorded: {Decision}", workflowId, decision);
-        return newState;
+        return await _workflowRepository.GetAsync(workflowId, cancellationToken) ?? newState;
     }
 
     public Task<WorkflowState?> GetAsync(Guid workflowId, CancellationToken cancellationToken = default)
@@ -291,6 +313,35 @@ public sealed class WorkflowService : IWorkflowService
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private static SupportCase CreateSupportCase(WorkflowState workflow, DateTimeOffset now) =>
+        new(
+            Id: Guid.NewGuid(),
+            WorkflowId: workflow.Id,
+            CaseNumber: $"DSP-{workflow.Id:N}",
+            Status: "Open",
+            Summary: "Simulated support case for an approved transaction dispute.",
+            CreatedAt: now,
+            UpdatedAt: now);
+
+    private static ActionExecution CreateActionExecution(
+        WorkflowState workflow,
+        SupportCase supportCase,
+        DateTimeOffset now) =>
+        new(
+            Id: Guid.NewGuid(),
+            WorkflowId: workflow.Id,
+            ActionType: "dispute.support_case.create",
+            IdempotencyKey: $"dispute-support-case:{workflow.Id:N}",
+            Status: ActionExecutionStatus.Completed,
+            RequestedAt: now,
+            CompletedAt: now,
+            Result: JsonSerializer.Serialize(new
+            {
+                support_case_id = supportCase.Id,
+                case_number = supportCase.CaseNumber,
+                status = supportCase.Status
+            }));
 
     private async Task<WorkflowState> AdvanceAndPersistAsync(
         WorkflowState current,
