@@ -12,6 +12,7 @@ tasks:
       - dotnet test tests/BankingAgent.Application.Tests --configuration Release --logger "console;verbosity=normal"
       - dotnet test tests/BankingAgent.Api.Tests --configuration Release --logger "console;verbosity=normal"
       - dotnet test tests/BankingAgent.WebUi.Tests --configuration Release --logger "console;verbosity=normal"
+      - dotnet test tests/BankingAgent.Infrastructure.Tests --configuration Release --logger "console;verbosity=normal"
 
   domain:
     desc: Run WorkflowRoutingPolicy unit tests only
@@ -32,3 +33,20 @@ tasks:
     desc: Run Web UI token handler contract tests
     cmds:
       - dotnet test tests/BankingAgent.WebUi.Tests --configuration Release --logger "console;verbosity=normal"
+
+  infrastructure:
+    desc: Run EF repository, MCP reliability, and seed contract tests
+    cmds:
+      - dotnet test tests/BankingAgent.Infrastructure.Tests --configuration Release --logger "console;verbosity=normal"
+
+  python-agents:
+    desc: Run Python agent unit tests
+    cmds:
+      - python -m pip install -r src/agents/python/requirements.txt pytest -q
+      - cd src/agents/python && python -m pytest tests -v
+
+  python-deployer:
+    desc: Run Python deployer unit tests
+    cmds:
+      - python -m pip install -r src/agents/deployer/requirements.txt pytest -q
+      - cd src/agents/deployer && python -m pytest test_deploy.py -v

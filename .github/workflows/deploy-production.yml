@@ -1,0 +1,354 @@
+# Production deployment workflow.
+#
+# Triggers: a push to main after CI passes, or manual dispatch.
+# Gate: the "production" GitHub Environment must be configured with a required-reviewer
+#       approval rule. No job in the deploy stage starts until the gate is passed.
+#
+# Authentication: GitHub OIDC only. No long-lived credentials or API keys.
+# The service principal must have a federated credential configured for
+# repo:<org>/<repo>:environment:production (all jobs run inside the environment gate).
+#
+# Required GitHub repository variables (Settings → Variables):
+#   AZURE_CLIENT_ID       – App (client) ID of the deployment service principal
+#   AZURE_TENANT_ID       – Entra tenant ID
+#   AZURE_SUBSCRIPTION_ID – Target Azure subscription
+#   AZURE_REGION          – Azure region (e.g. swedencentral)
+#
+# Required GitHub environment secrets (Settings → Environments → production):
+#   TF_BACKEND_RESOURCE_GROUP   – Resource group containing the Terraform state storage account
+#   TF_BACKEND_STORAGE_ACCOUNT  – Name of the Azure Blob storage account
+#   TF_BACKEND_CONTAINER        – Blob container name for state files (e.g. tfstate)
+#
+# See docs/remote-state.md for backend bootstrap and environment-separation guidance.
+
+name: Deploy – Production
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region (overrides AZURE_REGION variable)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  id-token: write   # Required for OIDC token exchange
+
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false   # Never cancel a production deploy mid-flight
+
+jobs:
+  # ── 1. Infrastructure Terraform apply (gated by production approval) ──────
+  deploy_infrastructure:
+    name: Deploy infrastructure
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Reject superseded CI revisions
+        if: github.event_name == 'workflow_run'
+        run: |
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~1.8'
+
+      - name: Terraform init (infrastructure)
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform -chdir=infrastructure init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=production/infrastructure.tfstate"
+
+      - name: Terraform apply (infrastructure)
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          REGION="${{ inputs.region || vars.AZURE_REGION }}"
+          terraform -chdir=infrastructure apply \
+            -auto-approve -compact-warnings -input=false \
+            -var "region=$REGION"
+
+  # ── 2. Build and push all container images to ACR ─────────────────────────
+  build_and_push:
+    name: Build & push images
+    needs: deploy_infrastructure
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      image_tag: ${{ steps.tag.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Derive image tag
+        id: tag
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Resolve ACR name from the infrastructure Terraform remote state so that
+      # the workflow stays in sync without hardcoding the registry name.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~1.8'
+
+      - name: Terraform init (infrastructure – remote backend)
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform -chdir=infrastructure init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=production/infrastructure.tfstate"
+
+      - name: Read ACR name from Terraform output
+        id: acr
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          ACR=$(terraform -chdir=infrastructure output -raw ACR_NAME)
+          echo "name=$ACR" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push – orchestrator
+        run: |
+          az acr build \
+            --registry ${{ steps.acr.outputs.name }} \
+            --image orchestrator:${{ steps.tag.outputs.short_sha }} \
+            --image orchestrator:latest \
+            --file src/orchestrator/Dockerfile .
+
+      - name: Build & push – webui
+        run: |
+          az acr build \
+            --registry ${{ steps.acr.outputs.name }} \
+            --image webui:${{ steps.tag.outputs.short_sha }} \
+            --image webui:latest \
+            --file src/webui/Dockerfile .
+
+      - name: Build & push – agents-python
+        run: |
+          az acr build \
+            --registry ${{ steps.acr.outputs.name }} \
+            --image agents:${{ steps.tag.outputs.short_sha }} \
+            --image agents:latest \
+            --file src/agents/python/Dockerfile .
+
+      - name: Build & push – hosted-agents
+        run: |
+          az acr build \
+            --registry ${{ steps.acr.outputs.name }} \
+            --image hosted-agents:${{ steps.tag.outputs.short_sha }} \
+            --image hosted-agents:latest \
+            --file src/agents/python/Dockerfile.hosted .
+
+      - name: Build & push – agent-deployer
+        run: |
+          az acr build \
+            --registry ${{ steps.acr.outputs.name }} \
+            --image agent-deployer:${{ steps.tag.outputs.short_sha }} \
+            --image agent-deployer:latest \
+            --file src/agents/deployer/Dockerfile .
+
+      - name: Build & push – database-migrator
+        run: |
+          az acr build \
+            --registry ${{ steps.acr.outputs.name }} \
+            --image database-migrator:${{ steps.tag.outputs.short_sha }} \
+            --image database-migrator:latest \
+            --file src/database-migrator/Dockerfile .
+
+      - name: Build & push – litellm
+        run: |
+          az acr build \
+            --registry ${{ steps.acr.outputs.name }} \
+            --image litellm:${{ steps.tag.outputs.short_sha }} \
+            --image litellm:latest \
+            --file src/litellm/Dockerfile .
+
+  # ── 3. Application Container Apps apply ───────────────────────────────────
+  deploy_apps:
+    name: Deploy application Container Apps
+    needs: [deploy_infrastructure, build_and_push]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~1.8'
+
+      - name: Resolve APP_NAME from infrastructure output
+        id: infra
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform -chdir=infrastructure init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=production/infrastructure.tfstate"
+          APP_NAME=$(terraform -chdir=infrastructure output -raw APP_NAME)
+          echo "app_name=$APP_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init (apps)
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform -chdir=apps init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=production/apps.tfstate"
+
+      - name: Terraform apply (apps)
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          REGION="${{ inputs.region || vars.AZURE_REGION }}"
+          terraform -chdir=apps apply \
+            -auto-approve -compact-warnings -input=false \
+            -var "app_name=${{ steps.infra.outputs.app_name }}" \
+            -var "region=$REGION" \
+            -var "image_tag=${{ needs.build_and_push.outputs.image_tag }}"
+
+      - name: Run database migration job
+        run: bash ./scripts/migrate-database.sh
+
+      - name: Deploy Foundry Hosted Agents
+        run: bash ./scripts/deploy-hosted-agents.sh
+
+  # ── 4. Post-deployment smoke checks ───────────────────────────────────────
+  smoke:
+    name: Post-deployment smoke checks
+    needs: deploy_apps
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~1.8'
+
+      - name: Restore Terraform state (infrastructure)
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform -chdir=infrastructure init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=production/infrastructure.tfstate"
+
+      - name: Restore Terraform state (apps)
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform -chdir=apps init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=production/apps.tfstate"
+
+      - name: Run smoke checks
+        # The script reads endpoint URLs from terraform outputs; exit code 1
+        # means at least one check failed, which fails the step with the full
+        # evidence JSON visible in the log – no secrets are logged.
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: python ./scripts/smoke-mvp.py --output smoke-evidence.json
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-evidence
+          path: smoke-evidence.json
+          if-no-files-found: error

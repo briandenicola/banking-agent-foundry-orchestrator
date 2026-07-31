@@ -1,0 +1,221 @@
+# Continuous integration: validates every pull request and every push to main.
+# Does NOT deploy or push images; publishing happens only in deploy-production.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── .NET build and unit tests ──────────────────────────────────────────────
+  dotnet:
+    name: .NET build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore solution
+        run: dotnet restore banking-agent.sln
+
+      - name: Build (Release)
+        run: dotnet build banking-agent.sln --configuration Release --no-restore
+
+      - name: Verify formatting
+        run: dotnet format banking-agent.sln --verify-no-changes --no-restore
+
+      - name: Unit tests – Domain
+        run: >
+          dotnet test tests/BankingAgent.Domain.Tests
+          --configuration Release --no-build
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=domain.trx"
+
+      - name: Unit tests – Application
+        run: >
+          dotnet test tests/BankingAgent.Application.Tests
+          --configuration Release --no-build
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=application.trx"
+
+      - name: API integration tests
+        run: >
+          dotnet test tests/BankingAgent.Api.Tests
+          --configuration Release --no-build
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=api.trx"
+
+      - name: Unit tests – WebUI
+        run: >
+          dotnet test tests/BankingAgent.WebUi.Tests
+          --configuration Release --no-build
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=webui.trx"
+
+
+      - name: Persistence and infrastructure integration tests
+        run: >
+          dotnet test tests/BankingAgent.Infrastructure.Tests
+          --configuration Release --no-build
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=infrastructure.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-test-results
+          path: "**/*.trx"
+
+  # ── Python agent syntax check ──────────────────────────────────────────────
+  python-agents:
+    name: Python agent syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile Python sources
+        run: python -m compileall src/agents/python
+
+
+  # ── Python agent unit tests ────────────────────────────────────────────────
+  python-agent-tests:
+    name: Python agent unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install agent dependencies
+        run: python -m pip install -r src/agents/python/requirements.txt pytest
+
+      - name: Run agent tests
+        working-directory: src/agents/python
+        run: python -m pytest tests -v
+
+  # ── Python deployer unit tests ─────────────────────────────────────────────
+  python-deployer-tests:
+    name: Python deployer unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deployer dependencies
+        run: python -m pip install -r src/agents/deployer/requirements.txt pytest
+
+      - name: Run deployer tests
+        working-directory: src/agents/deployer
+        run: python -m pytest test_deploy.py -v
+
+  # ── Terraform: infrastructure stack ───────────────────────────────────────
+  terraform-infrastructure:
+    name: Terraform validate (infrastructure)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~1.8'
+
+      - name: fmt check
+        run: terraform -chdir=infrastructure fmt -check -recursive
+
+      - name: init (no backend)
+        run: terraform -chdir=infrastructure init -backend=false -input=false
+
+      - name: validate
+        run: terraform -chdir=infrastructure validate
+
+  # ── Terraform: apps stack ──────────────────────────────────────────────────
+  terraform-apps:
+    name: Terraform validate (apps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~1.8'
+
+      - name: fmt check
+        run: terraform -chdir=apps fmt -check -recursive
+
+      - name: init (no backend)
+        run: terraform -chdir=apps init -backend=false -input=false
+
+      - name: validate
+        # Supply dummy required variables so that validate can complete without
+        # real infrastructure outputs being available.
+        env:
+          TF_VAR_app_name: ci-validation-placeholder
+        run: terraform -chdir=apps validate
+
+  # ── Container image builds ─────────────────────────────────────────────────
+  # All seven deployable images are built to verify Dockerfiles stay valid.
+  # Images are NOT pushed; push is gated to deploy-production.yml.
+  build-images:
+    name: Build container images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: orchestrator
+            dockerfile: src/orchestrator/Dockerfile
+            tag: banking-agent-orchestrator:ci
+          - name: webui
+            dockerfile: src/webui/Dockerfile
+            tag: banking-agent-webui:ci
+          - name: agents-python
+            dockerfile: src/agents/python/Dockerfile
+            tag: banking-agent-agents:ci
+          - name: agents-hosted
+            dockerfile: src/agents/python/Dockerfile.hosted
+            tag: banking-agent-hosted-agents:ci
+          - name: agent-deployer
+            dockerfile: src/agents/deployer/Dockerfile
+            tag: banking-agent-agent-deployer:ci
+          - name: database-migrator
+            dockerfile: src/database-migrator/Dockerfile
+            tag: banking-agent-database-migrator:ci
+          - name: litellm
+            dockerfile: src/litellm/Dockerfile
+            tag: banking-agent-litellm:ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.name }}
+        run: |
+          docker build \
+            -f ${{ matrix.dockerfile }} \
+            -t ${{ matrix.tag }} \
+            --label "git.sha=${{ github.sha }}" \
+            .
+
+      - name: Verify image
+        run: docker image inspect ${{ matrix.tag }} --format '{{ .RepoTags }} {{ .Created }}'

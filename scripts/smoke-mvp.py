@@ -858,4 +858,17 @@ if __name__ == "__main__":
         sys.exit(main())
     except (SmokeFailure, subprocess.CalledProcessError, URLError) as error:
         print(f"MVP smoke test setup failed: {error}", file=sys.stderr)
+        output = parse_args().output
+        if output:
+            failure = json.dumps(
+                {
+                    "status": "failed",
+                    "checks": [],
+                    "setup_error": str(error),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(f"{failure}\n", encoding="utf-8")
         sys.exit(1)

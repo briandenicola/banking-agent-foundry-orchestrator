@@ -160,6 +160,14 @@ After the shared infrastructure exists, the following command builds all images,
 task app:deploy -- swedencentral
 ```
 
+## CI/CD and production deployment
+
+`.github/workflows/ci.yml` runs the complete .NET and Python unit and integration suites, verifies formatting and both Terraform stacks, and builds every deployable container image without publishing it. The production workflow completes the end-to-end gate against the deployed environment with `scripts/smoke-mvp.py`.
+
+After CI succeeds on `main`, `.github/workflows/deploy-production.yml` waits for approval through the GitHub `production` environment, authenticates to Azure using OIDC, applies both Terraform stacks, publishes the commit-tagged images, runs migrations and Hosted Agent deployment, and uploads post-deployment smoke evidence.
+
+Remote-state bootstrap, OIDC permissions, environment protection, state migration, and required GitHub variables are documented in [`docs/remote-state.md`](docs/remote-state.md).
+
 ## Definition of ready
 
 A deployment is ready only when all of the following are true:

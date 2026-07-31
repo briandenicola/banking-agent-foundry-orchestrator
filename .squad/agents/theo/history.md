@@ -40,3 +40,34 @@ Replaced `ConcurrentDictionary` in `WorkflowService` with full EF-backed Postgre
 - `dotnet build src/orchestrator/orchestrator.csproj -c Release` — 0 errors, 0 warnings
 - `dotnet test BankingAgent.Application.Tests` — 15/15 passed
 - `dotnet test BankingAgent.Api.Tests` — 19/19 passed
+
+## Workstream — CI/Deploy Revision (Issue #10, 2026-07-31)
+
+Revision pass after Aria's blocking review findings. Four gaps corrected:
+
+### Fix 1 — Environment secret scope (deploy-production.yml)
+`build-and-push` referenced `secrets.TF_BACKEND_*` (environment-scoped) without `environment: production`.
+Added `environment: production` to the job. All four jobs (`build-and-push`, `deploy-infrastructure`, `deploy-apps`, `smoke`) now run inside the environment gate, so the required-reviewer approval gate fires before any job starts. Updated the OIDC comment to remove the inaccurate `ref:refs/heads/main` federated-credential note.
+
+### Fix 2 — Infrastructure test suite in CI (ci.yml)
+`BankingAgent.Infrastructure.Tests` was absent from the CI dotnet job. Added a `Unit tests – Infrastructure` step alongside the other suites. Also added the suite to `task test:unit` in `Taskfile.test.yml`.
+
+### Fix 3 — Python pytest suites in CI (ci.yml)
+Two Python test files existed but were never run:
+- `src/agents/python/tests/test_agents.py` (agent graph unit tests)
+- `src/agents/deployer/test_deploy.py` (deployer contract tests)
+Added `python-agent-tests` and `python-deployer-tests` jobs. Each installs only its own `requirements.txt` then runs pytest. Added `python-agents` and `python-deployer` tasks to `Taskfile.test.yml`.
+
+### Fix 4 — Deployment concurrency (deploy-production.yml)
+Added a `concurrency` block at workflow level: group `deploy-production`, `cancel-in-progress: false`. Prevents overlapping production deploys without killing a deploy that is mid-flight.
+
+### Validation
+- YAML lint on ci.yml and deploy-production.yml — PASS
+- Structural checks (all jobs, all environments, concurrency block) — PASS
+- `git status` confirms changes are unstaged as required
+
+---
+
+## Cross-Agent Feedback from Issue #10 Revision (2026-07-31)
+
+**From Aria (final review):** All blocking issues from the first review cycle have been resolved. Implementation satisfies every acceptance criterion. The revision demonstrates surgical, focused fixes without scope creep. Ready for commit and merge with one non-blocking advisory about TF_VAR_image_tag placeholder.
