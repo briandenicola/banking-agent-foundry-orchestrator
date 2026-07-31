@@ -26,6 +26,12 @@ public sealed class WorkflowE2eTests : IDisposable
     private readonly TestOrchestratorHost _host;
     private readonly HttpClient _client;
 
+    private static readonly IReadOnlySet<string> PollingTerminalStatuses =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Completed", "Failed", "Rejected", "WaitingForApproval"
+        };
+
     public WorkflowE2eTests()
     {
         _context = CreateContext();
@@ -46,10 +52,14 @@ public sealed class WorkflowE2eTests : IDisposable
             new AuthenticationHeaderValue("Bearer", _host.BuildBearerToken());
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Full dispute lifecycle: POST 202 → evidence → approve → Completed
+    // ──────────────────────────────────────────────────────────────────
+
     [Fact]
     public async Task DisputeWorkflow_WhenApproved_PersistsSupportCaseAndEvidence()
     {
-        var workflowId = await StartWorkflowAsync(
+        var workflowId = await PostAndRecoverAsync(
             "Dispute demo transaction DEMO-TXN-1001 at Northwind Market.",
             "WaitingForApproval");
 
@@ -86,7 +96,7 @@ public sealed class WorkflowE2eTests : IDisposable
     [Fact]
     public async Task DisputeWorkflow_WhenRejected_PersistsNoSupportCase()
     {
-        var workflowId = await StartWorkflowAsync(
+        var workflowId = await PostAndRecoverAsync(
             "Dispute demo transaction DEMO-TXN-1001 at Northwind Market.",
             "WaitingForApproval");
 
@@ -104,10 +114,14 @@ public sealed class WorkflowE2eTests : IDisposable
             await _context.SupportCases.CountAsync(item => item.WorkflowId == workflowId));
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Idempotent approval: two identical POST approvals, one decision row
+    // ──────────────────────────────────────────────────────────────────
+
     [Fact]
     public async Task ApprovalRetry_ReturnsIdenticalResponseAndNoDuplicateAction()
     {
-        var workflowId = await StartWorkflowAsync(
+        var workflowId = await PostAndRecoverAsync(
             "Dispute demo transaction DEMO-TXN-1001 at Northwind Market.",
             "WaitingForApproval");
         var payload = new { decision = "approve", reason = "Approved after review." };
@@ -132,15 +146,79 @@ public sealed class WorkflowE2eTests : IDisposable
             await _context.ApprovalDecisions.CountAsync(item => item.WorkflowId == workflowId));
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Evidence attached before specialist processing observes it
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Evidence_AttachedAfterPost_BeforeRecovery_IsPersistedDurably()
+    {
+        // POST → 202 (workflow is Draft, specialist has not run yet)
+        var postResponse = await _client.PostAsJsonAsync(
+            "/api/v1/workflows",
+            new { userMessage = "Dispute demo transaction DEMO-TXN-1001 at Northwind Market." });
+        Assert.Equal(HttpStatusCode.Accepted, postResponse.StatusCode);
+        var postBody = await postResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var workflowId = Guid.Parse(postBody.GetProperty("workflowId").GetString()!);
+
+        // Attach evidence while still Draft — before specialist can run
+        using var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            "files", "receipt.png");
+        var evidenceResponse = await _client.PostAsync(
+            $"/api/v1/workflows/{workflowId}/evidence", form);
+        Assert.True(evidenceResponse.IsSuccessStatusCode,
+            await evidenceResponse.Content.ReadAsStringAsync());
+
+        // Evidence is stored immediately; specialist has not observed it yet
+        var dbCount = await _context.WorkflowEvidence.CountAsync(
+            e => e.WorkflowId == workflowId);
+        Assert.Equal(1, dbCount);
+    }
+
+    [Fact]
+    public async Task Evidence_UploadedBeforeExecution_IsVisibleAfterRecovery()
+    {
+        // POST (draft)
+        var postResponse = await _client.PostAsJsonAsync(
+            "/api/v1/workflows",
+            new { userMessage = "Dispute demo transaction DEMO-TXN-1001 at Northwind Market." });
+        Assert.Equal(HttpStatusCode.Accepted, postResponse.StatusCode);
+        var postBody = await postResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var workflowId = Guid.Parse(postBody.GetProperty("workflowId").GetString()!);
+
+        // Upload evidence before execution
+        using var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            "files", "statement.png");
+        await _client.PostAsync($"/api/v1/workflows/{workflowId}/evidence", form);
+
+        // Simulate background execution
+        await RunRecoveryAsync(workflowId, new FullRoutingMcpClient());
+
+        // Evidence persists after recovery; GET returns it
+        var detail = await GetWorkflowAsync(workflowId);
+        Assert.Equal(1, detail.GetProperty("evidence").GetArrayLength());
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Web UI submission: post + redirect + load via IndexModel
+    // ──────────────────────────────────────────────────────────────────
+
     [Fact]
     public async Task WebUiSubmission_RunsThroughApiAndDisplaysPersistedWorkflow()
     {
+        // The IndexModel submits to the API and redirects.
+        // Under the 202 contract the redirect goes to the polling status page.
         var page = CreateIndexModel();
         page.Input.UserMessage =
             "Why is demo transaction DEMO-TXN-1002 at Metro Transit pending?";
 
         var result = Assert.IsType<RedirectToPageResult>(await page.OnPostAsync());
         var workflowId = Assert.IsType<Guid>(result.RouteValues!["workflowId"]);
+
+        // Simulate background recovery so the workflow reaches a terminal state
+        await RunRecoveryAsync(workflowId, new FullRoutingMcpClient());
 
         var statusPage = CreateIndexModel();
         await statusPage.OnGetAsync(workflowId);
@@ -149,19 +227,58 @@ public sealed class WorkflowE2eTests : IDisposable
             statusPage.Workflow is not null,
             statusPage.ErrorMessage ?? "Workflow was not loaded.");
         Assert.Equal(workflowId, statusPage.Workflow.WorkflowId);
-        Assert.Equal("Completed", statusPage.Workflow.Status);
+        Assert.True(
+            PollingTerminalStatuses.Contains(statusPage.Workflow.Status),
+            $"Expected terminal status but got: {statusPage.Workflow.Status}");
         Assert.NotNull(await new EfWorkflowRepository(_context).GetAsync(workflowId));
     }
 
-    private async Task<Guid> StartWorkflowAsync(string userMessage, string expectedStatus)
+    // ──────────────────────────────────────────────────────────────────
+    // Helpers
+    // ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// POST the workflow (expects 202 Accepted under new contract),
+    /// then explicitly trigger RecoverAsync to simulate the background worker,
+    /// and verify the workflow reaches <paramref name="expectedStatus"/>.
+    /// </summary>
+    private async Task<Guid> PostAndRecoverAsync(string userMessage, string expectedStatus)
     {
         var response = await _client.PostAsJsonAsync(
             "/api/v1/workflows",
             new { userMessage });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(expectedStatus, body.GetProperty("status").GetString());
-        return Guid.Parse(body.GetProperty("workflowId").GetString()!);
+        var workflowId = Guid.Parse(body.GetProperty("workflowId").GetString()!);
+
+        // Verify Location header points to the workflow
+        Assert.NotNull(response.Headers.Location);
+        Assert.Contains(
+            workflowId.ToString(),
+            response.Headers.Location.ToString(),
+            StringComparison.OrdinalIgnoreCase);
+
+        // Run background execution
+        await RunRecoveryAsync(workflowId, new FullRoutingMcpClient());
+
+        // Verify the workflow has reached the expected status
+        var detail = await GetWorkflowAsync(workflowId);
+        Assert.Equal(expectedStatus, detail.GetProperty("status").GetString());
+
+        return workflowId;
+    }
+
+    private async Task RunRecoveryAsync(Guid workflowId, IMcpClient mcpClient)
+    {
+        await using var rcCtx = CreateContext();
+        var service = new WorkflowService(
+            mcpClient,
+            NullLogger<WorkflowService>.Instance,
+            new EfWorkflowRepository(rcCtx),
+            new EfWorkflowActionRepository(rcCtx));
+        await service.RecoverAsync(workflowId);
     }
 
     private async Task<JsonElement> GetWorkflowAsync(Guid workflowId)

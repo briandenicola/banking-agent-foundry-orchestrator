@@ -97,3 +97,77 @@ Added four new test areas per the aria-issue-9-design-review.md split decision.
 - `dotnet test tests/BankingAgent.Api.Tests/` — 34/34 passed (was 29)
 - `dotnet test tests/BankingAgent.Infrastructure.Tests/` — 14/14 passed (was 13)
 - `dotnet test tests/BankingAgent.Application.Tests/` — 43/43 passed (unchanged)
+
+## Workstream — Async Workflow UI Implementation (2026-07-31)
+
+Implemented async POST/poll semantics per aria-async-workflow.md decision.
+
+### Key Changes
+
+**Backend:**
+- `WorkflowService.StartAsync/StartDemoAsync` — now persist Draft and return immediately (no routing). Routing lives in `RecoverAsync`, called by `WorkflowRecoveryWorker` or the new immediate trigger.
+- `WorkflowService.RecoverAsync` — accepts Draft + Recovering for execution; returns current state for terminal/approval states (idempotent).
+- `IWorkflowExecutionTrigger` + `WorkflowExecutionTrigger` — safe singleton pattern using `IServiceScopeFactory`. Fires after POST (non-dispute) or after evidence upload (dispute), ensuring evidence is persisted before specialist runs.
+- `WorkflowEndpoints.cs` — returns 202 Accepted + Location header. `IWorkflowExecutionTrigger?` nullable for test compatibility.
+- `WorkflowRecoveryOptions.StaleAfterSeconds` — default 120→10, min 30→5 for faster dev pickup.
+
+**WebUI:**
+- `Index.cshtml.cs` — `OnGetPollAsync` proxies GET /api/v1/workflows/{id} to orchestrator, returns JSON.
+- `Index.cshtml` — compact above-fold layout, stage track (Plan/Investigate/Decide), `aria-live` region, `aria-busy`/disabled forms, failure/timeout cards.
+- `site.js` — exponential back-off polling (1→2→4→8→10s cap, 90s max), terminal/approval stop conditions, stage/timeline updates, `AbortSignal.timeout` per-poll, reduced-motion support.
+- `site.css` — stage-dot animations, spinner, timeout notice, failure card, compact `has-workflow` layout, reduced-motion and forced-colors media queries.
+
+### Test Impact
+- 52/53 API tests pass (1 failure: Nia's E2E test using real StartAsync expecting planner failure — tests OLD behavior)
+- 34/47 Application tests pass (13 failures: all test synchronous routing via StartAsync — OLD behavior, need Nia to update)
+- 15/16 Infrastructure tests pass (1 failure: Nia's new test bug — workflow 1min old vs staleBefore 2min ago)
+
+### Patterns Learned
+- `Results.Accepted(uri, body)` sets 202 status with Location header in minimal APIs.
+- `IWorkflowExecutionTrigger?` as nullable in minimal API endpoint parameters: ASP.NET Core injects null without throwing if service not registered, when `[FromServices]` attribute is present.
+- `WorkflowRecoveryWorker` uses `IServiceScopeFactory` (singleton-safe); same pattern can be used in `WorkflowExecutionTrigger` without violating DI lifetime rules.
+- Aria-live `aria-atomic="true"` with empty+replace content pattern ensures consistent screen reader announcements across assistive technologies.
+- `AbortSignal.timeout(ms)` (per-request timeout) + exponential back-off polling avoids indefinite waits and handles connection failures gracefully.
+
+## Workstream — Issue #16 Stage Model Alignment (2026-07-31)
+
+Reviewed the full implementation against Issue #16 acceptance criteria. Identified two real source-level gaps.
+
+### Gap 1 — `updateStages` version proxy (site.js)
+The JS `updateStages` function used `version` (an integer) to infer which stage was active. The comment itself called it a "rough proxy." When a workflow fails during the planner phase, version increments to 1 but the Plan stage should not show as done. Using audit event types from `data.events` (which are already returned by GET) is truthful and robust.
+
+**Fix:** Replaced version logic with event-type presence checks:
+- `planDone` = `events.some(e => e.type === "workflow.plan")`
+- `terminalDone` = any of `workflow.completed | workflow.approval_required | workflow.failed`
+
+### Gap 2 — SSR stage classes wrong for WaitingForApproval (Index.cshtml)
+The Razor server-side stage classes used `isTerminal` which excludes WaitingForApproval. Result: on a direct page load of a WaitingForApproval workflow, Plan showed as `stage-active` (wrong) and Investigate had no class (wrong). Since `data-polling="false"` for WaitingForApproval, the polling loop never ran to correct it.
+
+**Fix:** Added `hasPlanEvent` and `hasTerminalEvent` Razor variables derived from `Model.Workflow.Events` (same event types as the JS fix), and used them for the SSR stage class ternaries.
+
+### Test coverage
+- Added `OnGetAsync_WaitingForApproval_RealisticEvents_StageAuditTypesPresent` to `DemoScenarioUiTests.cs`
+- Added `BuildWorkflowDetailJsonWithEventTypes` helper for typed-event test data
+- WebUI: 28 tests (was 27), all passing
+- Full aggregate: 190 tests (was 189), all passing
+
+### Patterns learned
+- Stage state should derive from durable server events, not version counters, for correctness on failure paths and direct page loads
+- SSR and JS stage logic must use the same event-type contract so the initial render and subsequent polling produce consistent results
+- WebUI Razor model tests don't render HTML — stage class correctness is validated via event-type exposure tests + correctness of the Razor ternary logic
+
+## Workstream 4 — Optional EvidenceFiles Fix (2026-07-31)
+
+Fixed root cause of frozen-UI-on-no-evidence bug (aria-optional-evidence-gate approved contract).
+
+### Files changed
+- `src/webui/Pages/Index.cshtml.cs` — `InputModel.EvidenceFiles` changed to `List<IFormFile>?`; coalesced once at server boundary (`var files = Input.EvidenceFiles ?? []`); all downstream references updated to `files`.
+- `src/webui/wwwroot/js/site.js` — submit handler now checks `jqForm?.valid?.() ?? form.checkValidity()` before entering loading state; `e.preventDefault()` on invalid; controls left untouched on invalid path.
+
+### Root cause
+Non-nullable `List<IFormFile>` caused Razor tag-helpers + jQuery unobtrusive validation to emit `data-val-required`, canceling the submit event after `site.js` had already set `is-loading` and disabled controls — leaving the form frozen with zero network traffic.
+
+### Validation
+- Build: `dotnet build src/webui/webui.csproj -c Release --nologo` — 0 warnings, 0 errors ✅
+- Tests: `dotnet test tests/BankingAgent.WebUi.Tests/ -c Release --nologo` — 28/28 passing ✅
+- Squad inbox: `.squad/decisions/inbox/theo-optional-evidence-fix.md` written

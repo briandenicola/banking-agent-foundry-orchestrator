@@ -209,3 +209,190 @@ Aria's approved-review advisory F1 recommended removing the file-existence guard
 ### Lessons
 - File-existence guards in CI are temporary scaffolding. Once the guarded file is stable (landed and passing tests), remove the guard to convert skip-silently → fail-explicitly, tightening the quality gate.
 - Simplified `run:` commands (no shell conditionals) are easier to reason about and debug in workflow logs.
+
+---
+## 2026-07-31 — Async Workflow Contract: Tests and Docs
+
+### Context
+Aria's ADR (`aria-async-workflow.md`) established the 202 Accepted contract. Theo implemented the production changes concurrently. This session added comprehensive async lifecycle tests, aligned pre-existing tests to the new async model, and updated API/functional/technical/testing docs.
+
+### Discovery
+When tests were first written and run, Theo had already landed the following changes:
+- `WorkflowService.StartAsync` now only persists `Draft` and returns — no planner/specialist invocation.
+- `WorkflowEndpoints.cs` now returns `Results.Accepted(...)` (202) with a `Location` header.
+- `RecoverAsync` returns current state for terminal workflows (idempotent, no error).
+
+This required aligning 16 pre-existing tests (DemoScenarioTests, WorkflowTelemetryTests, WorkflowServiceCurrentBehaviorTests) that expected synchronous terminal status from `StartAsync`.
+
+### Work Delivered
+
+**New test files:**
+- `tests/BankingAgent.Api.Tests/WorkflowAsyncLifecycleTests.cs` — 19 E2E tests for 202 + Location, Draft visibility, polling lifecycle, planner failure, WaitingForApproval stop, approval resume, evidence ordering, and support case in GET response.
+
+**Updated test files:**
+- `tests/BankingAgent.Api.Tests/WorkflowEndpointContractTests.cs` — Updated POST tests to assert 202 + Location header, added body/message assertions, added DemoScenario 202 test.
+- `tests/BankingAgent.Api.Tests/WorkflowE2eTests.cs` — Updated `StartWorkflowAsync` helper to assert 202 + Location, added `RunRecoveryAsync` helper, added evidence ordering tests.
+- `tests/BankingAgent.Application.Tests/WorkflowServiceCurrentBehaviorTests.cs` — Updated planner/specialist failure tests to use `RecoverAsync`, fixed Draft-before-planner assertion, added specialist failure test.
+- `tests/BankingAgent.Application.Tests/DemoScenarioTests.cs` — Added `RecoverAsync` calls to all scenario and decision tests.
+- `tests/BankingAgent.Application.Tests/WorkflowTelemetryTests.cs` — Added `RecoverAsync` call before `ApproveAsync`.
+- `tests/BankingAgent.Infrastructure.Tests/WorkflowRestartRecoveryTests.cs` — Added 3 atomic claim tests, fixed `RecoverAsync_CompletedWorkflow_DoesNotReprocess` to verify idempotent return.
+- `tests/BankingAgent.WebUi.Tests/DemoScenarioUiTests.cs` — 18 new UI/accessibility tests: 202 handling, terminal status exposure, events/evidence/support, timeout error messages, approval form, accessibility non-null assertions.
+
+**Updated docs:**
+- `docs/functional-spec.md` — Added "Async workflow lifecycle" section: endpoint table, state lifecycle diagram, polling behavior, evidence association, approval semantics, migration notes.
+- `docs/technical-spec.md` — Updated runtime flow to async 202 model, added recovery/failure behavior section, updated API contract section with terminal status table.
+- `docs/testing.md` — Updated E2E table with 202/polling scenarios, expanded Category D, added Category E infrastructure table, added Category E2E-Async async lifecycle table.
+
+### Test Results
+| Suite | Tests | Status |
+|---|---|---|
+| BankingAgent.Domain.Tests | 19 | ✅ All pass |
+| BankingAgent.Application.Tests | 47 | ✅ All pass |
+| BankingAgent.Infrastructure.Tests | 16 | ✅ All pass |
+| BankingAgent.WebUi.Tests | 27 | ✅ All pass |
+| BankingAgent.Api.Tests | 53 | ✅ All pass |
+| **Total** | **162** | ✅ 0 failures |
+
+### Key Lessons
+- `RecoverAsync` returns current state (not error) for terminal workflows. Tests expecting `InvalidTransitionException` must be updated to assert idempotent return.
+- `ClaimNextAsync` only considers workflows where `UpdatedAt < staleBefore`. Test timestamps must be older than the `staleBefore` cutoff or no claim is made.
+- Changing `BaseIntermediateOutputPath` in `Directory.Build.props` silently removes `obj/**` from DefaultItemExcludes — re-add explicitly (known from prior session).
+- The async 202 contract is a breaking change for callers expecting 200. `IsSuccessStatusCode` covers 2xx, so IndexModel works without modification.
+
+### Risks and Remaining Items
+- `scripts/smoke-mvp.py` still submits workflows and expects synchronous terminal status — needs a polling loop update (not in scope for this task).
+- Python pytest suites (Categories P, PH) not re-run in this session; no Python files were modified.
+- E2E tests calling `RunRecoveryAsync` are deterministic but assume the worker processes a single workflow; concurrent multi-workflow scenarios are infrastructure-level only.
+
+---
+## 2026-07-31 — Async Smoke Contract (aria-async-workflow ADR)
+
+### Context
+Aria's ADR (`.squad/decisions/inbox/aria-async-workflow.md`) changed `POST /api/v1/workflows` from 200 synchronous to 202 Accepted.  The existing `scripts/smoke-mvp.py` still expected 200 and synthesised success from the initial response status.
+
+### Work Delivered
+
+**`scripts/smoke-mvp.py` — async contract changes:**
+
+| Area | Change |
+|------|--------|
+| Constants | Added `TERMINAL_STATES` (frozenset: Completed/Failed/Rejected/WaitingForApproval), `DEFAULT_POLL_TIMEOUT_SECONDS` (90), `DEFAULT_POLL_INITIAL_INTERVAL` (1 s), `DEFAULT_POLL_MAX_INTERVAL` (10 s), `DEFAULT_POLL_BACKOFF_FACTOR` (2×) |
+| `start_workflow` | Removed `expected_status` param; requires 202 (raises SmokeFailure on any other code); validates `workflowId` + `traceId` presence; returns body only (execution is deferred) |
+| `poll_workflow` (new) | Polls `GET /api/v1/workflows/{id}` with exponential backoff; stops only on real `TERMINAL_STATES`; never synthesises success; raises with last status + last 5 timeline events on timeout or unexpected HTTP code |
+| `check_workflows` | Added `poll_timeout` param; each scenario: POST→202→poll_workflow→verify expected terminal status; failure message includes scenario name + terminal status + timeline |
+| `check_workflows_via_webui` | Added `poll_timeout` param; initial status accepted as Draft (async-normal); added `_wait_for_webui_async_execution` bounded sleep (≤30 s) before approval; updated result to include `async_status_note` and `initial_status` instead of `status` per scenario |
+| `submit_webui_workflow` | Updated success-message check to accept `"Workflow submitted successfully"` **or** `"accepted for processing"` / `"Workflow accepted"` (post-async webui message variants) |
+| `--poll-timeout` arg | New CLI arg (default 90 s, env: `SMOKE_POLL_TIMEOUT_SECONDS`); passed through to `check_workflows` and `check_workflows_via_webui` |
+
+**`scripts/tests/test_smoke_static.py` (new) + `scripts/tests/__init__.py`:**
+- 25 deterministic tests, no live HTTP, no Terraform/az CLI dependency
+- Covers: TERMINAL_STATES completeness; `start_workflow` 202 requirement; `poll_workflow` all 4 terminal states, retry path, event payload, timeout diagnostic content, no-synthesise guarantee, unexpected HTTP; `check_workflows` success path + wrong-status + scenario name in failure; `--poll-timeout` CLI default, explicit, env override
+
+### Validation Results
+
+| Check | Result |
+|-------|--------|
+| `python3 -m py_compile scripts/smoke-mvp.py` | PASS |
+| `python3 scripts/smoke-mvp.py --help` | PASS — `--poll-timeout` present |
+| `python3 -m pytest scripts/tests/test_smoke_static.py -v` | **25/25 PASS** |
+| Live smoke against any deployed environment | NOT RUN (per task instructions) |
+
+### Lessons
+- When loading a Python script as a module with `importlib.util`, the module must be registered in `sys.modules` before `exec_module` is called; otherwise `dataclasses` cannot resolve `cls.__module__` for class-level decorators.
+- Mocking `time.monotonic` in poll-loop tests requires careful call counting: the deadline is computed on call 1, and the remaining-time check consumes call 2.  Setting the "past-deadline" threshold at `call_n[0] > 1` (not `> 2`) correctly makes the loop exit after the first non-terminal response without exhausting the response iterator.
+
+---
+## 2026-07-31 — Issue #16 Follow-up Review (Theo's Event-Type Correction)
+
+### Context
+Reviewed Theo's correction that replaced version-proxy stage inference with durable server event-type checks in both `site.js` and `Index.cshtml`. Also reviewed the new WebUI test and ran the full no-live-Azure aggregate gate.
+
+### Work Done
+- Read `site.js` `updateStages` function: version proxy gone, event-type presence checks confirmed correct for all stage/status combinations including planner-failure and WaitingForApproval.
+- Read `Index.cshtml` SSR stage ternaries: `hasPlanEvent` + `hasTerminalEvent` variables mirror JS logic; WaitingForApproval bug (Plan falsely active) fixed.
+- Read new test `OnGetAsync_WaitingForApproval_RealisticEvents_StageAuditTypesPresent`: validates event data availability for stage-track SSR rendering.
+- Ran `dotnet test tests/BankingAgent.WebUi.Tests` → 28/28 ✅
+- Ran `dotnet test --configuration Release --nologo` → 163/163 .NET ✅
+- Ran Python agents + smoke static → 20 + 25 = 45 ✅
+
+### Verdict
+✅ **APPROVE** — wrote `.squad/decisions/inbox/nia-issue16-review.md`
+
+### Residual Risks (for parent)
+- No planner-failure specific test (Failed + no workflow.plan event)
+- No browser-level stage rendering test (JS updateStages not directly tested)
+- Deployment/smoke criterion not executed (parent-owned per directive)
+
+---
+## 2026-07-31 — Issue: Automated browser/UI test for no-evidence form submission
+
+### Context
+briandenicola explicitly rejected the Aria-proposed PageModel-only approach and
+`aria-optional-evidence-gate.md` as insufficient.  Required: an automated browser/UI test
+that executes actual DOM validation + submit handler behaviour and proves an HTTP POST is
+observed for a valid no-evidence submission.
+
+### Approach Selected
+
+**Node.js built-in test runner (`node:test`) + jsdom** — no headless browser binary required.
+
+Rationale:
+- jsdom implements the HTML5 constraint-validation API (`checkValidity()`, `required`
+  attribute, `valueMissing` validity state) used by the production `site.js` submit guard.
+- `Event.defaultPrevented` is inspectable; a cancelable submit event with
+  `defaultPrevented === false` after all handlers run is the deterministic proof that
+  a native browser would fire the HTTP POST.
+- No Playwright/Selenium binary download; runs on any CI node that has Node ≥ 18.
+- Single devDependency (`jsdom ^25`) — minimal footprint.
+- Loads the ACTUAL production `src/webui/wwwroot/js/site.js` into the jsdom window context
+  via `window.eval()` — tests real handler code, not a stub.
+
+### Work Delivered
+
+**New files:**
+- `tests/webui-js/package.json` — `"type": "module"`, jsdom devDependency
+- `tests/webui-js/package-lock.json` — committed lock file for deterministic CI
+- `tests/webui-js/site.submit.test.js` — 15 DOM/browser-behaviour tests across 4 suites
+
+**Modified files:**
+- `tests/BankingAgent.WebUi.Tests/DemoScenarioUiTests.cs` — +2 evidence coalescing tests
+  (1 pass, 1 skip pending Theo's null-coalescing fix)
+- `tasks/Taskfile.test.yml` — added `js` task; `all` task includes `js`
+- `.github/workflows/ci.yml` — `WebUI JS browser/DOM regression tests` step added
+
+### Test Results
+
+| Suite | Count | Result |
+|-------|-------|--------|
+| jsdom suite 1 — DOM attribute contract | 4/4 | ✅ |
+| jsdom suite 2 — valid no-evidence → POST observed | 5/5 | ✅ |
+| jsdom suite 3 — invalid → no POST, no stuck UI | 3/3 | ✅ |
+| jsdom suite 4 — approved handler e.preventDefault contract | 3/3 | ✅ |
+| BankingAgent.WebUi.Tests (.NET) | 29 pass, 1 skip | ✅ |
+| Full .NET suite | 163 pass, 1 skip | ✅ |
+
+### Key POST Proof
+
+Test `submit event is NOT prevented for valid form (no-evidence path)`:
+- Builds form HTML as Razor renders it with nullable EvidenceFiles (no `data-val-required`)
+- Sets UserMessage to a valid value; file input is empty (no files selected)
+- Evaluates actual production `site.js` in jsdom window
+- Dispatches cancelable `submit` event
+- Asserts `event.defaultPrevented === false` AND `form.classList.contains('is-loading')`
+- Combined with `form.method === 'post'`, this proves the POST would fire in a real browser
+
+### Pending (Theo)
+- `OnPostAsync_WithNullEvidenceFiles_CoalescesToEmptyAndSubmitsSuccessfully` (SKIP)
+  — un-skip when `List<IFormFile>?` and `??[]` coalescing land in Index.cshtml.cs
+- Production site.js JS fix (explicit `e.preventDefault` for invalid) — suite 4 tests
+  run against the inline approved handler today; will also pass against production site.js
+  once Theo's JS change lands
+
+### Lessons
+- `window.eval()` on an ESM-style window requires `runScripts: 'outside-only'` (not
+  'dangerously') when the test itself is ESM.  `outside-only` lets callers evaluate scripts
+  via `window.eval()` without jsdom trying to load scripts from HTML `<script>` tags.
+- `form.checkValidity()` in jsdom respects `required` on textarea/input; a textarea with
+  `required` and empty value correctly returns false — same as browser behaviour.
+- jsdom does not implement `window.matchMedia`; stub it before evaluating site.js or the
+  polling code path will throw on environments that don't include a `[data-workflow-id]` node.

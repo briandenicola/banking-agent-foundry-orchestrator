@@ -47,7 +47,13 @@ public sealed class DemoScenarioTests
     {
         var fixture = new DemoFixture();
 
-        var workflow = await fixture.Service.StartDemoAsync(scenarioId);
+        // StartDemoAsync persists Draft and returns immediately (202 async contract).
+        // RecoverAsync executes the planner/specialist and reaches the terminal state.
+        var draft = await fixture.Service.StartDemoAsync(scenarioId);
+        Assert.Equal(WorkflowStatus.Draft, draft.Status);
+        Assert.Contains(draft.Events, e => e.Type == "workflow.demo_scenario");
+
+        var workflow = await fixture.Service.RecoverAsync(draft.Id);
 
         Assert.Equal(expectedStatus, workflow.Status);
         Assert.Contains(
@@ -72,17 +78,19 @@ public sealed class DemoScenarioTests
         bool expectsSupportCase)
     {
         var fixture = new DemoFixture();
-        var workflow = await fixture.Service.StartDemoAsync(scenarioId);
+        // Draft → RecoverAsync → WaitingForApproval → Approve/Reject
+        var draft = await fixture.Service.StartDemoAsync(scenarioId);
+        await fixture.Service.RecoverAsync(draft.Id);
 
         var decided = await fixture.Service.ApproveAsync(
-            workflow.Id,
+            draft.Id,
             decision,
             "Synthetic demo decision");
 
         Assert.Equal(expectedStatus, decided.Status);
         Assert.Equal(
             expectsSupportCase,
-            await fixture.ActionRepository.GetSupportCaseAsync(workflow.Id) is not null);
+            await fixture.ActionRepository.GetSupportCaseAsync(draft.Id) is not null);
     }
 
     [Fact]
@@ -96,6 +104,9 @@ public sealed class DemoScenarioTests
         Assert.NotEqual(first.Id, second.Id);
         Assert.NotEqual(first.TraceId, second.TraceId);
         Assert.Equal(2, fixture.WorkflowRepository.Count);
+        // Both are Draft (execution is deferred)
+        Assert.Equal(WorkflowStatus.Draft, first.Status);
+        Assert.Equal(WorkflowStatus.Draft, second.Status);
     }
 
     [Fact]

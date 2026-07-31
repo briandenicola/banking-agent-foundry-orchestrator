@@ -35,6 +35,11 @@ public interface IWorkflowActionRepository
 
 public interface IWorkflowRecoveryRepository
 {
+    Task<WorkflowState?> ClaimAsync(
+        Guid workflowId,
+        DateTimeOffset claimedAt,
+        CancellationToken cancellationToken = default);
+
     Task<WorkflowState?> ClaimNextAsync(
         DateTimeOffset staleBefore,
         DateTimeOffset claimedAt,

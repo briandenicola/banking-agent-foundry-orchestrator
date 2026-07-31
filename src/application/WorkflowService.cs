@@ -108,8 +108,23 @@ public sealed class WorkflowService : IWorkflowService
             Version: 0);
 
         await AddWorkflowAsync(draftState, cancellationToken);
-        return await ExecuteRoutingAsync(draftState, demoScenario, cancellationToken);
+        return draftState;
     }
+
+    // EnqueueAsync / EnqueueDemoAsync — kept as aliases for backward compat
+    // in callers that pre-date the interface rename; delegate to StartAsync.
+    // EnqueueAsync / EnqueueDemoAsync — fast-return variant (alias for Start*)
+    // endpoint. Persists Draft and returns immediately; execution is deferred to
+    // WorkflowRecoveryWorker or the IWorkflowExecutionTrigger best-effort path.
+    public Task<WorkflowState> EnqueueAsync(
+        string userMessage,
+        CancellationToken cancellationToken = default) =>
+        StartAsync(userMessage, cancellationToken);
+
+    public Task<WorkflowState> EnqueueDemoAsync(
+        string scenarioId,
+        CancellationToken cancellationToken = default) =>
+        StartDemoAsync(scenarioId, cancellationToken);
 
     public async Task<WorkflowState> RecoverAsync(
         Guid workflowId,
@@ -117,12 +132,27 @@ public sealed class WorkflowService : IWorkflowService
     {
         var current = await GetWorkflowAsync(workflowId, cancellationToken)
             ?? throw new WorkflowNotFoundException(workflowId);
-        if (current.Status != WorkflowStatus.Recovering)
+        // Accept Draft (not yet claimed) or Recovering (claimed by worker).
+        // Draft is valid here because the immediate trigger may call RecoverAsync
+        // before the periodic worker has updated the status via ClaimNextAsync.
+        // The atomic ClaimNextAsync in IWorkflowRecoveryRepository remains the
+        // sole distributed-safe execution authority.
+        // Terminal/approval states: return current state (idempotent — another replica
+        // may have already completed execution before this call arrived).
+        if (current.Status is WorkflowStatus.Completed
+            or WorkflowStatus.Failed
+            or WorkflowStatus.Rejected
+            or WorkflowStatus.WaitingForApproval)
+        {
+            return current;
+        }
+
+        if (current.Status is not (WorkflowStatus.Draft or WorkflowStatus.Recovering))
         {
             throw new InvalidTransitionException(
                 workflowId,
                 current.Status,
-                WorkflowStatus.Recovering.ToString());
+                "Draft or Recovering");
         }
 
         var scenarioId = current.Events
@@ -210,7 +240,7 @@ public sealed class WorkflowService : IWorkflowService
                 "Planner invocation failed.",
                 CancellationToken.None);
         }
-        var plannerEvent = CreateInvocationEvent(plannerResult);
+        var plannerEvent = CreateInvocationEvent(plannerResult, "workflow.plan");
 
         if (!TryReadAgentResult(plannerResult, "workflow-planning", out var plannerDecision, out var plannerError))
             return await PersistFailedAsync(current, [plannerEvent], plannerError, cancellationToken);
@@ -724,9 +754,11 @@ public sealed class WorkflowService : IWorkflowService
         }
     }
 
-    private static WorkflowEvent CreateInvocationEvent(McpToolResult result) =>
+    private static WorkflowEvent CreateInvocationEvent(
+        McpToolResult result,
+        string eventType = "mcp.invoked") =>
         new(
-            "mcp.invoked",
+            eventType,
             $"Invoked tool {result.ToolName}",
             DateTimeOffset.UtcNow,
             "system",

@@ -153,6 +153,7 @@ builder.Services.Configure<WorkflowRecoveryOptions>(options =>
         builder.Configuration.GetValue("WORKFLOW_RECOVERY_BATCH_SIZE", 10);
 });
 builder.Services.AddHostedService<WorkflowRecoveryWorker>();
+builder.Services.AddSingleton<IWorkflowExecutionTrigger, WorkflowExecutionTrigger>();
 builder.Services.AddHealthChecks()
     .AddCheck<PostgreSqlReadinessCheck>(
         "postgresql",

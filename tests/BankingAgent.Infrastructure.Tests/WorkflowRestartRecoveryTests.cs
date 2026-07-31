@@ -214,6 +214,127 @@ public sealed class WorkflowRestartRecoveryTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Atomic duplicate execution: two workers racing on a new Draft
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task TwoConcurrentWorkers_BothSeeNewDraft_OnlyOneClaimsIt()
+    {
+        // Workflow must be older than staleBefore for ClaimNextAsync to pick it up
+        var workflow = BuildDraftWorkflow(DateTimeOffset.UtcNow.AddMinutes(-10));
+        await using (var seedContext = CreateContext())
+        {
+            await seedContext.Database.EnsureCreatedAsync();
+            await new EfWorkflowRepository(seedContext).AddAsync(workflow);
+        }
+
+        var staleBefore = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var claimedAt = DateTimeOffset.UtcNow;
+
+        await using var ctx1 = CreateContext();
+        await using var ctx2 = CreateContext();
+
+        var claims = await Task.WhenAll(
+            new EfWorkflowRepository(ctx1).ClaimNextAsync(staleBefore, claimedAt),
+            new EfWorkflowRepository(ctx2).ClaimNextAsync(staleBefore, claimedAt));
+
+        var successfulClaims = claims.Where(c => c is not null).ToList();
+        Assert.Single(successfulClaims);
+        Assert.Equal(WorkflowStatus.Recovering, successfulClaims[0]!.Status);
+    }
+
+    [Fact]
+    public async Task ImmediateClaim_TargetsOnlyRequestedDraft_AndCannotReclaimRecoveringWorkflow()
+    {
+        var first = BuildDraftWorkflow(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var second = BuildDraftWorkflow(DateTimeOffset.UtcNow);
+        await using (var seedContext = CreateContext())
+        {
+            await seedContext.Database.EnsureCreatedAsync();
+            var repository = new EfWorkflowRepository(seedContext);
+            await repository.AddAsync(first);
+            await repository.AddAsync(second);
+        }
+
+        await using (var claimContext = CreateContext())
+        {
+            var claimed = await new EfWorkflowRepository(claimContext)
+                .ClaimAsync(second.Id, DateTimeOffset.UtcNow);
+
+            Assert.NotNull(claimed);
+            Assert.Equal(second.Id, claimed.Id);
+        }
+
+        await using (var reclaimContext = CreateContext())
+        {
+            var reclaimed = await new EfWorkflowRepository(reclaimContext)
+                .ClaimAsync(second.Id, DateTimeOffset.UtcNow.AddSeconds(1));
+
+            Assert.Null(reclaimed);
+        }
+
+        await using var verificationContext = CreateContext();
+        var repositoryForVerification = new EfWorkflowRepository(verificationContext);
+        var untouched = await repositoryForVerification.GetAsync(first.Id);
+        var recovering = await repositoryForVerification.GetAsync(second.Id);
+        Assert.Equal(WorkflowStatus.Draft, untouched!.Status);
+        Assert.Equal(WorkflowStatus.Recovering, recovering!.Status);
+    }
+
+    [Fact]
+    public async Task AfterClaim_RecoveringWorkflow_HasRecoveryClaimedEvent()
+    {
+        var workflow = BuildDraftWorkflow(DateTimeOffset.UtcNow.AddMinutes(-5));
+        await using (var seedCtx = CreateContext())
+        {
+            await seedCtx.Database.EnsureCreatedAsync();
+            await new EfWorkflowRepository(seedCtx).AddAsync(workflow);
+        }
+
+        await using var claimCtx = CreateContext();
+        var claimed = await new EfWorkflowRepository(claimCtx)
+            .ClaimNextAsync(DateTimeOffset.UtcNow.AddMinutes(-2), DateTimeOffset.UtcNow);
+
+        Assert.NotNull(claimed);
+        Assert.Contains(claimed.Events, e => e.Type == "workflow.recovery_claimed");
+    }
+
+    [Fact]
+    public async Task RecoverAsync_CompletedWorkflow_DoesNotReprocess()
+    {
+        var workflow = BuildWaitingWorkflow();
+        await using (var seedCtx = CreateContext())
+        {
+            await seedCtx.Database.EnsureCreatedAsync();
+            await new EfWorkflowRepository(seedCtx).AddAsync(workflow);
+        }
+
+        await using var approveCtx = CreateContext();
+        var service = CreateService(approveCtx);
+        var approved = await service.ApproveAsync(workflow.Id, "approve", "First approval.");
+        Assert.Equal(WorkflowStatus.Completed, approved.Status);
+
+        // RecoverAsync on a Completed workflow returns current state without re-executing (idempotent)
+        await using var recoverCtx = CreateContext();
+        var recoveryService = new WorkflowService(
+            new DeterministicMcpClient(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkflowService>.Instance,
+            new EfWorkflowRepository(recoverCtx),
+            new EfWorkflowActionRepository(recoverCtx));
+
+        var result = await recoveryService.RecoverAsync(workflow.Id);
+        Assert.Equal(WorkflowStatus.Completed, result.Status);
+
+        await using var verifyCtx = CreateContext();
+        Assert.Equal(
+            1,
+            await verifyCtx.SupportCases.CountAsync(s => s.WorkflowId == workflow.Id));
+        Assert.Equal(
+            1,
+            await verifyCtx.ActionExecutions.CountAsync(a => a.WorkflowId == workflow.Id));
+    }
+
     private sealed class UnusedMcpClient : IMcpClient
     {
         public Task<McpToolResult> InvokeAsync(

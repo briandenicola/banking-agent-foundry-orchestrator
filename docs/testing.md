@@ -54,7 +54,17 @@ In-process tests for `OrchestratorTokenHandler`. Cover:
 
 ### Category E — Infrastructure / persistence (`BankingAgent.Infrastructure.Tests`)
 
-Integration tests for EF Core repositories, MCP reliability patterns, and seed data contracts. Use system SQLite databases; no PostgreSQL server is required locally.
+Integration tests for EF Core repositories, MCP reliability patterns, seed data contracts, and recovery atomicity. Use system SQLite databases; no PostgreSQL server is required locally.
+
+| Test | What it verifies |
+|---|---|
+| `CompetingRecoveryClaimers_OnlyOneClaimsStaleWorkflow` | Exactly one of two concurrent `ClaimNextAsync` callers succeeds |
+| `TwoConcurrentWorkers_BothSeeNewDraft_OnlyOneClaimsIt` | New Draft claimed atomically by only one worker |
+| `ImmediateClaim_TargetsOnlyRequestedDraft_AndCannotReclaimRecoveringWorkflow` | Immediate trigger claims only its requested Draft and cannot steal active recovery work |
+| `AfterClaim_RecoveringWorkflow_HasRecoveryClaimedEvent` | `workflow.recovery_claimed` event emitted on claim |
+| `StaleDraft_ResumesToTerminalStateAfterRestart` | Draft → claim → RecoverAsync reaches terminal state |
+| `RecoverAsync_CompletedWorkflow_DoesNotReprocess` | RecoverAsync on Completed returns current state (no duplicate execution) |
+| `WorkflowAndApprovedAction_SurviveContextRestartWithoutDuplicates` | Support case and action count = 1 after restart + duplicate approval |
 
 ### Category E2E — End-to-end lifecycle (`BankingAgent.Api.Tests`, filter `Category=E2E`)
 
@@ -62,12 +72,33 @@ Production-like in-process tests use the real HTTP endpoints, `WorkflowService`,
 
 | Scenario | Steps | Expected result |
 |---|---|---|
-| Approved dispute with evidence | Create → upload PNG → approve → GET | Completed workflow has one durable support case and evidence record |
-| Rejected dispute | Create → reject → GET | Rejected workflow has no support case |
-| Idempotent approval | Create → approve twice | Responses match and only one decision/action exists |
-| Web UI path | Submit through `IndexModel` → API → reload through `IndexModel` | UI displays the EF-persisted completed workflow |
+| POST returns 202 + Location | POST `/api/v1/workflows` | 202 Accepted, `Location` header, body `status: "Draft"` |
+| Approved dispute with evidence | POST (202) → RecoverAsync → upload PNG → approve → GET | Completed workflow has one durable support case and evidence record |
+| Rejected dispute | POST (202) → RecoverAsync → reject → GET | Rejected workflow has no support case |
+| Idempotent approval | POST (202) → RecoverAsync → approve twice | Responses match and only one decision/action exists |
+| Polling lifecycle | POST → GET (Draft) → RecoverAsync → GET (terminal) | Terminal status reached via polling |
+| Evidence before specialist | POST (202) → upload evidence → RecoverAsync | Evidence persists through recovery |
+| Planner failure | POST (202) → RecoverAsync (planner throws) | `Failed` status with `workflow.failed` event |
+| Web UI path | Submit through `IndexModel` → API (202) → RecoverAsync → reload | UI displays the EF-persisted terminal workflow |
 
 Restart recovery and duplicate-action behavior use recreated EF contexts in `WorkflowRestartRecoveryTests`. Oversized evidence and standardized ProblemDetails are API contract tests.
+
+### Category E2E-Async — Async lifecycle tests (`BankingAgent.Api.Tests`, filter `Category=E2E`)
+
+In `WorkflowAsyncLifecycleTests`, the full 202 → Draft → RecoverAsync → terminal path is exercised against a real in-process stack. Terminal polling statuses (`Completed`, `Failed`, `Rejected`, `WaitingForApproval`) and the `RecoverAsync` idempotency contract are verified.
+
+| Scenario | Expected result |
+|---|---|
+| POST 202 + Location + Draft body | 202 Accepted, `Location` header set, `status: "Draft"` in body |
+| Draft visible via GET immediately | Draft workflow retrievable before execution |
+| Polling after RecoverAsync | Terminal status reached |
+| Events increase after execution | GET returns more events after RecoverAsync |
+| Planner failure via RecoverAsync | `Failed` status, `workflow.failed` event persisted |
+| WaitingForApproval is polling terminal | Status in `PollingTerminalStatuses` set |
+| Approval resume to Completed | Approve WaitingForApproval → Completed |
+| Evidence attached before specialist | Evidence count = 1 after RecoverAsync |
+| Evidence survives recovery | Evidence visible in GET after execution |
+| Support case in GET after approval | `supportCase` non-null in response |
 
 ### Category P — Python agent unit tests (`src/agents/python/tests/`)
 

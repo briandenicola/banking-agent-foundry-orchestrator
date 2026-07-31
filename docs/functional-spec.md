@@ -44,3 +44,52 @@ Build a banking support agent prototype that can assist with transaction questio
 - Advanced policy engine beyond simple approval rules.
 - Multi-tenant or highly regulated compliance controls.
 - Any authentication mechanism that uses API keys or shared secrets for service-to-service access.
+
+## Async workflow lifecycle
+
+`POST /api/v1/workflows` returns **202 Accepted** immediately with a `Location` header pointing to the workflow status endpoint. The response body contains the `workflowId`, `traceId`, `status: "Draft"`, and a human-readable message. Background execution is claimed by the `WorkflowRecoveryWorker` or an immediate-trigger task fired after the Draft is persisted.
+
+### Endpoint semantics
+
+| Endpoint | Method | Behavior | Status code |
+|---|---|---|---|
+| `/api/v1/workflows` | POST | Persists Draft; enqueues execution; returns immediately | **202 Accepted** |
+| `/api/v1/workflows/{id}` | GET | Returns current state, events, evidence, and support case | 200 OK |
+| `/api/v1/workflows/{id}/approval` | POST | Idempotent approval; same decision is a no-op; different decision returns 409 | 200 / 409 |
+| `/api/v1/workflows/{id}/evidence` | POST | Attaches evidence while workflow is not yet terminal | 200 / 400 |
+
+### Workflow state lifecycle
+
+```
+POST → Draft (v0, persisted)
+         ↓  (claimed atomically by recovery worker or immediate trigger)
+       Recovering (v1)
+         ↓
+       WaitingForApproval | Completed | Failed
+         ↓  (if approval required)
+       Completed (after approve) | Rejected (after reject)
+```
+
+The immediate `ClaimAsync` path targets one workflow ID and accepts only `Draft`; the periodic `ClaimNextAsync` path accepts only stale `Draft` or `Recovering` rows. Both use atomic versioned updates, so exactly one replica wins the claim per workflow and active work cannot be stolen by an unrelated trigger.
+
+### Polling behavior
+
+The UI polls `GET /api/v1/workflows/{id}` with exponential backoff (1s → 2s → 4s → max 10s). Polling stops when the status is one of: `Completed`, `Failed`, `Rejected`, or `WaitingForApproval`. If the maximum poll duration (90s) is exceeded, the UI shows an actionable timeout with a Refresh button.
+
+`RecoverAsync` returns the current state immediately (no error) for already-terminal workflows, making it safe to call from concurrent replicas.
+
+### Evidence association
+
+Evidence uploaded between `POST` (Draft creation) and specialist execution is durably linked to the workflow and visible to the specialist agent when it processes the claim. Evidence uploaded after `Completed` or `Failed` is rejected.
+
+### Approval semantics
+
+- Re-submitting the same decision for an already-decided workflow returns the current state (idempotent).
+- Submitting a conflicting decision returns 409 `ConflictingDecisionException`.
+- `RecordDecisionAsync` uses `expectedVersion` for optimistic concurrency — no duplicate execution.
+
+### Migration/deployment notes
+
+- **No schema migration required.** Draft/Recovering states and the claim pattern already exist.
+- The `POST` change from 200 to 202 is a breaking change for callers expecting synchronous completion; the Web UI and smoke tests are updated simultaneously.
+- The recovery worker `ScanIntervalSeconds` can be reduced to 5 for faster pickup in dev (default: 30 in production).

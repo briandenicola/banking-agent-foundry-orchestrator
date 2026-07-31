@@ -11,10 +11,10 @@ namespace BankingAgent.Api.Tests;
 
 /// <summary>
 /// Contract tests for workflow endpoint behavior:
-/// - Durable retrieval: GET returns workflow state including events
+/// - POST /api/v1/workflows: 202 Accepted + Location header + Draft status body
+/// - GET returns workflow state including events, support case, and evidence
 /// - GET missing ID returns 404
 /// - Invalid transitions: 409 when approving non-WaitingForApproval workflow
-/// - Not-found: 404 when workflow ID is unknown
 /// - Idempotent approval: same decision returns 200 without error
 /// - Conflicting decision: 409 when different decision already recorded
 /// - Optimistic concurrency conflict: 409 via StaleVersionException
@@ -144,6 +144,64 @@ public sealed class WorkflowEndpointContractTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task GetWorkflow_DraftStatus_ReturnsExpectedFields()
+    {
+        var workflowId = Guid.NewGuid();
+        var traceId = Guid.NewGuid().ToString("N");
+        var t0 = DateTimeOffset.UtcNow;
+        var workflow = new WorkflowState(
+            workflowId, traceId, "Explain this charge.",
+            WorkflowStatus.Draft, null, false, null, null,
+            t0, t0,
+            Events: [new("workflow.started", "Workflow started", t0, "system")],
+            Version: 0);
+
+        _workflowServiceMock
+            .Setup(s => s.GetAsync(workflowId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(workflow);
+        _workflowServiceMock
+            .Setup(s => s.GetSupportCaseAsync(workflowId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SupportCase?)null);
+
+        var response = await _client.GetAsync($"/api/v1/workflows/{workflowId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var content = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(content);
+        var root = doc.RootElement;
+
+        Assert.Equal("Draft", root.GetProperty("status").GetString());
+        Assert.Equal(traceId, root.GetProperty("traceId").GetString());
+        Assert.Equal(0, root.GetProperty("version").GetInt64());
+    }
+
+    [Fact]
+    public async Task GetWorkflow_WaitingForApproval_SupportCaseIsNull()
+    {
+        var workflowId = Guid.NewGuid();
+        var t0 = DateTimeOffset.UtcNow;
+        var workflow = new WorkflowState(
+            workflowId, Guid.NewGuid().ToString("N"), "Dispute this charge.",
+            WorkflowStatus.WaitingForApproval, "dispute", true, null, null,
+            t0, t0, Events: [], Version: 2);
+
+        _workflowServiceMock
+            .Setup(s => s.GetAsync(workflowId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(workflow);
+        _workflowServiceMock
+            .Setup(s => s.GetSupportCaseAsync(workflowId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SupportCase?)null);
+
+        var response = await _client.GetAsync($"/api/v1/workflows/{workflowId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var content = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(content);
+        Assert.Equal("WaitingForApproval", doc.RootElement.GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("supportCase").ValueKind);
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // POST approval — invalid state → 409
     // ──────────────────────────────────────────────────────────────────
@@ -215,7 +273,6 @@ public sealed class WorkflowEndpointContractTests : IDisposable
             WorkflowStatus.Completed, "dispute", true, "approve", "already approved",
             DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, []);
 
-        // Service returns current state without throwing (idempotent path)
         _workflowServiceMock
             .Setup(s => s.ApproveAsync(workflowId, "approve", It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingWorkflow);
@@ -247,33 +304,116 @@ public sealed class WorkflowEndpointContractTests : IDisposable
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // POST workflows — success path
+    // POST approval — idempotent retry returns identical body
     // ──────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task PostWorkflow_ValidRequest_Returns200WithWorkflowId()
+    public async Task PostApproval_IdempotentRetry_ReturnsSameBodyBothTimes()
+    {
+        var workflowId = Guid.NewGuid();
+        var completedWorkflow = new WorkflowState(
+            workflowId, "t1", "Dispute this charge.",
+            WorkflowStatus.Completed, "dispute", true, "approve", "approved",
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, []);
+
+        _workflowServiceMock
+            .Setup(s => s.ApproveAsync(workflowId, "approve", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(completedWorkflow);
+
+        var first = await _client.PostAsJsonAsync(
+            $"/api/v1/workflows/{workflowId}/approval",
+            new { decision = "approve", reason = "retry probe" });
+        var second = await _client.PostAsJsonAsync(
+            $"/api/v1/workflows/{workflowId}/approval",
+            new { decision = "approve", reason = "retry probe" });
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+
+        var body1 = await first.Content.ReadAsStringAsync();
+        var body2 = await second.Content.ReadAsStringAsync();
+        Assert.Equal(body1, body2);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // POST /api/v1/workflows — 202 Accepted with Location header
+    // (Contract: post returns immediately with Draft status; execution
+    //  is claimed asynchronously by the recovery worker)
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task PostWorkflow_ValidRequest_Returns202AcceptedWithLocationHeader()
     {
         var expectedId = Guid.NewGuid();
+        var traceId = Guid.NewGuid().ToString("N");
         _workflowServiceMock
             .Setup(s => s.StartAsync("Why is this transaction pending?", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkflowState(
-                expectedId, "trace123", "Why is this transaction pending?",
-                WorkflowStatus.Completed, "transaction_explanation", false, null, null,
+                expectedId, traceId, "Why is this transaction pending?",
+                WorkflowStatus.Draft, null, false, null, null,
                 DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, []));
 
         var response = await _client.PostAsJsonAsync(
             "/api/v1/workflows",
             new { userMessage = "Why is this transaction pending?" });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
+        // Location header must be present and point to GET endpoint
+        Assert.NotNull(response.Headers.Location);
+        Assert.Contains($"/api/v1/workflows/{expectedId}", response.Headers.Location.ToString());
 
         var content = await response.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(content);
         Assert.Equal(expectedId.ToString(), doc.RootElement.GetProperty("workflowId").GetString());
+        Assert.Equal(traceId, doc.RootElement.GetProperty("traceId").GetString());
+        Assert.Equal("Draft", doc.RootElement.GetProperty("status").GetString());
     }
 
     [Fact]
-    public async Task PostWorkflow_DemoScenario_UsesServerCatalog()
+    public async Task PostWorkflow_ResponseBody_ContainsDraftStatusAndNonNullMessage()
+    {
+        var id = Guid.NewGuid();
+        _workflowServiceMock
+            .Setup(s => s.StartAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorkflowState(
+                id, "trace-abc", "Test request.",
+                WorkflowStatus.Draft, null, false, null, null,
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, []));
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/v1/workflows",
+            new { userMessage = "Test request." });
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal("Draft", doc.RootElement.GetProperty("status").GetString());
+        var message = doc.RootElement.GetProperty("message").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(message), "202 response must include a non-empty message.");
+    }
+
+    [Fact]
+    public async Task PostWorkflow_ServiceIsCalled_OnceOnly()
+    {
+        var id = Guid.NewGuid();
+        _workflowServiceMock
+            .Setup(s => s.StartAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorkflowState(
+                id, "t", "msg",
+                WorkflowStatus.Draft, null, false, null, null,
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, []));
+
+        await _client.PostAsJsonAsync("/api/v1/workflows", new { userMessage = "msg" });
+
+        // StartAsync is called exactly once; planner/specialist execution is deferred
+        _workflowServiceMock.Verify(
+            s => s.StartAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task PostWorkflow_DemoScenario_Returns202AndCallsStartDemoAsync()
     {
         var expectedId = Guid.NewGuid();
         _workflowServiceMock
@@ -284,8 +424,8 @@ public sealed class WorkflowEndpointContractTests : IDisposable
                 expectedId,
                 "demo-trace",
                 "Synthetic demo request",
-                WorkflowStatus.Failed,
-                "transaction-explanation",
+                WorkflowStatus.Draft,
+                null,
                 false,
                 null,
                 null,
@@ -301,7 +441,7 @@ public sealed class WorkflowEndpointContractTests : IDisposable
                 demoScenario = "hosted-agent-failure"
             });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         _workflowServiceMock.Verify(
             service => service.StartDemoAsync(
                 "hosted-agent-failure",

@@ -964,3 +964,254 @@ h1, h2, h3, .brand {
     flex-direction: column;
   }
 }
+
+/* =========================================================
+ * Async workflow UI — compact layout and stage progress
+ * ========================================================= */
+
+/* Reduce hero to a minimal banner when a workflow is active */
+.has-workflow ~ .hero,
+.workspace-grid.has-workflow .hero {
+  display: none;
+}
+
+/* Remove full-page hero when workspace has workflow */
+.workspace-grid.has-workflow {
+  grid-template-columns: 1fr;
+}
+
+/* Stage progress track */
+.stage-track {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 12px 0 16px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+
+.stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.825rem;
+  color: var(--muted);
+  font-weight: 500;
+  flex: 1;
+  justify-content: center;
+}
+
+.stage-connector {
+  width: 32px;
+  height: 2px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+
+.stage-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.stage-active .stage-dot {
+  border-color: var(--teal);
+  background: var(--teal);
+}
+
+.stage-done .stage-dot {
+  border-color: var(--teal);
+  background: var(--teal);
+}
+
+.stage-active {
+  color: var(--teal);
+}
+
+.stage-done {
+  color: var(--teal);
+  opacity: 0.7;
+}
+
+/* Animated spinner */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--line);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.processing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  padding: 8px 0;
+}
+
+/* Accessible live status region (visually shown during processing) */
+.live-status-region {
+  min-height: 24px;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/* Timeout notice */
+.timeout-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  background: #fff8e6;
+  border: 1px solid var(--amber);
+  border-radius: 10px;
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.timeout-notice p {
+  margin: 0;
+  flex: 1;
+}
+
+/* Failure card */
+.failure-card {
+  border-left: 3px solid var(--red);
+  padding: 20px;
+}
+
+.failure-heading {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.failure-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: var(--red);
+  color: white;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.failure-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+/* Secondary action link */
+.secondary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: none;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.secondary-action:hover {
+  border-color: var(--teal);
+  background: #f0faf9;
+  color: var(--teal);
+}
+
+/* Submit hint text */
+.submit-hint {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* Workflow panel (replaces workflow-section) */
+.workflow-panel {
+  padding: 24px;
+}
+
+/* Compact workspace with workflow active */
+.workspace-grid.has-workflow {
+  display: block;
+  max-width: 1180px;
+  margin-inline: auto;
+}
+
+.workspace-grid.has-workflow .request-panel {
+  margin-bottom: 20px;
+  padding: 20px 24px;
+}
+
+.workspace-grid.has-workflow .request-panel h2 {
+  font-size: 1.1rem;
+}
+
+.workspace-grid.has-workflow .request-input {
+  rows: 3;
+  min-height: 72px;
+}
+
+.workspace-grid.has-workflow .scenario-grid {
+  display: none;
+}
+
+.workspace-grid.has-workflow .evidence-upload {
+  display: none;
+}
+
+/* Reduced motion: disable spinner animation */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+    border-color: var(--teal);
+    opacity: 0.6;
+  }
+
+  .stage-dot {
+    transition: none;
+  }
+}
+
+/* High-contrast / forced-colors support */
+@media (forced-colors: active) {
+  .stage-dot {
+    border: 2px solid ButtonText;
+    background: Canvas;
+  }
+  .stage-active .stage-dot,
+  .stage-done .stage-dot {
+    background: Highlight;
+    border-color: Highlight;
+  }
+  .spinner {
+    border-color: ButtonText;
+    border-top-color: Highlight;
+  }
+}

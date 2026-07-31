@@ -267,3 +267,58 @@ dotnet format banking-agent.sln --verify-no-changes
 - `WorkflowRestartRecoveryTests` uses `Path.GetTempPath()` for SQLite files — acceptable for CI runners but noted as an OS-specific detail. Files are cleaned up in `DisposeAsync`.
 - TestOrchestratorHost has two constructors: one for mock-based contract tests, one for real-service E2E tests. Clean separation, good pattern.
 - The E2E tests use in-memory repositories (not SQLite), while Infrastructure.Tests use real SQLite. This is an intentional layering decision: E2E proves HTTP→service→repo chain, Infrastructure.Tests prove EF↔SQLite persistence. No duplication.
+
+## Async Workflow Design Review (2026-07-31)
+
+### Verdict: APPROVE — durable async via existing primitives
+
+### Key Design Choices
+- POST /api/v1/workflows returns 202 with Location header after persisting Draft (no agent call in request path).
+- Execution is triggered by existing `WorkflowRecoveryWorker` claiming Draft/Recovering rows via atomic versioned UPDATE.
+- An immediate best-effort `Task.Run` nudge after Draft persist reduces latency to <5s in happy path; the periodic scanner guarantees delivery.
+- No new states, no schema migration, no message broker.
+- UI uses exponential-backoff polling (1s→10s cap, 90s timeout) with accessible stage indicators.
+- Approval remains synchronous and idempotent within the approval request.
+
+### Ownership Split
+- **Theo:** API (202 + Location), application (split Start/Execute), UI (polling, compact workspace, stages, timeline).
+- **Nia:** All test files, docs updates, accessibility verification.
+
+### Learnings
+- The existing Draft + Recovering + ClaimNextAsync pattern is already a complete durable-execution primitive. The only missing piece was decoupling the POST response from execution completion.
+- Fire-and-forget `Task.Run` as optimization + periodic background scan as guarantee is a well-known pattern that avoids message broker complexity at prototype scale.
+- 202 Accepted is a breaking API change requiring coordinated webui/orchestrator deployment; document this clearly for CI.
+
+## Async Workflow Final Review (2026-07-31)
+
+### Verdict: APPROVE
+- 162/162 tests pass; build clean; 8/8 review criteria met.
+- Theo's implementation (202 semantics, trigger, WorkflowService split, UI polling) is correct.
+- Nia's test coverage (44 new tests, smoke rewrite, docs) is thorough.
+- Residual risks: version-based stage proxy, single-claim trigger, blind WebUI smoke sleep — all non-blocking for prototype.
+
+### Learnings
+- The `ExpectsEvidence` pattern (defer trigger until evidence upload) is an effective race-condition elimination without coordination primitives. Worth reusing for any two-phase submit pattern.
+- `RecoverAsync` accepting terminal states as idempotent no-ops is the right design — it means the trigger and periodic worker can safely overlap without error-shaped outcomes.
+- StaleAfterSeconds at 10s is aggressive for production; operators should tune this per environment.
+
+## Evidence-Files Optional Gate (2026-07-31)
+
+### Design Review
+- **Root cause confirmed:** `List<IFormFile>` (non-nullable) triggers `data-val-required`; jQuery validation cancels submit after JS sets `is-loading`.
+- **Approved fix:** Make `EvidenceFiles` nullable (`List<IFormFile>?`), coalesce to `[]` in `OnPostAsync`, reorder JS to check `jqForm.valid()` before entering loading state.
+- **Test approach:** PageModel unit test proving null-evidence POST succeeds. No Playwright — existing suite uses direct model invocation with Moq/FakeHttpMessageHandler.
+- **Ownership:** Theo → model + Razor + JS; Nia → unit test + manual verification checklist.
+- **Decision doc:** `.squad/decisions/inbox/aria-optional-evidence-gate.md`
+- **Verdict:** APPROVED
+
+## 2026-07-31 — Final Review: Evidence-Optional Feature
+
+**Verdict: REJECT** (2 items)
+
+1. **Server-side fix (Theo) ✅** — `List<IFormFile>?` + `?? []` coalescing correct.
+2. **JS validation ordering ✅** — busy state gated behind validation; `e.preventDefault()` on invalid.
+3. **Skipped test ❌** — `OnPostAsync_WithNullEvidenceFiles` still has `[Fact(Skip=...)]` despite Theo's fix landing. Must be unskipped. (Nia-authored → revise by Theo/Lumen)
+4. **No real HTTP POST test ❌** — JS tests use jsdom `defaultPrevented` assertions only; user explicitly required an observed HTTP POST/request. Need `WebApplicationFactory` + `HttpClient` integration test. (Nia-authored → revise by Theo/Lumen)
+
+Full rationale in `.squad/decisions/inbox/aria-evidence-final-review.md`.

@@ -1,0 +1,12 @@
+{
+  "name": "banking-agent-webui-js-tests",
+  "private": true,
+  "type": "module",
+  "description": "Automated DOM/browser-behaviour regression tests for site.js submit handling",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}

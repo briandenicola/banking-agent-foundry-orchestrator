@@ -10,18 +10,14 @@
         "Failed" => "status-failed",
         _ => "status-active"
     };
+    var isTerminal = Model.Workflow?.Status is "Completed" or "Failed" or "Rejected";
+    var isProcessing = Model.Workflow?.Status is "Draft" or "Recovering";
+    var needsApproval = Model.Workflow?.Status is "WaitingForApproval";
+    // Stage-track truth: derive from server-returned audit event types, not status alone.
+    var hasPlanEvent = Model.Workflow?.Events.Any(e => e.Type == "workflow.plan") ?? false;
+    var hasTerminalEvent = Model.Workflow?.Events.Any(e =>
+        e.Type is "workflow.completed" or "workflow.approval_required" or "workflow.failed") ?? false;
 }
-
-<section class="hero">
-    <div>
-        <span class="eyebrow">AI-assisted banking operations</span>
-        <h1>Turn a customer request into a traceable workflow.</h1>
-        <p>Route banking questions, review sensitive actions, and follow every decision from one workspace.</p>
-    </div>
-    <div class="hero-mark" aria-hidden="true">
-        <span></span><span></span><span></span>
-    </div>
-</section>
 
 @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
 {
@@ -39,11 +35,11 @@
     </div>
 }
 
-<div class="workspace-grid">
+<div class="workspace-grid @(Model.Workflow is not null ? "has-workflow" : "")">
     <section class="surface request-panel">
         <div class="section-heading">
             <div>
-                <span class="step-label">01 · Request</span>
+                <span class="step-label">Request</span>
                 <h2>What can we help with?</h2>
             </div>
             <span class="live-indicator"><span></span> Agent network online</span>
@@ -53,7 +49,7 @@
             <label asp-for="Input.UserMessage" class="form-label">Customer request</label>
             <textarea asp-for="Input.UserMessage"
                       class="form-control request-input"
-                      rows="5"
+                      rows="4"
                       placeholder="Describe a transaction, suspicious activity, or a charge you want to dispute."
                       required></textarea>
             <span asp-validation-for="Input.UserMessage" class="field-error"></span>
@@ -92,197 +88,264 @@
                 <div class="selected-files" data-selected-files></div>
             </div>
 
-            <button type="submit" class="primary-action">
+            <button type="submit" class="primary-action" aria-describedby="submit-hint">
                 <span class="button-label">Start workflow</span>
-                <span class="button-loading">Working…</span>
+                <span class="button-loading" aria-live="polite">Submitting…</span>
                 <span aria-hidden="true">→</span>
             </button>
+            <p class="submit-hint" id="submit-hint">The workflow is processed asynchronously. You can monitor its progress below.</p>
         </form>
     </section>
 
-    <aside class="surface process-panel">
-        <span class="step-label">How it works</span>
-        <ol class="process-list">
-            <li>
-                <span>1</span>
-                <div><strong>Plan</strong><small>The orchestrator identifies the request and required specialist.</small></div>
-            </li>
-            <li>
-                <span>2</span>
-                <div><strong>Investigate</strong><small>A hosted agent produces a focused assessment.</small></div>
-            </li>
-            <li>
-                <span>3</span>
-                <div><strong>Approve</strong><small>Sensitive actions pause until a person decides.</small></div>
-            </li>
-        </ol>
-        <div class="security-note">
-            <span aria-hidden="true">◇</span>
-            <p><strong>Approval controlled</strong><br />No sensitive action completes without an explicit decision.</p>
-        </div>
-    </aside>
-</div>
+    @if (Model.Workflow is not null)
+    {
+        <section class="surface workflow-panel" aria-label="Active workflow"
+                 data-workflow-id="@Model.Workflow.WorkflowId"
+                 data-workflow-status="@Model.Workflow.Status"
+                 data-polling="@(isProcessing ? "true" : "false")">
 
-@if (Model.Workflow is not null)
-{
-    <section class="workflow-section">
-        <div class="workflow-header">
-            <div>
-                <span class="step-label">02 · Workflow</span>
-                <h2>Request status</h2>
-            </div>
-            <div class="workflow-actions">
-                <span class="status-pill @statusClass">@Model.Workflow.Status</span>
-                <a asp-page="/Index"
-                   asp-route-workflowId="@Model.Workflow.WorkflowId"
-                   class="refresh-link">Refresh status ↻</a>
-            </div>
-        </div>
-
-        <div class="workflow-layout">
-            <div class="workflow-main">
-                <article class="surface summary-card">
-                    <p class="request-quote">“@Model.Workflow.UserMessage”</p>
-                    <div class="summary-grid">
-                        <div>
-                            <span>Intent</span>
-                            <strong>@(Model.Workflow.Intent ?? "Being determined")</strong>
-                        </div>
-                        <div>
-                            <span>Approval</span>
-                            <strong>@(Model.Workflow.RequiresApproval ? "Required" : "Not required")</strong>
-                        </div>
-                        <div>
-                            <span>Updated</span>
-                            <strong>@Model.Workflow.UpdatedAt.ToLocalTime().ToString("MMM d, h:mm tt")</strong>
-                        </div>
-                    </div>
-                    <details class="technical-details">
-                        <summary>Technical details</summary>
-                        <p><strong>Workflow ID:</strong> @Model.Workflow.WorkflowId</p>
-                        <p><strong>Trace ID:</strong> @Model.Workflow.TraceId</p>
-                        <p><strong>Status:</strong> @Model.Workflow.Status</p>
-                        <p><strong>Version:</strong> @Model.Workflow.Version</p>
-                    </details>
-                </article>
-
-                @if (Model.Workflow.Evidence.Count > 0)
-                {
-                    <article class="surface evidence-card">
-                        <div class="section-heading compact">
-                            <div>
-                                <span class="step-label">Supporting evidence</span>
-                                <h3>@Model.Workflow.Evidence.Count uploaded @(Model.Workflow.Evidence.Count == 1 ? "file" : "files")</h3>
-                            </div>
-                            <span class="evidence-secure">Stored with workflow</span>
-                        </div>
-                        <div class="evidence-grid">
-                            @foreach (var evidence in Model.Workflow.Evidence)
-                            {
-                                var evidenceUrl = Url.Page(
-                                    "/Index",
-                                    "Evidence",
-                                    new { workflowId = Model.Workflow.WorkflowId, evidenceId = evidence.Id });
-                                <a class="evidence-item" href="@evidenceUrl" target="_blank" rel="noopener">
-                                    @if (evidence.ContentType.StartsWith("image/", StringComparison.Ordinal))
-                                    {
-                                        <span class="evidence-preview">
-                                            <img src="@evidenceUrl" alt="" loading="lazy" />
-                                        </span>
-                                    }
-                                    else
-                                    {
-                                        <span class="evidence-preview evidence-pdf" aria-hidden="true">PDF</span>
-                                    }
-                                    <span class="evidence-info">
-                                        <strong>@evidence.FileName</strong>
-                                        <small>@((evidence.Length / 1024d).ToString("N0")) KB · View file</small>
-                                    </span>
-                                </a>
-                            }
-                        </div>
-                    </article>
-                }
-
-                @if (Model.Workflow.Status == "WaitingForApproval")
-                {
-                    <form method="post" asp-page-handler="Approve" class="surface approval-card" data-loading-form>
-                        <input type="hidden" name="workflowId" value="@Model.Workflow.WorkflowId" />
-                        <div class="approval-heading">
-                            <div class="approval-icon">!</div>
-                            <div>
-                                <span class="step-label">Decision required</span>
-                                <h3>Review this action</h3>
-                                <p>The workflow is paused until you approve or reject the proposed action.</p>
-                            </div>
-                        </div>
-                        <div class="approval-fields">
-                            <div>
-                                <label asp-for="ApprovalInput.Decision" class="form-label">Decision</label>
-                                <select asp-for="ApprovalInput.Decision" class="form-select">
-                                    <option value="approve">Approve action</option>
-                                    <option value="reject">Reject action</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label asp-for="ApprovalInput.Reason" class="form-label">Decision reason</label>
-                                <textarea asp-for="ApprovalInput.Reason"
-                                          class="form-control"
-                                          rows="3"
-                                          placeholder="Record why this decision is appropriate."
-                                          required></textarea>
-                            </div>
-                        </div>
-                        <button type="submit" class="primary-action approval-action">
-                            <span class="button-label">Record decision</span>
-                            <span class="button-loading">Recording…</span>
-                            <span aria-hidden="true">→</span>
-                        </button>
-                    </form>
-                }
-
-                @if (Model.Workflow.SupportCase is not null)
-                {
-                    <article class="surface support-card">
-                        <span class="step-label">Support case created</span>
-                        <h3>@Model.Workflow.SupportCase.CaseNumber</h3>
-                        <p>@Model.Workflow.SupportCase.Summary</p>
-                        <span class="status-pill status-active">@Model.Workflow.SupportCase.Status</span>
-                    </article>
-                }
-            </div>
-
-            <aside class="surface timeline-card">
-                <div class="section-heading compact">
-                    <div>
-                        <span class="step-label">Audit trail</span>
-                        <h3>Workflow timeline</h3>
-                    </div>
-                    <span class="event-count">@Model.Workflow.Events.Count events</span>
+            <div class="workflow-header">
+                <div>
+                    <span class="step-label">Workflow</span>
+                    <h2>Request status</h2>
                 </div>
-                <ol class="timeline">
-                    @foreach (var item in Model.Workflow.Events.OrderByDescending(item => item.Timestamp))
-                    {
-                        <li>
-                            <span class="timeline-dot"></span>
+                <div class="workflow-actions">
+                    <span class="status-pill @statusClass" id="status-pill">@Model.Workflow.Status</span>
+                    <a asp-page="/Index"
+                       asp-route-workflowId="@Model.Workflow.WorkflowId"
+                       class="refresh-link"
+                       id="refresh-link">Refresh ↻</a>
+                </div>
+            </div>
+
+
+            <div class="stage-track" aria-label="Processing stages" role="group">
+                <div class="stage @(hasPlanEvent ? "stage-done" : "stage-active")" data-stage="plan">
+                    <span class="stage-dot" aria-hidden="true"></span>
+                    <span>Plan</span>
+                </div>
+                <div class="stage-connector" aria-hidden="true"></div>
+                <div class="stage @(!hasPlanEvent ? "" : hasTerminalEvent ? "stage-done" : "stage-active")" data-stage="investigate">
+                    <span class="stage-dot" aria-hidden="true"></span>
+                    <span>Investigate</span>
+                </div>
+                <div class="stage-connector" aria-hidden="true"></div>
+                <div class="stage @(!hasTerminalEvent ? "" : needsApproval ? "stage-active" : "stage-done")" data-stage="decide">
+                    <span class="stage-dot" aria-hidden="true"></span>
+                    <span>Decide</span>
+                </div>
+            </div>
+
+
+            <div class="live-status-region"
+                 aria-live="polite"
+                 aria-atomic="true"
+                 id="live-status-region">
+                @if (isProcessing)
+                {
+                    <div class="processing-indicator">
+                        <span class="spinner" aria-hidden="true"></span>
+                        <span>Processing your request…</span>
+                    </div>
+                }
+            </div>
+
+            <div class="workflow-layout">
+                <div class="workflow-main" id="workflow-main">
+                    <article class="surface summary-card">
+                        <p class="request-quote" id="workflow-request-quote">"@Model.Workflow.UserMessage"</p>
+                        <div class="summary-grid">
                             <div>
-                                <div class="timeline-meta">
-                                    <strong>@item.Message</strong>
-                                    <time>@item.Timestamp.ToLocalTime().ToString("h:mm:ss tt")</time>
+                                <span>Intent</span>
+                                <strong id="workflow-intent">@(Model.Workflow.Intent ?? "Being determined")</strong>
+                            </div>
+                            <div>
+                                <span>Approval</span>
+                                <strong>@(Model.Workflow.RequiresApproval ? "Required" : "Not required")</strong>
+                            </div>
+                            <div>
+                                <span>Updated</span>
+                                <strong id="workflow-updated">@Model.Workflow.UpdatedAt.ToLocalTime().ToString("MMM d, h:mm tt")</strong>
+                            </div>
+                        </div>
+                        <details class="technical-details">
+                            <summary>Technical details</summary>
+                            <p><strong>Workflow ID:</strong> @Model.Workflow.WorkflowId</p>
+                            <p><strong>Trace ID:</strong> @Model.Workflow.TraceId</p>
+                            <p><strong>Status:</strong> <span id="tech-status">@Model.Workflow.Status</span></p>
+                            <p><strong>Version:</strong> <span id="tech-version">@Model.Workflow.Version</span></p>
+                        </details>
+                    </article>
+
+                    @if (Model.Workflow.Evidence.Count > 0)
+                    {
+                        <article class="surface evidence-card">
+                            <div class="section-heading compact">
+                                <div>
+                                    <span class="step-label">Supporting evidence</span>
+                                    <h3>@Model.Workflow.Evidence.Count uploaded @(Model.Workflow.Evidence.Count == 1 ? "file" : "files")</h3>
                                 </div>
-                                <small>@item.Type.Replace("workflow.", "").Replace("_", " ") · @(item.Actor ?? "system")</small>
-                                @if (!string.IsNullOrWhiteSpace(item.Details))
+                                <span class="evidence-secure">Stored with workflow</span>
+                            </div>
+                            <div class="evidence-grid">
+                                @foreach (var evidence in Model.Workflow.Evidence)
                                 {
-                                    <p>@item.Details</p>
+                                    var evidenceUrl = Url.Page(
+                                        "/Index",
+                                        "Evidence",
+                                        new { workflowId = Model.Workflow.WorkflowId, evidenceId = evidence.Id });
+                                    <a class="evidence-item" href="@evidenceUrl" target="_blank" rel="noopener">
+                                        @if (evidence.ContentType.StartsWith("image/", StringComparison.Ordinal))
+                                        {
+                                            <span class="evidence-preview">
+                                                <img src="@evidenceUrl" alt="" loading="lazy" />
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="evidence-preview evidence-pdf" aria-hidden="true">PDF</span>
+                                        }
+                                        <span class="evidence-info">
+                                            <strong>@evidence.FileName</strong>
+                                            <small>@((evidence.Length / 1024d).ToString("N0")) KB · View file</small>
+                                        </span>
+                                    </a>
                                 }
                             </div>
-                        </li>
+                        </article>
                     }
-                </ol>
-            </aside>
-        </div>
-    </section>
-}
+
+                    @if (needsApproval)
+                    {
+                        <form method="post" asp-page-handler="Approve" class="surface approval-card" data-loading-form id="approval-form">
+                            <input type="hidden" name="workflowId" value="@Model.Workflow.WorkflowId" />
+                            <div class="approval-heading">
+                                <div class="approval-icon" aria-hidden="true">!</div>
+                                <div>
+                                    <span class="step-label">Decision required</span>
+                                    <h3>Review this action</h3>
+                                    <p>The workflow is paused until you approve or reject the proposed action.</p>
+                                </div>
+                            </div>
+                            <div class="approval-fields">
+                                <div>
+                                    <label asp-for="ApprovalInput.Decision" class="form-label">Decision</label>
+                                    <select asp-for="ApprovalInput.Decision" class="form-select">
+                                        <option value="approve">Approve action</option>
+                                        <option value="reject">Reject action</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label asp-for="ApprovalInput.Reason" class="form-label">Decision reason</label>
+                                    <textarea asp-for="ApprovalInput.Reason"
+                                              class="form-control"
+                                              rows="3"
+                                              placeholder="Record why this decision is appropriate."
+                                              required></textarea>
+                                </div>
+                            </div>
+                            <button type="submit" class="primary-action approval-action">
+                                <span class="button-label">Record decision</span>
+                                <span class="button-loading" aria-live="polite">Recording…</span>
+                                <span aria-hidden="true">→</span>
+                            </button>
+                        </form>
+                    }
+
+                    @if (Model.Workflow.Status == "Failed")
+                    {
+                        <div class="surface failure-card" role="alert">
+                            <div class="failure-heading">
+                                <span class="failure-icon" aria-hidden="true">✕</span>
+                                <div>
+                                    <span class="step-label">Processing failed</span>
+                                    <h3>Workflow could not complete</h3>
+                                    <p>The workflow encountered an error. You can start a new request or contact support if the problem persists.</p>
+                                </div>
+                            </div>
+                            <div class="failure-actions">
+                                <a asp-page="/Index" class="secondary-action">Start new request</a>
+                                <a asp-page="/Index" asp-route-workflowId="@Model.Workflow.WorkflowId" class="refresh-link">Refresh status ↻</a>
+                            </div>
+                        </div>
+                    }
+
+                    @if (Model.Workflow.SupportCase is not null)
+                    {
+                        <article class="surface support-card">
+                            <span class="step-label">Support case created</span>
+                            <h3>@Model.Workflow.SupportCase.CaseNumber</h3>
+                            <p>@Model.Workflow.SupportCase.Summary</p>
+                            <span class="status-pill status-active">@Model.Workflow.SupportCase.Status</span>
+                        </article>
+                    }
+                </div>
+
+                <aside class="surface timeline-card">
+                    <div class="section-heading compact">
+                        <div>
+                            <span class="step-label">Audit trail</span>
+                            <h3>Workflow timeline</h3>
+                        </div>
+                        <span class="event-count" id="event-count">@Model.Workflow.Events.Count events</span>
+                    </div>
+                    <ol class="timeline" id="timeline-list">
+                        @foreach (var item in Model.Workflow.Events.OrderByDescending(item => item.Timestamp))
+                        {
+                            <li>
+                                <span class="timeline-dot"></span>
+                                <div>
+                                    <div class="timeline-meta">
+                                        <strong>@item.Message</strong>
+                                        <time datetime="@item.Timestamp.ToString("o")">@item.Timestamp.ToLocalTime().ToString("h:mm:ss tt")</time>
+                                    </div>
+                                    <small>@item.Type.Replace("workflow.", "").Replace("_", " ") · @(item.Actor ?? "system")</small>
+                                    @if (!string.IsNullOrWhiteSpace(item.Details))
+                                    {
+                                        <p>@item.Details</p>
+                                    }
+                                </div>
+                            </li>
+                        }
+                    </ol>
+                </aside>
+            </div>
+
+
+            <div class="timeout-notice" id="timeout-notice" hidden>
+                <p>⚠ Processing is taking longer than expected.</p>
+                <a asp-page="/Index"
+                   asp-route-workflowId="@Model.Workflow.WorkflowId"
+                   class="secondary-action">Refresh status ↻</a>
+                <a asp-page="/Index" class="secondary-action">Start new request</a>
+            </div>
+        </section>
+    }
+    else
+    {
+        <aside class="surface process-panel">
+            <span class="step-label">How it works</span>
+            <ol class="process-list">
+                <li>
+                    <span>1</span>
+                    <div><strong>Plan</strong><small>The orchestrator identifies the request and required specialist.</small></div>
+                </li>
+                <li>
+                    <span>2</span>
+                    <div><strong>Investigate</strong><small>A hosted agent produces a focused assessment.</small></div>
+                </li>
+                <li>
+                    <span>3</span>
+                    <div><strong>Approve</strong><small>Sensitive actions pause until a person decides.</small></div>
+                </li>
+            </ol>
+            <div class="security-note">
+                <span aria-hidden="true">◇</span>
+                <p><strong>Approval controlled</strong><br />No sensitive action completes without an explicit decision.</p>
+            </div>
+        </aside>
+    }
+</div>
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />

@@ -121,3 +121,6 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 });
 
 app.Run();
+
+// Expose Program for WebApplicationFactory<Program> in integration tests.
+public partial class Program { }

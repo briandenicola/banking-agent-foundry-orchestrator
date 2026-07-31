@@ -33,17 +33,21 @@ public sealed class WorkflowServiceCurrentBehaviorTests
     [Fact]
     public async Task StartAsync_PlannerTransportFailure_PersistsFailedWorkflow()
     {
+        // In the async model, StartAsync only persists Draft.
+        // Planner failure occurs in RecoverAsync. Call both to exercise the failure path.
         WorkflowState? persistedDraft = null;
         WorkflowState? persistedFailure = null;
         _repo.Setup(r => r.AddAsync(It.IsAny<WorkflowState>(), It.IsAny<CancellationToken>()))
             .Callback<WorkflowState, CancellationToken>((workflow, _) => persistedDraft = workflow)
             .Returns(Task.CompletedTask);
+        _repo.Setup(r => r.GetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => persistedDraft);
         _repo.Setup(r => r.UpdateAsync(
                 It.IsAny<WorkflowState>(),
                 It.IsAny<long>(),
                 It.IsAny<CancellationToken>()))
             .Callback<WorkflowState, long, CancellationToken>(
-                (workflow, _, _) => persistedFailure = workflow)
+                (workflow, _, _) => { persistedDraft = workflow; persistedFailure = persistedFailure ?? (workflow.Status == WorkflowStatus.Failed ? workflow : null); })
             .Returns(Task.CompletedTask);
         _mcpClient.Setup(client => client.InvokeAsync(
                 "workflow.plan",
@@ -51,10 +55,11 @@ public sealed class WorkflowServiceCurrentBehaviorTests
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Foundry unavailable"));
 
-        var result = await _sut.StartAsync("Why is this charge pending?");
+        var draft = await _sut.StartAsync("Why is this charge pending?");
+        Assert.Equal(WorkflowStatus.Draft, draft.Status);
 
-        Assert.NotNull(persistedDraft);
-        Assert.Equal(WorkflowStatus.Draft, persistedDraft.Status);
+        var result = await _sut.RecoverAsync(draft.Id);
+
         Assert.NotNull(persistedFailure);
         Assert.Equal(WorkflowStatus.Failed, persistedFailure.Status);
         Assert.Equal(WorkflowStatus.Failed, result.Status);
@@ -64,16 +69,24 @@ public sealed class WorkflowServiceCurrentBehaviorTests
     [Fact]
     public async Task StartAsync_CanceledPlanner_PersistsFailureBeforeRethrowing()
     {
+        // In the async model, cancellation during planner execution happens in RecoverAsync.
+        WorkflowState? capturedDraft = null;
         WorkflowState? persistedFailure = null;
         _repo.Setup(r => r.AddAsync(It.IsAny<WorkflowState>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, CancellationToken>((w, _) => capturedDraft = w)
             .Returns(Task.CompletedTask);
+        _repo.Setup(r => r.GetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => capturedDraft);
         _repo.Setup(r => r.UpdateAsync(
                 It.IsAny<WorkflowState>(),
                 It.IsAny<long>(),
-                CancellationToken.None))
+                It.IsAny<CancellationToken>()))
             .Callback<WorkflowState, long, CancellationToken>(
-                (workflow, _, _) => persistedFailure = workflow)
+                (workflow, _, _) => { capturedDraft = workflow; if (workflow.Status == WorkflowStatus.Failed) persistedFailure = workflow; })
             .Returns(Task.CompletedTask);
+
+        var draft = await _sut.StartAsync("Why is this charge pending?");
+        Assert.Equal(WorkflowStatus.Draft, draft.Status);
 
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -84,7 +97,7 @@ public sealed class WorkflowServiceCurrentBehaviorTests
             .ThrowsAsync(new OperationCanceledException(cancellation.Token));
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => _sut.StartAsync("Why is this charge pending?", cancellation.Token));
+            () => _sut.RecoverAsync(draft.Id, cancellation.Token));
 
         Assert.NotNull(persistedFailure);
         Assert.Equal(WorkflowStatus.Failed, persistedFailure.Status);
@@ -390,4 +403,147 @@ public sealed class WorkflowServiceCurrentBehaviorTests
             UpdatedAt: DateTimeOffset.UtcNow,
             Events: [new WorkflowEvent("workflow.started", "Workflow started", DateTimeOffset.UtcNow, "system")],
             Version: version);
+
+    // ──────────────────────────────────────────────────────────────────
+    // Async contract: Draft persisted before planner is invoked
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task StartAsync_DraftIsPersistedBeforeAnyPlannerCall()
+    {
+        // In the async model, StartAsync ONLY persists Draft and returns — planner is NEVER called.
+        var addCalled = false;
+        _repo.Setup(r => r.AddAsync(It.IsAny<WorkflowState>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, CancellationToken>((workflow, _) =>
+            {
+                Assert.Equal(WorkflowStatus.Draft, workflow.Status);
+                addCalled = true;
+            })
+            .Returns(Task.CompletedTask);
+
+        var result = await _sut.StartAsync("Ordering probe.");
+
+        Assert.True(addCalled, "AddAsync must be called to persist the Draft.");
+        Assert.Equal(WorkflowStatus.Draft, result.Status);
+        // Planner must NOT be invoked from StartAsync in the async model
+        _mcpClient.Verify(
+            c => c.InvokeAsync(It.IsAny<string>(), It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task StartAsync_DraftHasWorkflowIdAndTraceIdBeforePlannerRuns()
+    {
+        WorkflowState? capturedDraft = null;
+
+        _repo.Setup(r => r.AddAsync(It.IsAny<WorkflowState>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, CancellationToken>((workflow, _) => capturedDraft = workflow)
+            .Returns(Task.CompletedTask);
+        _repo.Setup(r => r.UpdateAsync(It.IsAny<WorkflowState>(), It.IsAny<long>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mcpClient.Setup(client => client.InvokeAsync(
+                "workflow.plan",
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Foundry unavailable"));
+
+        await _sut.StartAsync("Draft field probe.");
+
+        Assert.NotNull(capturedDraft);
+        Assert.NotEqual(Guid.Empty, capturedDraft.Id);
+        Assert.False(string.IsNullOrWhiteSpace(capturedDraft.TraceId),
+            "Draft must carry a non-empty traceId before planner runs.");
+        Assert.Equal(WorkflowStatus.Draft, capturedDraft.Status);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Specialist (post-planner) transport failure also fails the workflow
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task StartAsync_SpecialistTransportFailure_PersistsFailedWorkflow()
+    {
+        // In the async model, specialist failure happens in RecoverAsync. Call both.
+        WorkflowState? capturedDraft = null;
+        WorkflowState? persistedFailure = null;
+        _repo.Setup(r => r.AddAsync(It.IsAny<WorkflowState>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, CancellationToken>((w, _) => capturedDraft = w)
+            .Returns(Task.CompletedTask);
+        _repo.Setup(r => r.GetAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => capturedDraft);
+        _repo.Setup(r => r.UpdateAsync(
+                It.IsAny<WorkflowState>(),
+                It.IsAny<long>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, long, CancellationToken>(
+                (workflow, _, _) =>
+                {
+                    capturedDraft = workflow;
+                    if (workflow.Status == WorkflowStatus.Failed) persistedFailure = workflow;
+                })
+            .Returns(Task.CompletedTask);
+
+        // Planner succeeds; specialist fails
+        _mcpClient.SetupSequence(client => client.InvokeAsync(
+                It.IsAny<string>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                var body = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    agent = "workflow-planning",
+                    status = "ok",
+                    intent = "transaction-explanation",
+                    summary = "Planner ok",
+                    requires_approval = false,
+                    selected_agent = "transaction-explanation",
+                    evidence = Array.Empty<string>()
+                });
+                return new McpToolResult("workflow.plan", "ok", "ok",
+                    new Dictionary<string, object?> { ["response_body"] = body });
+            })
+            .ThrowsAsync(new HttpRequestException("Specialist Foundry unavailable"));
+
+        var draft = await _sut.StartAsync("Specialist failure probe.");
+        Assert.Equal(WorkflowStatus.Draft, draft.Status);
+
+        var result = await _sut.RecoverAsync(draft.Id);
+
+        Assert.Equal(WorkflowStatus.Failed, result.Status);
+        Assert.NotNull(persistedFailure);
+        Assert.Equal(WorkflowStatus.Failed, persistedFailure.Status);
+        Assert.Contains(result.Events, e => e.Type == "workflow.failed");
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // RecoverAsync: stale Recovering workflow proceeds to terminal
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RecoverAsync_WorkflowInRecoveringStatus_CallsPlannerAndPersistsTerminal()
+    {
+        var workflow = BuildWorkflow(WorkflowStatus.Recovering, version: 1,
+            userMessage: "Explain DEMO-TXN-1001.");
+        WorkflowState current = workflow;
+        _repo.Setup(r => r.GetAsync(workflow.Id, It.IsAny<CancellationToken>()))
+             .ReturnsAsync(() => current);
+        _repo.Setup(r => r.UpdateAsync(It.IsAny<WorkflowState>(), It.IsAny<long>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, long, CancellationToken>((w, _, _) => current = w)
+            .Returns(Task.CompletedTask);
+
+        _mcpClient.Setup(client => client.InvokeAsync(
+                "workflow.plan",
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Foundry unavailable (recovery probe)"));
+
+        var result = await _sut.RecoverAsync(workflow.Id);
+
+        Assert.Equal(WorkflowStatus.Failed, result.Status);
+        Assert.Contains(result.Events, e => e.Type == "workflow.failed");
+    }
 }

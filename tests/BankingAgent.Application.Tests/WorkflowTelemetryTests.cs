@@ -98,7 +98,10 @@ public sealed class WorkflowTelemetryTests
             workflowRepository.Object,
             actionRepository.Object);
 
-        var started = await service.StartAsync(userMessage);
+        // StartAsync persists Draft; RecoverAsync executes planner/specialist
+        var draft = await service.StartAsync(userMessage);
+        Assert.Equal(WorkflowStatus.Draft, draft.Status);
+        var started = await service.RecoverAsync(draft.Id);
         var approved = await service.ApproveAsync(
             started.Id,
             "approve",

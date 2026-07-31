@@ -2,7 +2,15 @@ using BankingAgent.Domain;
 
 namespace BankingAgent.Application;
 
-public sealed record WorkflowRequest(string UserMessage, string? DemoScenario = null);
+public sealed record WorkflowRequest(
+    string UserMessage,
+    string? DemoScenario = null,
+    /// <summary>
+    /// When true the POST handler defers the immediate execution trigger so
+    /// evidence can be uploaded and persisted first. Set by the web UI for
+    /// dispute workflows that include initial evidence files.
+    /// </summary>
+    bool ExpectsEvidence = false);
 
 public sealed record ApprovalRequest(string Decision, string Reason);
 

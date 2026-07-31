@@ -66,6 +66,13 @@ jobs:
           --logger "console;verbosity=normal"
           --logger "trx;LogFileName=webui.trx"
 
+      - name: WebUI JS browser/DOM regression tests
+        working-directory: tests/webui-js
+        run: |
+          npm ci
+          node --test
+
+
       - name: Persistence and infrastructure integration tests
         run: >
           dotnet test tests/BankingAgent.Infrastructure.Tests

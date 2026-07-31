@@ -108,13 +108,41 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
             return null;
         }
 
+        return await ClaimCandidateAsync(candidate, claimedAt, cancellationToken);
+    }
+
+    public async Task<WorkflowState?> ClaimAsync(
+        Guid workflowId,
+        DateTimeOffset claimedAt,
+        CancellationToken cancellationToken = default)
+    {
+        var candidate = await context.Workflows
+            .AsNoTracking()
+            .Include(workflow => workflow.Events)
+            .FirstOrDefaultAsync(
+                workflow =>
+                    workflow.Id == workflowId &&
+                    workflow.Status == WorkflowStatus.Draft,
+                cancellationToken);
+        if (candidate is null)
+        {
+            return null;
+        }
+
+        return await ClaimCandidateAsync(candidate, claimedAt, cancellationToken);
+    }
+
+    private async Task<WorkflowState?> ClaimCandidateAsync(
+        WorkflowEntity candidate,
+        DateTimeOffset claimedAt,
+        CancellationToken cancellationToken)
+    {
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
         var affectedRows = await context.Workflows
             .Where(workflow =>
                 workflow.Id == candidate.Id &&
                 workflow.Version == candidate.Version &&
-                (workflow.Status == WorkflowStatus.Draft ||
-                 workflow.Status == WorkflowStatus.Recovering))
+                workflow.Status == candidate.Status)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(workflow => workflow.Status, WorkflowStatus.Recovering)

@@ -40,6 +40,46 @@ public class IndexModel : PageModel
         }
     }
 
+    /// <summary>
+    /// Polling endpoint called by the JavaScript polling loop.
+    /// Returns JSON with the current workflow state for client-side rendering.
+    /// </summary>
+    public async Task<IActionResult> OnGetPollAsync(Guid workflowId)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"/api/v1/workflows/{workflowId}");
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return new JsonResult(new { error = "not_found" }) { StatusCode = 404 };
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var msg = await ReadFailureAsync(response, "Workflow status unavailable.");
+                return new JsonResult(new { error = msg }) { StatusCode = (int)response.StatusCode };
+            }
+
+            var workflow = await response.Content.ReadFromJsonAsync<WorkflowDetailResponse>();
+            if (workflow is null)
+            {
+                return new JsonResult(new { error = "Invalid response from workflow service." }) { StatusCode = 502 };
+            }
+
+            return new JsonResult(workflow);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "Poll request for {WorkflowId} failed", workflowId);
+            return new JsonResult(new { error = "Service temporarily unavailable." }) { StatusCode = 503 };
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "Poll request for {WorkflowId} timed out", workflowId);
+            return new JsonResult(new { error = "Request timed out." }) { StatusCode = 504 };
+        }
+    }
+
     public async Task<IActionResult> OnPostAsync()
     {
         if (string.IsNullOrWhiteSpace(Input.UserMessage))
@@ -50,13 +90,16 @@ public class IndexModel : PageModel
 
         try
         {
+            var files = Input.EvidenceFiles ?? [];
             var response = await _httpClient.PostAsJsonAsync(
                 "/api/v1/workflows",
                 new
                 {
                     userMessage = Input.UserMessage,
-                    demoScenario = Input.DemoScenario
+                    demoScenario = Input.DemoScenario,
+                    expectsEvidence = files.Count > 0
                 });
+
             if (!response.IsSuccessStatusCode)
             {
                 ErrorMessage = await ReadFailureAsync(response, "The workflow service rejected the request.");
@@ -70,9 +113,12 @@ public class IndexModel : PageModel
                 return Page();
             }
 
-            if (Input.EvidenceFiles.Count > 0)
+            // Upload evidence before triggering execution if files were provided.
+            // The API defers the execution trigger until after evidence upload so
+            // the specialist always sees the complete evidence set.
+            if (files.Count > 0)
             {
-                var uploadError = await UploadEvidenceAsync(workflow.WorkflowId, Input.EvidenceFiles);
+                var uploadError = await UploadEvidenceAsync(workflow.WorkflowId, files);
                 if (uploadError is not null)
                 {
                     ErrorMessage = uploadError;
@@ -80,9 +126,9 @@ public class IndexModel : PageModel
                 }
             }
 
-            StatusMessage = Input.EvidenceFiles.Count > 0
-                ? "Workflow submitted successfully with supporting evidence."
-                : "Workflow submitted successfully.";
+            StatusMessage = files.Count > 0
+                ? "Workflow submitted with supporting evidence. Processing started."
+                : "Workflow submitted. Processing started.";
             return RedirectToPage(new { workflowId = workflow.WorkflowId });
         }
         catch (HttpRequestException exception)
@@ -259,7 +305,7 @@ public class IndexModel : PageModel
         public string? DemoScenario { get; set; }
 
         [BindProperty]
-        public List<IFormFile> EvidenceFiles { get; set; } = [];
+        public List<IFormFile>? EvidenceFiles { get; set; }
     }
 
     public sealed class ApprovalInputModel

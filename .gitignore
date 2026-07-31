@@ -13,6 +13,9 @@ __pycache__/
 venv/
 .env
 
+# JavaScript
+node_modules/
+
 # Terraform
 .terraform/
 .terraform.lock.hcl

@@ -89,7 +89,7 @@ public sealed class WorkflowRecoveryWorker(
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(options.ScanIntervalSeconds, 5);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(options.ScanIntervalSeconds, 300);
-        ArgumentOutOfRangeException.ThrowIfLessThan(options.StaleAfterSeconds, 30);
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.StaleAfterSeconds, 60);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(options.StaleAfterSeconds, 3600);
         ArgumentOutOfRangeException.ThrowIfLessThan(options.BatchSize, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(options.BatchSize, 100);

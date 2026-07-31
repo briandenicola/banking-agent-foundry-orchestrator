@@ -11,16 +11,37 @@ public static class WorkflowEndpoints
 {
     public static void MapWorkflowEndpoints(this IEndpointRouteBuilder app)
     {
+        // POST /api/v1/workflows
+        // Persists a Draft workflow and returns 202 Accepted immediately.
+        // Execution is claimed by the recovery worker or the immediate trigger.
+        // Evidence (for dispute workflows) MUST be uploaded before the trigger
+        // fires so specialist processing sees the complete evidence set.
         app.MapPost("/api/v1/workflows", async (
             [FromBody] WorkflowRequest request,
             IWorkflowService workflowService,
+            [FromServices] IWorkflowExecutionTrigger? trigger,
             CancellationToken cancellationToken) =>
         {
             ValidateWorkflowRequest(request);
             var workflow = string.IsNullOrWhiteSpace(request.DemoScenario)
                 ? await workflowService.StartAsync(request.UserMessage, cancellationToken)
                 : await workflowService.StartDemoAsync(request.DemoScenario, cancellationToken);
-            return Results.Ok(new WorkflowResponse(workflow.Id, workflow.TraceId, workflow.Status.ToString(), "Workflow accepted."));
+
+            // Non-dispute workflows have no evidence — trigger immediately.
+            // Dispute workflows trigger after the evidence upload endpoint completes.
+            if (!request.ExpectsEvidence)
+            {
+                trigger?.TriggerImmediate(workflow.Id);
+            }
+
+            var response = new WorkflowResponse(
+                workflow.Id,
+                workflow.TraceId,
+                workflow.Status.ToString(),
+                "Workflow accepted for processing.");
+            return Results.Accepted(
+                $"/api/v1/workflows/{workflow.Id}",
+                response);
         }).RequireAuthorization("WorkflowInvoke");
 
         app.MapPost("/api/v1/workflows/{workflowId:guid}/approval", async (
@@ -55,10 +76,14 @@ public static class WorkflowEndpoints
             return Results.Ok(WorkflowDetailResponse.From(workflow, supportCase, evidence));
         }).RequireAuthorization("WorkflowInvoke");
 
+        // POST /api/v1/workflows/{id}/evidence
+        // After evidence is persisted, fire the trigger so the worker can
+        // claim the workflow promptly without waiting for the next scan interval.
         app.MapPost("/api/v1/workflows/{workflowId:guid}/evidence", async (
             [FromRoute] Guid workflowId,
             HttpRequest request,
             IWorkflowEvidenceService evidenceService,
+            [FromServices] IWorkflowExecutionTrigger? trigger,
             CancellationToken cancellationToken) =>
         {
             if (!request.HasFormContentType)
@@ -91,6 +116,10 @@ public static class WorkflowEndpoints
             }
 
             var added = await evidenceService.AddAsync(workflowId, uploads, cancellationToken);
+
+            // Evidence is now durably persisted; the trigger can safely claim the workflow.
+            trigger?.TriggerImmediate(workflowId);
+
             return Results.Ok(added.Select(item => new WorkflowEvidenceResponse(
                 item.Id,
                 item.FileName,
