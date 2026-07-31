@@ -1,6 +1,6 @@
 # Azure Deployment Plan
 
-> **Status:** Validated
+> **Status:** Deployed
 
 Generated: 2026-07-31T19:01:09Z
 
@@ -43,7 +43,7 @@ Generated: 2026-07-31T19:01:09Z
 
 **Selected:** Terraform
 
-**Rationale:** The existing deployment is managed by the `infrastructure/` and `apps/` Terraform stacks. Images use the immutable short commit SHA `632fa38`, and the application stack applies that same tag across all Container Apps and jobs.
+**Rationale:** The existing deployment is managed by the `infrastructure/` and `apps/` Terraform stacks. Images use the immutable short commit SHA `8560467`, and the application stack applies that same tag across all Container Apps and jobs.
 
 ---
 
@@ -104,8 +104,8 @@ This is an in-place application update. It creates no new Azure resources and co
 - [x] Research existing components
 - [x] Infrastructure and Dockerfiles already exist
 - [x] Recovery scan, stale threshold, and batch size are represented in `apps/orchestrator.tf`
-- [ ] Build and push all Terraform-referenced images with tag `632fa38`
-- [ ] Generate and review the Terraform application plan
+- [x] Build and push all Terraform-referenced images with tag `8560467`
+- [x] Generate and review the Terraform application plan
 - [x] Update plan status to `Ready for Validation`
 
 ### Phase 3: Validation
@@ -125,12 +125,12 @@ This is an in-place application update. It creates no new Azure resources and co
 - [x] Set status to `Validated`
 
 ### Phase 4: Deployment
-- [ ] Invoke azure-deploy
-- [ ] Apply the reviewed Terraform plan
-- [ ] Verify Terraform has no residual drift
-- [ ] Verify readiness, async progress, optional evidence, and approvals
-- [ ] Report deployed endpoints
-- [ ] Set status to `Deployed`
+- [x] Invoke azure-deploy
+- [x] Apply the reviewed Terraform plan
+- [x] Verify Terraform has no residual drift
+- [x] Verify readiness, async progress, optional evidence, and approvals
+- [x] Report deployed endpoints
+- [x] Set status to `Deployed`
 
 ---
 
@@ -148,6 +148,9 @@ This is an in-place application update. It creates no new Azure resources and co
 | Azure policy inventory | `az policy assignment list --disable-scope-strict-match` | 14 assignments readable; no plan conflict | 2026-07-31T19:08Z |
 | Static RBAC review | Review `apps/roles.tf` principals, roles, and scopes | ACR, Foundry, and Cognitive Services roles are resource-scoped | 2026-07-31T19:08Z |
 | Template variables | Search Terraform sources for unresolved `{{ .Env.* }}` | None found | 2026-07-31T19:08Z |
+| Deployment apply | `terraform apply postgres-fix.tfplan` | 0 add, 5 in-place updates, 0 destroy | 2026-07-31T19:39Z |
+| Live MVP smoke | `python scripts/smoke-mvp.py --timeout 30 --poll-timeout 180` | All checks passed | 2026-07-31T19:47Z |
+| Post-deploy drift | `terraform plan -detailed-exitcode ... -var image_tag=8560467` | No changes | 2026-07-31T19:48Z |
 
 **Validated by:** azure-validate skill
 **Validation timestamp:** 2026-07-31T19:08:48Z
@@ -167,7 +170,7 @@ No new infrastructure or Dockerfiles are required.
 
 ## 9. Next Steps
 
-> Current: Validated and ready for deployment
+> Current: Deployed and verified
 
-1. Build all commit-tagged images.
-2. Apply the saved Terraform plan and run live verification.
+1. Monitor the deployed revisions through Application Insights.
+2. Configure the GitHub production environment backend/OIDC values before using the gated workflow.

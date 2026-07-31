@@ -1,6 +1,7 @@
 resource "azurerm_container_app_job" "database_migrator" {
   name                         = "${var.app_name}-database-migrator"
   resource_group_name          = azurerm_resource_group.this.name
+  workload_profile_name        = "Consumption"
   location                     = azurerm_resource_group.this.location
   container_app_environment_id = data.azurerm_container_app_environment.this.id
   replica_timeout_in_seconds   = 900

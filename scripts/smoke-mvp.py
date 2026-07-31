@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 
@@ -35,7 +35,9 @@ WORKFLOW_ID_PATTERN = re.compile(
     r"<strong>Workflow ID:</strong>\s*([0-9a-fA-F-]{36})"
 )
 TRACE_ID_PATTERN = re.compile(r"<strong>Trace ID:</strong>\s*([^<]+)")
-WORKFLOW_STATUS_PATTERN = re.compile(r"<strong>Status:</strong>\s*([^<]+)")
+WORKFLOW_STATUS_PATTERN = re.compile(
+    r'<strong>Status:</strong>\s*(?:<span[^>]*>)?([^<]+)'
+)
 
 # States at which polling should stop. Never synthesise a terminal state from
 # a timeout — surface the real server-reported status instead.
@@ -334,7 +336,7 @@ def check_container_app_revisions(
     return revisions
 
 
-def check_webui(webui_url: str, timeout: int) -> dict[str, Any]:
+def check_webui(webui_url: str, timeout: int, poll_timeout: int) -> dict[str, Any]:
     cookies = http.cookiejar.CookieJar()
     opener = build_opener(HTTPCookieProcessor(cookies))
     workflow, _ = submit_webui_workflow(
@@ -342,6 +344,13 @@ def check_webui(webui_url: str, timeout: int) -> dict[str, Any]:
         webui_url,
         "Why is this card transaction pending?",
         timeout,
+    )
+    workflow = poll_webui_workflow(
+        opener,
+        webui_url,
+        workflow["workflowId"],
+        timeout,
+        poll_timeout,
     )
     if workflow["status"] != "Completed":
         raise SmokeFailure(f"Web UI workflow did not complete: {workflow}")
@@ -397,7 +406,13 @@ def submit_webui_workflow(
             submitted_page = response.read().decode("utf-8")
             if response.status != 200:
                 raise SmokeFailure(f"Web UI form returned HTTP {response.status}.")
-            _SUBMIT_SUCCESS_PHRASES = ("Workflow submitted successfully", "accepted for processing", "Workflow accepted")
+            _SUBMIT_SUCCESS_PHRASES = (
+                "Workflow submitted. Processing started.",
+                "Workflow submitted with supporting evidence. Processing started.",
+                "Workflow submitted successfully",
+                "accepted for processing",
+                "Workflow accepted",
+            )
             if not any(phrase in submitted_page for phrase in _SUBMIT_SUCCESS_PHRASES):
                 raise SmokeFailure("Web UI did not display a successful workflow submission.")
     except HTTPError as error:
@@ -446,6 +461,51 @@ def parse_webui_workflow(page: str) -> dict[str, str]:
         "traceId": html.unescape(trace_id.group(1)).strip(),
         "status": html.unescape(status.group(1)).strip(),
     }
+
+
+def poll_webui_workflow(
+    opener,
+    webui_url: str,
+    workflow_id: str,
+    request_timeout: int,
+    poll_timeout: int,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + poll_timeout
+    interval = DEFAULT_POLL_INITIAL_INTERVAL
+    latest: dict[str, Any] = {}
+
+    while time.monotonic() < deadline:
+        poll_url = (
+            f"{webui_url}?handler=Poll&workflowId={quote(workflow_id, safe='')}"
+        )
+        try:
+            with opener.open(poll_url, timeout=request_timeout) as response:
+                latest = json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, json.JSONDecodeError) as error:
+            raise SmokeFailure(
+                f"Web UI polling failed for workflow {workflow_id}: {error}"
+            ) from error
+
+        status = str(latest.get("status", ""))
+        if status in TERMINAL_STATES:
+            return latest
+
+        time.sleep(interval)
+        interval = min(
+            interval * DEFAULT_POLL_BACKOFF_FACTOR,
+            DEFAULT_POLL_MAX_INTERVAL,
+        )
+
+    raise SmokeFailure(
+        f"Web UI workflow {workflow_id} did not reach a terminal state within "
+        f"{poll_timeout}s. Last status: {latest.get('status', 'unknown')!r}."
+    )
+
+
+def load_webui_workflow(opener, webui_url: str, workflow_id: str, timeout: int) -> str:
+    page_url = f"{webui_url}?workflowId={quote(workflow_id, safe='')}"
+    with opener.open(page_url, timeout=timeout) as response:
+        return response.read().decode("utf-8")
 
 
 def approve_webui_workflow(
@@ -707,20 +767,6 @@ def check_workflows(
     }
 
 
-def _wait_for_webui_async_execution(poll_timeout: int) -> None:
-    """Block up to poll_timeout seconds to let the async fire-and-forget task run.
-
-    The orchestrator processes the workflow in a background Task.Run after
-    returning 202.  The Web UI reports Draft status immediately; JS client
-    polling is not visible to the smoke runner.  A bounded sleep is the
-    safe pre-approval gate when no API token is available for direct polling.
-    The wait is capped at 30 s regardless of poll_timeout so that the
-    overall smoke does not stall excessively in slower environments.
-    """
-    wait = min(poll_timeout, 30)
-    time.sleep(wait)
-
-
 def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -> dict[str, Any]:
     """Exercise all four workflow scenarios via the Web UI (managed-identity path).
 
@@ -747,8 +793,6 @@ def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -
     cookies = http.cookiejar.CookieJar()
     opener = build_opener(HTTPCookieProcessor(cookies))
     results: dict[str, dict[str, str]] = {}
-    pages: dict[str, str] = {}
-
     for name, message, expected_status in scenarios:
         evidence = (
             "smoke-evidence.png",
@@ -762,27 +806,43 @@ def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -
             timeout,
             evidence,
         )
-        # Under the async contract the initial status is Draft; final status is
-        # set by the background worker.  Record what the UI returned; do not
-        # fail on non-terminal status here since JS-driven polling is opaque.
-        if workflow["status"] not in TERMINAL_STATES and workflow["status"] != "Draft":
+        initial_status = workflow["status"]
+        if initial_status not in TERMINAL_STATES and initial_status not in {
+            "Draft",
+            "Recovering",
+        }:
             raise SmokeFailure(
-                f"Scenario {name} returned unexpected initial status {workflow['status']!r}."
+                f"Scenario {name} returned unexpected initial status {initial_status!r}."
             )
+        workflow = poll_webui_workflow(
+            opener,
+            webui_url,
+            workflow["workflowId"],
+            timeout,
+            poll_timeout,
+        )
+        if workflow["status"] != expected_status:
+            raise SmokeFailure(
+                f"Scenario {name} expected {expected_status!r}, "
+                f"received {workflow['status']!r}."
+            )
+        workflow["initialStatus"] = initial_status
         results[name] = workflow
-        pages[name] = page
         if evidence is not None and evidence[0] not in page:
             raise SmokeFailure("Uploaded dispute evidence was not displayed by the Web UI.")
 
-    # Allow background execution to complete before attempting approval.
-    _wait_for_webui_async_execution(poll_timeout)
-
     dispute = results["dispute"]
+    approval_page = load_webui_workflow(
+        opener,
+        webui_url,
+        dispute["workflowId"],
+        timeout,
+    )
     approval = approve_webui_workflow(
         opener,
         webui_url,
         dispute["workflowId"],
-        pages["dispute"],
+        approval_page,
         timeout,
     )
     if approval["status"] != "Completed":
@@ -791,15 +851,15 @@ def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -
     return {
         "transport": "webui-managed-identity",
         "async_status_note": (
-            "Initial UI status is Draft (async contract); final status driven by "
-            "background worker.  Approval path verified; per-scenario final status "
-            "requires direct API token for deterministic verification."
+            "Initial UI status follows the async contract; final status was verified "
+            "through the Web UI polling endpoint."
         ),
         "scenarios": {
             name: {
                 "workflow_id": result["workflowId"],
                 "trace_id": result["traceId"],
-                "initial_status": result["status"],
+                "initial_status": result["initialStatus"],
+                "final_status": result["status"],
             }
             for name, result in results.items()
         },
@@ -929,7 +989,10 @@ def main() -> int:
                 (orchestrator_url, webui_url),
             ),
         ),
-        run_check("webui-form", lambda: check_webui(webui_url, args.timeout)),
+        run_check(
+            "webui-form",
+            lambda: check_webui(webui_url, args.timeout, args.poll_timeout),
+        ),
         run_check("foundry-hosted-agents", lambda: check_agents(foundry_endpoint, args.timeout)),
         run_check(
             "orchestrator-authentication-baseline",
