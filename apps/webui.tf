@@ -3,6 +3,7 @@ resource "azurerm_container_app" "webui" {
   container_app_environment_id = data.azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
   revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
   tags                         = local.tags
 
   identity {

@@ -15,6 +15,28 @@ public sealed class EfWorkflowEvidenceRepository(BankingAgentDbContext context)
         var query = context.WorkflowEvidence
             .AsNoTracking()
             .Where(item => item.WorkflowId == workflowId)
+            .Select(item => new
+            {
+                item.Id,
+                item.WorkflowId,
+                item.FileName,
+                item.ContentType,
+                item.Length,
+                item.Sha256,
+                item.UploadedAt
+            });
+        var metadata = string.Equals(
+            context.Database.ProviderName,
+            "Microsoft.EntityFrameworkCore.Sqlite",
+            StringComparison.Ordinal)
+            ? (await query.ToListAsync(cancellationToken))
+                .OrderBy(item => item.UploadedAt)
+                .ToList()
+            : await query
+                .OrderBy(item => item.UploadedAt)
+                .ToListAsync(cancellationToken);
+
+        return metadata
             .Select(item => new WorkflowEvidence(
                 item.Id,
                 item.WorkflowId,
@@ -22,21 +44,9 @@ public sealed class EfWorkflowEvidenceRepository(BankingAgentDbContext context)
                 item.ContentType,
                 item.Length,
                 item.Sha256,
-                Array.Empty<byte>(),
-                item.UploadedAt));
-        if (string.Equals(
-                context.Database.ProviderName,
-                "Microsoft.EntityFrameworkCore.Sqlite",
-                StringComparison.Ordinal))
-        {
-            return (await query.ToListAsync(cancellationToken))
-                .OrderBy(item => item.UploadedAt)
-                .ToList();
-        }
-
-        return await query
-            .OrderBy(item => item.UploadedAt)
-            .ToListAsync(cancellationToken);
+                [],
+                item.UploadedAt))
+            .ToList();
     }
 
     public async Task<WorkflowEvidence?> GetAsync(
