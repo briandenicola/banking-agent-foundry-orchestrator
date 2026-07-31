@@ -14,6 +14,7 @@
 2. P0 — Implement the C# Agent Framework orchestrator skeleton
    - Create the initial orchestrator service, thin API endpoints, and dependency injection composition.
    - Acceptance criteria: the app starts and serves a versioned health and workflow endpoint.
+   - Current gap and production migration are tracked in GitHub issue #17.
 
 3. P0 — Build a minimal web UI for workflow interaction
    - Create a simple Razor or Blazor experience for entering requests, viewing workflow status, and approving sensitive actions.
@@ -22,6 +23,7 @@
 4. P0 — Build the MCP client and tool registry
    - Create the abstraction for loading MCP tools and a generic registry for Foundry-backed agents.
    - Acceptance criteria: the orchestrator can discover a registered MCP tool and invoke it.
+   - The current direct Foundry invocation boundary and real MCP migration are tracked in GitHub issue #18.
 
 5. P0 — Integrate a first Foundry-backed LangGraph tool
    - Wire one reasoning or planning tool from Microsoft Foundry-hosted LangGraph agents into the orchestrator.

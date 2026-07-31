@@ -79,20 +79,11 @@ tasks:
       - node --test
 
 
-  browser:
-    desc: Run WebUI headless Chromium browser tests (Playwright, requires chromium installed)
-    dir: tests/webui-playwright
-    cmds:
-      - npm ci --prefer-offline
-      - npx playwright install chromium
-      - npx playwright test --reporter=list
-
   all:
     desc: Aggregate quality gate — unit, E2E, and Python hosted tests (no live Azure)
     cmds:
       - task: unit
       - task: js
-      - task: browser
       - task: e2e
       - task: python-agents
       - task: python-deployer

@@ -1,7 +1,7 @@
 # Technical Specification
 
 ## Solution shape
-A C# orchestrator agent coordinates a banking workflow and uses Microsoft Agent Framework to call LangGraph-hosted agents in Microsoft Foundry as MCP tools. Model access flows through LiteLLM where direct model access is needed; otherwise the Foundry-hosted agents remain the primary reasoning providers. The implementation should follow a layered structure: Domain → Application → Infrastructure → API/Web.
+The target architecture is a C# Microsoft Agent Framework orchestrator calling Microsoft Foundry-hosted LangGraph agents as MCP tools. The current implementation uses procedural `WorkflowService` orchestration and authenticated Foundry hosted-agent HTTP invocation; migrations to Agent Framework and standards-compliant MCP are tracked in issues #17 and #18. LiteLLM is provisioned for a future direct-model path but has no active caller. The implementation follows a layered structure: Domain → Application → Infrastructure → API/Web.
 
 ## Components
 - C# orchestrator agent
@@ -18,9 +18,9 @@ A C# orchestrator agent coordinates a banking workflow and uses Microsoft Agent 
   - Supports provider abstraction and future model fallback.
 - Azure Container Apps
   - Hosts the orchestrator and any supporting gateway services as independently deployable services.
-- Azure HorizonDB
-  - Stores workflow state, approvals, and audit records.
-  - Initial Terraform scaffolding should use AzAPI if the service is not yet exposed as a first-class AzureRM resource.
+- Azure Database for PostgreSQL Flexible Server
+  - Stores workflow state, events, evidence, approvals, actions, support cases, and demo transactions.
+  - Uses EF Core/Npgsql, Entra authentication, optimistic version checks, and uniqueness constraints for idempotency.
 - Azure Monitor / Application Insights / OpenTelemetry
   - Collects logs, traces, and operational telemetry for each workflow run.
 
@@ -31,10 +31,10 @@ A C# orchestrator agent coordinates a banking workflow and uses Microsoft Agent 
 2. The orchestrator persists a `Draft` workflow row (version 0) and returns **202 Accepted** immediately with a `Location` header and a `{ workflowId, traceId, status: "Draft", message }` body. The response is returned before any agent invocation.
 3. An immediate-trigger `Task.Run` atomically claims the specific new `Draft` by ID and fires `RecoverAsync` as best-effort pickup. It cannot claim another workflow or reclaim active `Recovering` work.
 4. The `WorkflowRecoveryWorker` provides guaranteed delivery within `ScanIntervalSeconds` (default 30s) by using `ClaimNextAsync` only for stale `Draft` or `Recovering` rows. Both claim paths use versioned conditional updates, so exactly one replica wins and transitions the workflow to `Recovering`.
-5. The orchestrator uses Microsoft Agent Framework to invoke the planner MCP tool, then the specialist MCP tool backed by Microsoft Foundry-hosted LangGraph agents.
+5. The current orchestrator invokes the planner and specialist through authenticated Foundry hosted-agent HTTP endpoints. Issues #17 and #18 migrate this path to Agent Framework and MCP.
 6. If sensitive, the orchestrator sets `WaitingForApproval` and persists. The UI polls until this state is observed, then shows the approval form.
 7. After approval, the orchestrator executes the bounded action, creates a support case (if applicable), and persists the audit trail.
-8. Direct model calls, if any, are routed via LiteLLM.
+8. No direct model calls currently use LiteLLM; route any future direct-model path through it.
 9. The UI polls `GET /api/v1/workflows/{id}` with exponential backoff until a terminal status (`Completed`, `Failed`, `Rejected`, `WaitingForApproval`) is observed.
 
 ### Recovery and failure behavior
@@ -68,7 +68,7 @@ A C# orchestrator agent coordinates a banking workflow and uses Microsoft Agent 
 - Keep the quality gate local and repeatable: build, tests, formatting, and targeted validation for changed services.
 
 ## Infrastructure plan
-- Terraform provisions the Azure Container Apps environment, Container Apps, managed identities, HorizonDB resources, and supporting networking.
+- Terraform provisions the Azure Container Apps environment, Container Apps, managed identities, PostgreSQL Flexible Server, and supporting networking.
 - Terraform should keep the deployment reproducible and environment-agnostic.
 - The deployment should support separate environments for dev, test, and prod.
 - CI/CD should use GitHub Actions and should deploy only after successful build validation.

@@ -2,15 +2,15 @@
 
 This repository contains a banking-focused agentic application built around:
 
-- C# orchestrator agent using Microsoft Agent Framework
-- Microsoft Foundry-hosted LangGraph agents exposed as MCP tools
-- LiteLLM as the AI gateway for any direct model access
+- C# durable workflow orchestration; the Agent Framework migration is tracked in issue #17
+- Microsoft Foundry-hosted LangGraph agents invoked through the Foundry hosted-agent protocol; standards-compliant MCP is tracked in issue #18
+- LiteLLM deployed for a future direct-model path; the current workflow has no direct-model caller
 - Azure Container Apps deployment
 - Terraform-based infrastructure
 
 ## Repository layout
 
-- `src/orchestrator/` - C# web API orchestrator and Agent Framework entrypoint
+- `src/orchestrator/` - C# web API host, recovery worker, and composition root
 - `src/webui/` - ASP.NET Core web UI
 - `src/agents/` - Foundry Hosted Agent runtime and deployment job
 - `infrastructure/` - Terraform for Azure resources (convention-over-configuration; `region` is the only input)
@@ -20,6 +20,7 @@ This repository contains a banking-focused agentic application built around:
 - `docs/observability.md` - workflow tracing, safe telemetry fields, and Application Insights queries
 - `docs/demo-scenarios.md` - non-PII seed data and expected guided scenario outcomes
 - `docs/testing.md` - test taxonomy, local commands, CI mapping, prerequisites, and acceptance scenarios
+- `docs/mvp-implementation-operations-guide.md` - code-referenced implementation, deployment, operations, rollback, and troubleshooting guide
 
 ## Prerequisites
 

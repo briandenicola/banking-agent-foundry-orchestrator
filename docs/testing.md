@@ -159,7 +159,7 @@ python -m pytest tests/test_hosted.py -v
 task test:all
 ```
 
-Runs in order: `test:unit` → `test:e2e` → `test:python-agents` → `test:python-deployer` → `test:hosted`. This is the recommended pre-push gate.
+Runs in order: `test:unit` → `test:js` → `test:e2e` → `test:python-agents` → `test:python-deployer` → `test:hosted`. This is the recommended pre-push gate.
 
 ### Individual suite shortcuts
 
@@ -169,6 +169,7 @@ Runs in order: `test:unit` → `test:e2e` → `test:python-agents` → `test:pyt
 | `task test:application` | Application unit (Category B) |
 | `task test:api` | API contracts (Category C) |
 | `task test:webui` | WebUI token handler (Category D) |
+| `task test:js` | Web UI browser-DOM tests using jsdom |
 | `task test:infrastructure` | EF persistence (Category E) |
 | `task test:e2e` | E2E lifecycle (Category E2E) |
 | `task test:python-agents` | Python agent unit (Category P) |
