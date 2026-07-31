@@ -2,7 +2,10 @@
 
 ## Overview
 
-Both Terraform stacks (`infrastructure/` and `apps/`) store state in Azure Blob Storage, using OIDC plus Microsoft Entra data-plane authentication and environment-prefixed state keys. Shared-key access is disabled.
+Both Terraform stacks (`infrastructure/` and `apps/`) store state in Azure Blob
+Storage with Microsoft Entra data-plane authentication and environment-prefixed state
+keys. Local Task commands use the authenticated Azure CLI identity; GitHub Actions
+explicitly enables OIDC. Shared-key access is disabled.
 
 Azure Blob automatically provides state locking via blob leases. No additional lock table is required.
 
@@ -44,7 +47,10 @@ Run `scripts/bootstrap-remote-state.sh` once per subscription before the first r
   --location swedencentral
 ```
 
-The script creates the resource group, storage account (LRS, HTTPS-only, soft-delete 30 days, versioning), and blob container. It also prints the exact values needed for GitHub.
+The script creates the resource group, storage account (LRS, HTTPS-only, soft-delete
+30 days, versioning), and blob container. It grants the current Azure CLI identity
+`Storage Blob Data Contributor` on the storage account and waits until data-plane
+access is available. It also prints the exact values needed for GitHub.
 
 ## Per-environment separation
 
@@ -57,21 +63,62 @@ Each deployment environment uses a distinct key prefix. Region remains an indepe
 
 Use a separate GitHub Environment, approval policy, and backend key prefix for each environment. Never point two environments at the same key.
 
-Existing local state must be migrated deliberately before enabling the production workflow:
+## Migrating existing local state
+
+Do not run `task cloud:up` or `task app:init` when either stack still has local state.
+The Taskfiles intentionally stop when they detect:
+
+- `infrastructure/terraform.tfstate`;
+- `infrastructure/terraform.tfstate.d/*/terraform.tfstate`; or
+- `apps/terraform.tfstate`.
+
+The existing repository deployment uses the `swedencentral` infrastructure workspace
+and the default application workspace. Migrate each state into the default workspace
+of its environment-prefixed remote key before enabling GitHub deployment.
+
+First capture immutable backups outside the stack directories:
 
 ```sh
-terraform -chdir=infrastructure init -migrate-state \
+terraform -chdir=infrastructure workspace select swedencentral
+terraform -chdir=infrastructure state pull > infrastructure-pre-remote.tfstate
+terraform -chdir=apps state pull > apps-pre-remote.tfstate
+```
+
+Then initialize the empty remote keys without copying the legacy workspace
+automatically:
+
+```sh
+terraform -chdir=infrastructure init -reconfigure \
   -backend-config="resource_group_name=<state-rg>" \
   -backend-config="storage_account_name=<state-account>" \
   -backend-config="container_name=tfstate" \
   -backend-config="key=production/infrastructure.tfstate"
 
-terraform -chdir=apps init -migrate-state \
+terraform -chdir=infrastructure workspace select default
+terraform -chdir=infrastructure state push ../infrastructure-pre-remote.tfstate
+
+terraform -chdir=apps init -reconfigure \
   -backend-config="resource_group_name=<state-rg>" \
   -backend-config="storage_account_name=<state-account>" \
   -backend-config="container_name=tfstate" \
   -backend-config="key=production/apps.tfstate"
+
+terraform -chdir=apps state push ../apps-pre-remote.tfstate
 ```
+
+Verify both remote states and produce no-change plans before moving the old local
+state files out of the stack directories:
+
+```sh
+terraform -chdir=infrastructure state list
+terraform -chdir=apps state list
+terraform -chdir=infrastructure plan -detailed-exitcode -var "region=swedencentral"
+```
+
+Run the application plan with the same `app_name`, region, and deployed immutable
+image tag used by the current environment. Exit code `0` means no drift; exit code
+`2` requires review. Do not delete or overwrite the backup files until both states,
+plans, and the deployed smoke test are verified.
 
 ## Required GitHub configuration
 

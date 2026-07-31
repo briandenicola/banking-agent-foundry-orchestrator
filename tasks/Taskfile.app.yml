@@ -11,8 +11,19 @@ tasks:
 
   init:
     desc: Initialize the application Terraform stack
+    requires:
+      vars:
+        - TF_BACKEND_RESOURCE_GROUP
+        - TF_BACKEND_STORAGE_ACCOUNT
+        - TF_BACKEND_CONTAINER
+        - TF_STATE_ENVIRONMENT
     cmds:
-      - terraform -chdir=./apps init
+      - bash ./scripts/guard-local-terraform-state.sh apps
+      - terraform -chdir=./apps init -reconfigure
+        -backend-config="resource_group_name={{.TF_BACKEND_RESOURCE_GROUP}}"
+        -backend-config="storage_account_name={{.TF_BACKEND_STORAGE_ACCOUNT}}"
+        -backend-config="container_name={{.TF_BACKEND_CONTAINER}}"
+        -backend-config="key={{.TF_STATE_ENVIRONMENT}}/apps.tfstate"
 
   build:
     desc: Build and push all application images to ACR

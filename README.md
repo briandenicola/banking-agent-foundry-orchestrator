@@ -17,9 +17,10 @@ This repository contains a banking-focused agentic application built around:
 - `apps/` - Terraform for application identities, Container Apps, Hosted Agent deployment job, and application RBAC
 - `tasks/` - Taskfile definitions for infrastructure, image builds, and deployments
 - `docs/` - project constitution and specifications
-- `docs/README.md` - documentation table of contents and task-based navigation
+- [`docs/README.md`](docs/README.md) - documentation table of contents and task-based navigation
 - `docs/observability.md` - workflow tracing, safe telemetry fields, and Application Insights queries
 - `docs/demo-scenarios.md` - non-PII seed data and expected guided scenario outcomes
+- `docs/agent-implementation.md` - code-level LangGraph, orchestration, and Foundry runtime walkthrough
 - `docs/testing.md` - test taxonomy, local commands, CI mapping, prerequisites, and acceptance scenarios
 - `docs/mvp-implementation-operations-guide.md` - code-referenced implementation, deployment, operations, rollback, and troubleshooting guide
 
@@ -42,18 +43,39 @@ cp .env.example .env
 
 The examples below use `swedencentral`. The selected region must support every service in the infrastructure stack.
 
+## Quick start
+
+After setting the required values in `.env`, these are the Task commands required to
+validate and deploy a **new environment with no existing local Terraform state**:
+
+```bash
+task test:all
+task cloud:bootstrap-state -- swedencentral
+task cloud:up -- swedencentral
+task app:init
+task app:deploy -- swedencentral
+task app:smoke -- --timeout 30 --poll-timeout 180
+```
+
+`app:deploy` includes `app:build`, the application Terraform apply, database
+migration, and Foundry Hosted Agent deployment.
+
+If this repository already manages an Azure environment from local state, stop and
+follow the [remote-state migration procedure](docs/remote-state.md#migrating-existing-local-state)
+before running `cloud:up` or `app:init`. The tasks refuse to bypass detected local
+state.
+
 ## 1. Create the shared Azure infrastructure
 
 This provisions the resource group, Microsoft Foundry account and project, model deployment, Azure Container Registry, Container Apps environment, PostgreSQL, and monitoring resources.
 
 ```bash
-terraform -chdir=infrastructure init -upgrade
-terraform -chdir=infrastructure workspace new swedencentral || true
-terraform -chdir=infrastructure workspace select swedencentral
-task cloud:apply -- swedencentral
+task cloud:bootstrap-state -- swedencentral
+task cloud:up -- swedencentral
 ```
 
-The root `task up` shortcut is not currently usable because `tasks/Taskfile.cloud.yml` references an undefined `infra:config` task. Use the commands above until that Taskfile target is corrected. Application tasks read the required generated values directly from the `infrastructure/` Terraform outputs.
+Application tasks read the required generated values directly from the
+`infrastructure/` Terraform outputs.
 
 ## 2. Build and validate the code
 
@@ -160,6 +182,7 @@ The smoke runner verifies orchestrator and web UI readiness, current Container A
 After the shared infrastructure exists, the following command builds all images, applies the application stack, migrates PostgreSQL, and registers the Hosted Agents:
 
 ```bash
+task app:init
 task app:deploy -- swedencentral
 ```
 

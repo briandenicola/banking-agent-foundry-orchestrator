@@ -84,6 +84,7 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform -chdir=infrastructure init -input=false \
+            -backend-config="use_oidc=true" \
             -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
@@ -139,6 +140,7 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform -chdir=infrastructure init -input=false \
+            -backend-config="use_oidc=true" \
             -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
@@ -242,6 +244,7 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform -chdir=infrastructure init -input=false \
+            -backend-config="use_oidc=true" \
             -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
@@ -257,6 +260,7 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform -chdir=apps init -input=false \
+            -backend-config="use_oidc=true" \
             -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
@@ -316,6 +320,7 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform -chdir=infrastructure init -input=false \
+            -backend-config="use_oidc=true" \
             -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \
@@ -329,6 +334,7 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform -chdir=apps init -input=false \
+            -backend-config="use_oidc=true" \
             -backend-config="resource_group_name=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=${{ secrets.TF_BACKEND_CONTAINER }}" \

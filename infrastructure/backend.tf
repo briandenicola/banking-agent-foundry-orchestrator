@@ -17,10 +17,10 @@
 # additional DynamoDB-style lock table is required.
 terraform {
   backend "azurerm" {
-    use_oidc         = true
     use_azuread_auth = true
     # All other fields (resource_group_name, storage_account_name, container_name,
-    # key, subscription_id, tenant_id, client_id) are supplied via -backend-config
-    # at init time so that no credentials are hard-coded here.
+    # key, and CI's use_oidc flag) are supplied via -backend-config at init time so
+    # local Azure CLI authentication and GitHub OIDC both work without credentials
+    # in source control.
   }
 }

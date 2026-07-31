@@ -135,6 +135,11 @@ are in [`BankingAgent.Domain.Tests`](../tests/BankingAgent.Domain.Tests).
 
 ## 3. How the agents work and communicate
 
+For a line-by-line walkthrough of the Python LangGraph code, C# planner-to-specialist
+handoff, shared container image, Foundry registration API, Terraform job, and runtime
+identity flow, see
+[`docs/agent-implementation.md`](agent-implementation.md).
+
 ### Hosted-agent implementation
 
 One image, [`Dockerfile.hosted`](../src/agents/python/Dockerfile.hosted), is registered
@@ -216,11 +221,15 @@ but only the C# application and persistence layers access it:
 5. It validates the specialist result and persists the next workflow state and
    events.
 
-This is **orchestrator-mediated context passing**, not shared agent memory. The
-specialist receives an approved snapshot assembled by `WorkflowService`; it cannot
+This is intended to be **orchestrator-mediated context passing**, not shared agent
+memory. The current transport nests these fields under `AgentRequest.input`, while
+the Python model prompt reads `AgentRequest.context`; therefore the specialist does
+not currently consume the planner fields. The detailed
+[agent implementation walkthrough](agent-implementation.md#important-current-context-binding-gap)
+traces that mismatch to the exact code. Regardless of that gap, the specialist cannot
 observe later database changes, another agent's private state, uploaded files, or
-uncommitted work. This keeps state transitions, approvals, and audit authority in one
-place and prevents a hosted specialist from bypassing optimistic concurrency.
+uncommitted work. State transitions, approvals, and audit authority remain in C# and
+PostgreSQL.
 
 ### Recommended shared-state evolution
 

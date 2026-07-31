@@ -10,6 +10,24 @@ tasks:
     cmds:
       - task --list
 
+  bootstrap-state:
+    desc: Create the Azure Blob backend used by both Terraform stacks
+    requires:
+      vars:
+        - AZURE_SUBSCRIPTION_ID
+        - TF_BACKEND_RESOURCE_GROUP
+        - TF_BACKEND_STORAGE_ACCOUNT
+        - TF_BACKEND_CONTAINER
+    cmds:
+      - bash ./scripts/bootstrap-remote-state.sh
+        --subscription "{{.AZURE_SUBSCRIPTION_ID}}"
+        --resource-group "{{.TF_BACKEND_RESOURCE_GROUP}}"
+        --storage-account "{{.TF_BACKEND_STORAGE_ACCOUNT}}"
+        --container "{{.TF_BACKEND_CONTAINER}}"
+        --location "{{.REGION}}"
+    vars:
+      REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
+
   up:
     desc: Creates complete Azure environment for {{.TITLE}}
     cmds:
@@ -34,9 +52,18 @@ tasks:
 
   _init:
     internal: true
+    requires:
+      vars:
+        - TF_BACKEND_RESOURCE_GROUP
+        - TF_BACKEND_STORAGE_ACCOUNT
+        - TF_BACKEND_CONTAINER
+        - TF_STATE_ENVIRONMENT
     cmds:
-      - terraform -chdir=./{{.INFRA_DIR}} init -upgrade
-      - terraform -chdir=./{{.INFRA_DIR}} workspace new {{.REGION}} || true
-      - terraform -chdir=./{{.INFRA_DIR}} workspace select {{.REGION}}
+      - bash ./scripts/guard-local-terraform-state.sh {{.INFRA_DIR}}
+      - terraform -chdir=./{{.INFRA_DIR}} init -upgrade -reconfigure
+        -backend-config="resource_group_name={{.TF_BACKEND_RESOURCE_GROUP}}"
+        -backend-config="storage_account_name={{.TF_BACKEND_STORAGE_ACCOUNT}}"
+        -backend-config="container_name={{.TF_BACKEND_CONTAINER}}"
+        -backend-config="key={{.TF_STATE_ENVIRONMENT}}/infrastructure.tfstate"
     vars:
       REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
