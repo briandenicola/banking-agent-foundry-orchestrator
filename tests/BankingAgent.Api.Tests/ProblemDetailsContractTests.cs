@@ -157,6 +157,24 @@ public sealed class ProblemDetailsContractTests : IDisposable
         return root;
     }
 
+
+    [Fact]
+    public async Task PostEvidence_OversizedFile_ReturnsProblemDetailsWithEvidenceInvalidCode()
+    {
+        var workflowId = Guid.NewGuid();
+
+        // Create a file payload one byte over the 10 MB limit.
+        var oversizedContent = new byte[BankingAgent.Application.WorkflowEvidenceService.MaximumFileBytes + 1];
+        using var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent(oversizedContent), "files", "large-evidence.pdf");
+
+        var response = await _client.PostAsync(
+            $"/api/v1/workflows/{workflowId}/evidence",
+            form);
+
+        await AssertProblemAsync(response, HttpStatusCode.BadRequest, "evidence_invalid");
+    }
+
     public void Dispose()
     {
         _client.Dispose();

@@ -19,6 +19,7 @@ This repository contains a banking-focused agentic application built around:
 - `docs/` - project constitution and specifications
 - `docs/observability.md` - workflow tracing, safe telemetry fields, and Application Insights queries
 - `docs/demo-scenarios.md` - non-PII seed data and expected guided scenario outcomes
+- `docs/testing.md` - test taxonomy, local commands, CI mapping, prerequisites, and acceptance scenarios
 
 ## Prerequisites
 

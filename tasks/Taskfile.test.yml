@@ -10,7 +10,7 @@ tasks:
     cmds:
       - dotnet test tests/BankingAgent.Domain.Tests --configuration Release --logger "console;verbosity=normal"
       - dotnet test tests/BankingAgent.Application.Tests --configuration Release --logger "console;verbosity=normal"
-      - dotnet test tests/BankingAgent.Api.Tests --configuration Release --logger "console;verbosity=normal"
+      - dotnet test tests/BankingAgent.Api.Tests --configuration Release --filter Category!=E2E --logger "console;verbosity=normal"
       - dotnet test tests/BankingAgent.WebUi.Tests --configuration Release --logger "console;verbosity=normal"
       - dotnet test tests/BankingAgent.Infrastructure.Tests --configuration Release --logger "console;verbosity=normal"
 
@@ -27,7 +27,7 @@ tasks:
   api:
     desc: Run orchestrator endpoint and authentication contract tests
     cmds:
-      - dotnet test tests/BankingAgent.Api.Tests --configuration Release --logger "console;verbosity=normal"
+      - dotnet test tests/BankingAgent.Api.Tests --configuration Release --filter Category!=E2E --logger "console;verbosity=normal"
 
   webui:
     desc: Run Web UI token handler contract tests
@@ -39,14 +39,43 @@ tasks:
     cmds:
       - dotnet test tests/BankingAgent.Infrastructure.Tests --configuration Release --logger "console;verbosity=normal"
 
+  e2e:
+    desc: Run API/UI E2E tests with real EF repositories on system SQLite
+    cmds:
+      - |
+        discovered=$(dotnet test tests/BankingAgent.Api.Tests \
+          --configuration Release --filter Category=E2E --list-tests)
+        echo "$discovered"
+        grep -q "WorkflowE2eTests" <<< "$discovered"
+      - dotnet test tests/BankingAgent.Api.Tests
+        --configuration Release
+        --filter Category=E2E
+        --logger "console;verbosity=normal"
+
+  hosted:
+    desc: Run Python hosted-agent HTTP boundary tests
+    dir: src/agents/python
+    cmds:
+      - python -m pip install -r requirements.txt pytest -q
+      - python -m pytest tests/test_hosted.py -v
+
   python-agents:
     desc: Run Python agent unit tests
     cmds:
       - python -m pip install -r src/agents/python/requirements.txt pytest -q
-      - cd src/agents/python && python -m pytest tests -v
+      - cd src/agents/python && python -m pytest tests/test_agents.py -v
 
   python-deployer:
     desc: Run Python deployer unit tests
     cmds:
       - python -m pip install -r src/agents/deployer/requirements.txt pytest -q
       - cd src/agents/deployer && python -m pytest test_deploy.py -v
+
+  all:
+    desc: Aggregate quality gate — unit, E2E, and Python hosted tests (no live Azure)
+    cmds:
+      - task: unit
+      - task: e2e
+      - task: python-agents
+      - task: python-deployer
+      - task: hosted

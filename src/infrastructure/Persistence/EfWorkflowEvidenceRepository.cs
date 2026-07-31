@@ -10,11 +10,11 @@ public sealed class EfWorkflowEvidenceRepository(BankingAgentDbContext context)
 {
     public async Task<IReadOnlyList<WorkflowEvidence>> ListAsync(
         Guid workflowId,
-        CancellationToken cancellationToken = default) =>
-        await context.WorkflowEvidence
+        CancellationToken cancellationToken = default)
+    {
+        var query = context.WorkflowEvidence
             .AsNoTracking()
             .Where(item => item.WorkflowId == workflowId)
-            .OrderBy(item => item.UploadedAt)
             .Select(item => new WorkflowEvidence(
                 item.Id,
                 item.WorkflowId,
@@ -23,8 +23,21 @@ public sealed class EfWorkflowEvidenceRepository(BankingAgentDbContext context)
                 item.Length,
                 item.Sha256,
                 Array.Empty<byte>(),
-                item.UploadedAt))
+                item.UploadedAt));
+        if (string.Equals(
+                context.Database.ProviderName,
+                "Microsoft.EntityFrameworkCore.Sqlite",
+                StringComparison.Ordinal))
+        {
+            return (await query.ToListAsync(cancellationToken))
+                .OrderBy(item => item.UploadedAt)
+                .ToList();
+        }
+
+        return await query
+            .OrderBy(item => item.UploadedAt)
             .ToListAsync(cancellationToken);
+    }
 
     public async Task<WorkflowEvidence?> GetAsync(
         Guid workflowId,

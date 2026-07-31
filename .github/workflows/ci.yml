@@ -55,6 +55,7 @@ jobs:
         run: >
           dotnet test tests/BankingAgent.Api.Tests
           --configuration Release --no-build
+          --filter Category!=E2E
           --logger "console;verbosity=normal"
           --logger "trx;LogFileName=api.trx"
 
@@ -64,7 +65,6 @@ jobs:
           --configuration Release --no-build
           --logger "console;verbosity=normal"
           --logger "trx;LogFileName=webui.trx"
-
 
       - name: Persistence and infrastructure integration tests
         run: >
@@ -78,6 +78,50 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dotnet-test-results
+          path: "**/*.trx"
+
+  # ── E2E lifecycle tests (Category=E2E, in-process WebApplicationFactory) ──
+  dotnet-e2e:
+    name: .NET E2E tests
+    runs-on: ubuntu-latest
+    # E2E tests depend on SQLite via Microsoft.Data.Sqlite; the ubuntu-latest
+    # runner ships libsqlite3 already. No Azure credentials are required.
+    needs: dotnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore solution
+        run: dotnet restore banking-agent.sln
+
+      - name: Build (Release)
+        run: dotnet build banking-agent.sln --configuration Release --no-restore
+
+      - name: E2E tests (Category=E2E)
+        run: >
+          dotnet test tests/BankingAgent.Api.Tests
+          --configuration Release --no-build
+          --filter Category=E2E
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=e2e.trx"
+
+      - name: Verify E2E test discovery
+        shell: bash
+        run: |
+          discovered=$(dotnet test tests/BankingAgent.Api.Tests \
+            --configuration Release --no-build \
+            --filter Category=E2E --list-tests)
+          echo "$discovered"
+          grep -q "WorkflowE2eTests" <<< "$discovered"
+
+      - name: Upload E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-e2e-results
           path: "**/*.trx"
 
   # ── Python agent syntax check ──────────────────────────────────────────────
@@ -111,7 +155,27 @@ jobs:
 
       - name: Run agent tests
         working-directory: src/agents/python
-        run: python -m pytest tests -v
+        run: python -m pytest tests/test_agents.py -v
+
+  # ── Python hosted-agent contract tests ────────────────────────────────────
+  python-hosted-tests:
+    name: Python hosted-agent tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install agent dependencies
+        run: python -m pip install -r src/agents/python/requirements.txt pytest
+
+      - name: Run hosted-agent tests
+        # Working directory is required: app imports are relative to src/agents/python.
+        # Runs pytest directly; fails if tests/test_hosted.py is missing.
+        working-directory: src/agents/python
+        run: python -m pytest tests/test_hosted.py -v
 
   # ── Python deployer unit tests ─────────────────────────────────────────────
   python-deployer-tests:

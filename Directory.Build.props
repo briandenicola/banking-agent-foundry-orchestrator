@@ -10,6 +10,7 @@
     <_UserHome Condition="'$(_UserHome)' == '' and '$(USERPROFILE)' != ''">$(USERPROFILE)</_UserHome>
     <_UserHome Condition="'$(_UserHome)' == ''">$(MSBuildThisFileDirectory)</_UserHome>
     <ArtifactsRoot>$(_UserHome)/.dotnet/banking-agent-artifacts</ArtifactsRoot>
+    <RestorePackagesPath>$(_UserHome)/.dotnet/banking-agent-packages</RestorePackagesPath>
     <BaseIntermediateOutputPath>$(ArtifactsRoot)/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
     <BaseOutputPath>$(ArtifactsRoot)/bin/$(MSBuildProjectName)/</BaseOutputPath>
     <!-- Re-add the per-project legacy obj/ directory to default item exclusions. -->

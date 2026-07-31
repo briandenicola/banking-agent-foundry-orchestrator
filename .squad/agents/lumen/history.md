@@ -146,3 +146,42 @@ See `decisions/inbox/lumen-service-auth.md` for the exact follow-up spec.
    Configure via `AzureAd__TenantId` = `AZURE_TENANT_ID` and `AzureAd__ClientId` = `ORCHESTRATOR_APP_ID`.
 3. `Program.cs` middleware: add `app.UseAuthentication();` before `app.UseAuthorization();`
 4. `WorkflowEndpoints.cs`: add `.RequireAuthorization()` to the workflow endpoint group; health check stays open.
+
+### 2026-07-31 — Issue #9 Hosted-agent test coverage
+
+**What was implemented:**
+
+**`app/hosted.py` (production-safe refactor):**
+- Added `asyncio.wait_for` around `graph.ainvoke` with a configurable deadline (`AGENT_INVOKE_TIMEOUT_SECONDS` env var, default 30s).
+- `asyncio.TimeoutError` → 504 JSON response with `{"error": "timeout", "detail": "...Xs"}`.
+- `pydantic.ValidationError` from malformed request body → 400 JSON response with `{"error": "invalid_request", "detail": [...errors...]}`.
+- Unhandled `Exception` from graph → 500 JSON response with `{"error": "agent_error", "detail": str(exc)}` — no traceback leakage.
+- Added `logging.getLogger(__name__)` for structured error context.
+
+**`tests/test_hosted.py` (13 new tests):**
+All drive the real `InvocationAgentServerHost` ASGI app via `httpx.AsyncClient + ASGITransport`. Module-level `graph` is replaced with `AsyncMock` per test via `patch.object(hosted_module, "graph", ...)`.
+
+| Scenario | Test name | Status code |
+|---|---|---|
+| Valid success, full AgentResult schema | `test_valid_request_returns_200_with_agent_result_schema` | 200 |
+| Graph RuntimeError | `test_graph_runtime_error_returns_500` | 500 |
+| Graph ValueError | `test_graph_value_error_returns_500_with_detail` | 500 |
+| Hung graph (timeout) | `test_timeout_returns_504` | 504 |
+| Timeout yields no partial result | `test_short_timeout_does_not_return_partial_state` | 504 |
+| Missing `message` field | `test_missing_message_field_returns_400` | 400 |
+| Empty `message` string (min_length=1) | `test_empty_message_returns_400` | 400 |
+| Non-object JSON payload | `test_non_object_payload_returns_400` | 400 |
+| Content-type is JSON | `test_response_content_type_is_json` | 200 |
+| trace_id propagated | `test_response_trace_id_propagated_from_request` | 200 |
+| No traceback in 500 detail | `test_error_response_body_never_leaks_stack_trace` | 500 |
+| requires_approval always present | `test_success_response_requires_approval_field_present` | 200 |
+| risk_level is valid enum | `test_success_response_risk_level_is_valid_enum` | 200 |
+
+**Test run:** 13/13 passed in 1.48s. Existing 4 `test_agents.py` tests unchanged and still pass.
+
+**Key learnings:**
+- `InvocationAgentServerHost` is a Starlette ASGI app; `httpx.ASGITransport` is the cleanest in-process test driver.
+- Module-level state in `hosted.py` (`graph`, `agent_name`, `app`) is fine to patch with `patch.object(hosted_module, "graph", mock)` — the `@app.invoke_handler` closure captures the name at call time, not at decoration time, so swapping the module attribute works.
+- `azure-ai-agentserver` package emits OTEL span/metric JSON to stderr during tests — benign but noisy; filtered via grep in CI if needed.
+- `asyncio.wait_for` timeout was 0.05s in tests to keep the suite fast; `_INVOKE_TIMEOUT` patched via `patch.object`.
+- No conftest.py was needed — all setup inline per test class.

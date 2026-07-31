@@ -16,15 +16,10 @@ using Moq;
 namespace BankingAgent.Api.Tests;
 
 /// <summary>
-/// Builds an in-process test host that mirrors the expected post-Lumen
-/// orchestrator configuration:
+/// Builds an in-process test host that mirrors the orchestrator HTTP boundary:
 /// - JWT bearer authentication on /api/v1/... (requires Workflow.Invoke app role)
 /// - /health remains anonymous
-///
-/// The endpoint stubs deliberately mirror the production exception → status mapping
-/// documented in WorkflowEndpoints.cs and aria-p0-design-review.md so that these
-/// contract tests validate the EXPECTED behavior of the real orchestrator once
-/// Lumen wires RequireAuthorization onto the endpoint group.
+/// - production workflow endpoints and ProblemDetails handling
 /// </summary>
 public sealed class TestOrchestratorHost : IDisposable
 {
@@ -36,9 +31,24 @@ public sealed class TestOrchestratorHost : IDisposable
     private readonly IHost _host;
     private bool _disposed;
 
+    /// <summary>
+    /// Constructor for contract tests — accepts mocks for service isolation.
+    /// </summary>
     public TestOrchestratorHost(
         Mock<IWorkflowService> workflowServiceMock,
         Mock<IWorkflowEvidenceService>? evidenceServiceMock = null)
+        : this(
+            workflowServiceMock.Object,
+            (evidenceServiceMock ?? CreateEvidenceServiceMock()).Object)
+    {
+    }
+
+    /// <summary>
+    /// Constructor for E2E tests using real services and deterministic dependencies.
+    /// </summary>
+    public TestOrchestratorHost(
+        IWorkflowService workflowService,
+        IWorkflowEvidenceService? evidenceService = null)
     {
         _host = new HostBuilder()
             .ConfigureWebHost(webHost =>
@@ -48,8 +58,8 @@ public sealed class TestOrchestratorHost : IDisposable
                 webHost.ConfigureServices(services =>
                     ConfigureServices(
                         services,
-                        workflowServiceMock,
-                        evidenceServiceMock ?? CreateEvidenceServiceMock()));
+                        workflowService,
+                        evidenceService ?? CreateEvidenceServiceMock().Object));
             })
             .Build();
 
@@ -59,7 +69,7 @@ public sealed class TestOrchestratorHost : IDisposable
     public HttpClient CreateClient() =>
         _host.GetTestServer().CreateClient();
 
-    /// <summary>Builds a signed JWT for use in Authorization: Bearer headers in tests.</summary>
+    /// <summary>Builds a signed JWT for use in Authorization: ****** in tests.</summary>
     public string BuildBearerToken(string? role = WorkflowInvokeRole)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SigningKeySecret));
@@ -87,13 +97,13 @@ public sealed class TestOrchestratorHost : IDisposable
 
     private static void ConfigureServices(
         IServiceCollection services,
-        Mock<IWorkflowService> workflowServiceMock,
-        Mock<IWorkflowEvidenceService> evidenceService)
+        IWorkflowService workflowService,
+        IWorkflowEvidenceService evidenceService)
     {
         services.AddRouting();
         services.AddBankingAgentProblemDetails();
-        services.AddSingleton(workflowServiceMock.Object);
-        services.AddSingleton(evidenceService.Object);
+        services.AddSingleton(workflowService);
+        services.AddSingleton(evidenceService);
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SigningKeySecret));
 

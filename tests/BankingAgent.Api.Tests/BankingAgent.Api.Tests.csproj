@@ -17,10 +17,14 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.9.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.9.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite.Core" Version="8.0.11" />
+    <PackageReference Include="SQLitePCLRaw.provider.sqlite3" Version="2.1.10" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/domain/domain.csproj" />
     <ProjectReference Include="../../src/application/application.csproj" />
     <ProjectReference Include="../../src/api/api.csproj" />
+    <ProjectReference Include="../../src/infrastructure/infrastructure.csproj" />
+    <ProjectReference Include="../../src/webui/webui.csproj" />
   </ItemGroup>
 </Project>

@@ -26,3 +26,8 @@
 - All meaningful changes require team consensus
 - Document architectural decisions here
 - Keep history focused on work, decisions focused on direction
+
+### Testing & Quality (Issue #9)
+- **2026-07-31:** Test work split across three owners to minimize merge conflicts (Issue #9 — comprehensive test coverage). Theo owns .NET tests (E2E lifecycle, restart recovery, idempotency, ProblemDetails); Lumen owns Python hosted-agent tests (timeout, error handling, boundary contracts); Nia owns CI/Taskfile/docs (E2E gate, test:e2e/test:hosted/test:all tasks, docs/testing.md). All E2E tests run in CI before deploy-production.yml. No test-only endpoints; no auth bypass; system SQLite only; Python tests from `src/agents/python` working directory.
+- **2026-07-31:** Hosted Python agent (`app/hosted.py`) implements bounded timeout (30s, tunable via `AGENT_INVOKE_TIMEOUT_SECONDS`) and safe structured errors. Invalid JSON or request validation returns HTTP 400, timeout returns HTTP 504, and graph/result failures return a generic HTTP 500 without exposing exception details.
+- **2026-07-31:** E2E tests in `BankingAgent.Api.Tests` exercise the HTTP endpoints, JWT policy, `WorkflowService`, real EF repositories, evidence persistence, and Web UI `IndexModel` against system SQLite. Deterministic MCP doubles replace live Foundry calls; no test-only production endpoints or authentication bypasses are used.

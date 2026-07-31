@@ -132,3 +132,138 @@ Working as the primary reviewer across the full Issue #10 CI/CD modernization cy
 4. **Partial backend config pattern is genuinely elegant** — allowing Terraform to validate and format without credential injection makes credential-free CI possible while keeping live infrastructure state and blob-lease locking.
 
 5. **Advisory findings often become requirements in follow-up revisions** — the first-pass advisor on Python pytest ("consider adding pytest jobs") became a hard requirement in the revision request, even though the initial verdict was conditional-APPROVE. Document advisories thoroughly so revisions know which are just-nice-to-have vs. strategic gaps.
+
+## Issue #9 Design Review — Expand automated workflow and API test coverage (2026-07-31)
+
+### Verdict: DESIGN REVIEW COMPLETE — Implementation split ready
+
+### Existing coverage inventory (issues #7, #8, #10 already landed)
+| Area | File | Tests | Coverage |
+|------|------|-------|----------|
+| Persistence (EF) | Infrastructure.Tests/EfWorkflowActionRepositoryTests | 4 | Approve/reject decision, idempotent retry, rollback on failure |
+| Restart recovery | Infrastructure.Tests/WorkflowRestartRecoveryTests | 3 | Survive restart, competing claimers, stale draft resume |
+| MCP reliability | Infrastructure.Tests/FoundryMcpClientReliabilityTests | 5 | Retry, non-transient, bounded attempts, timeout, cancellation |
+| Approval concurrency | Application.Tests/WorkflowApprovalConcurrencyTests | 2 | Concurrent matching, concurrent conflicting |
+| Repository contract | Application.Tests/WorkflowRepositoryContractTests | 7 | CRUD, stale version, chronological events |
+| Workflow behavior | Application.Tests/WorkflowServiceCurrentBehaviorTests | 14 | All approval paths, idempotency, failure persistence, support cases |
+| Demo scenarios | Application.Tests/DemoScenarioTests | 5 | Catalog, durable state, case outcomes, independence, disabled-mode |
+| Telemetry | Application.Tests/WorkflowTelemetryTests | 1 | Correlated lifecycle spans |
+| Evidence | Application.Tests/WorkflowEvidenceServiceTests | 4 | Valid upload, non-dispute rejection, content mismatch, limit |
+| ProblemDetails | Api.Tests/ProblemDetailsContractTests | 7 | Validation, not-found, conflict, dependency failure, timeout, 500 |
+| Auth contract | Api.Tests/AuthenticationContractTests | 10 | Anon 401, wrong role 403, valid role passes, health anon |
+| Endpoint contract | Api.Tests/WorkflowEndpointContractTests | 8 | 404, 200, chronological events, conflict, idempotent, demo catalog |
+| Evidence endpoint | Api.Tests/WorkflowEvidenceEndpointTests | 2 | Upload, download |
+| WebUI | WebUi.Tests/DemoScenarioUiTests | 1 | Index exposes scenarios |
+| WebUI handlers | WebUi.Tests/CorrelationIdHandlerTests, TokenDelegatingHandlerTests | 2+ | Token delegation |
+| Python agents | python/tests/test_agents.py | 4 | Planner routing, dispute approval, suspicious activity, model status |
+| Python deployer | deployer/test_deploy.py | exists | Deploy utility tests |
+
+### Gap analysis against issue #9 acceptance criteria
+
+**1. Persistence, authorization, approval/rejection, idempotency, support-case, ProblemDetails** — MOSTLY COVERED.
+- Gap: No test for `SupportCase` persistence via full API round-trip (existing tests are at application layer only).
+- Gap: No test that approval idempotency returns identical response body shape.
+- Gap: No negative ProblemDetails test for oversized evidence upload at API level.
+
+**2. Restart tests proving durable recovery without duplicate actions** — COVERED by WorkflowRestartRecoveryTests (3 tests). Minor gap: no test proving restart after approval-but-before-action-execution doesn't duplicate the action.
+
+**3. Hosted-agent tests (success, failure, timeout, boundary contracts with deterministic doubles)** — MAJOR GAP.
+- `app/hosted.py` has zero test coverage. No tests for the `InvocationAgentServerHost` invoke handler.
+- No timeout test for hosted agent invocations.
+- No failure/error-path test for malformed requests.
+- No boundary contract test for request/response schema validation.
+
+**4. E2E tests in CI before production deployment** — MAJOR GAP.
+- `deploy-production.yml` has post-deployment smoke only; no pre-deployment E2E.
+- No `WebApplicationFactory`-based E2E test that exercises a representative workflow path through API → service → persistence → approval → completion.
+- No CI job that gates deployment on E2E.
+
+**5. Complete suite reliable in local and CI quality gates** — PARTIAL.
+- `Taskfile.test.yml` covers all .NET and Python test commands. Missing: E2E task, no `test:all` aggregate, no documented local quality gate checklist.
+
+### Implementation split
+
+**Owner: Theo (Backend) — primary implementer for all .NET test work**
+Rationale: All gaps are in .NET test projects or Python agent tests. Splitting .NET test work across multiple agents creates merge conflicts in shared test infrastructure (TestOrchestratorHost, SqliteTestProvider, csproj references). One owner minimizes coordination cost.
+
+**Files Theo creates/modifies:**
+1. `tests/BankingAgent.Api.Tests/WorkflowE2eTests.cs` — NEW. Full lifecycle E2E: POST workflow → GET status → POST approval → GET final state with support case. Uses `WebApplicationFactory` with in-memory SQLite. Covers the "representative API workflow path against production-like dependencies" criterion. Deterministic (no live Azure).
+2. `tests/BankingAgent.Api.Tests/WorkflowEndpointContractTests.cs` — ADD test for idempotent approval returning identical response body.
+3. `tests/BankingAgent.Api.Tests/ProblemDetailsContractTests.cs` — ADD test for oversized evidence upload returning 413/422 ProblemDetails.
+4. `tests/BankingAgent.Infrastructure.Tests/WorkflowRestartRecoveryTests.cs` — ADD test for restart-after-approval-before-action scenario.
+5. `tests/BankingAgent.Api.Tests/TestOrchestratorHost.cs` — Minimal refactors if needed for E2E composition.
+
+**Owner: Lumen (AI Platform) — primary implementer for Python hosted-agent tests**
+Rationale: Hosted agent is Python/LangGraph domain; Lumen owns this.
+
+**Files Lumen creates/modifies:**
+1. `src/agents/python/tests/test_hosted.py` — NEW. Tests for `app/hosted.py`:
+   - Success path: valid `AgentRequest` → valid `AgentResult` JSON response.
+   - Failure: malformed JSON → appropriate error response.
+   - Timeout: mock graph that exceeds deadline → timeout behavior.
+   - Boundary contract: request/response schema validation with deterministic model doubles (mock `ainvoke`).
+2. `src/agents/python/tests/conftest.py` — NEW if needed for shared fixtures.
+
+**Owner: Nia (QA & DevOps) — CI/Taskfile integration and documentation**
+Rationale: Nia owns CI pipeline and quality gate docs.
+
+**Files Nia creates/modifies:**
+1. `.github/workflows/ci.yml` — ADD E2E test step after existing API integration tests (same `dotnet` job, new step targeting `BankingAgent.Api.Tests --filter Category=E2E` or similar).
+2. `.github/workflows/deploy-production.yml` — ADD `needs: [ci]` or equivalent gate ensuring CI (including E2E) passes before any deploy job starts (already has `workflow_run` trigger from CI, but verify the E2E tests are included).
+3. `tasks/Taskfile.test.yml` — ADD `test:e2e` task, ADD `test:all` aggregate task, ADD `test:hosted` task for Python hosted agent tests.
+4. `docs/testing.md` — NEW. Document local quality gate checklist: what to run, expected pass criteria, how to add new tests.
+
+### Conflict boundaries
+- **Theo and Lumen**: Zero overlap. Theo works in `tests/` (.NET), Lumen in `src/agents/python/tests/` (Python). No shared files.
+- **Theo and Nia**: Nia only modifies CI/Taskfile/docs. Theo only modifies test `.cs` files. Nia's CI changes reference Theo's new test category but don't edit the same files.
+- **Lumen and Nia**: Nia adds `test:hosted` Taskfile entry; Lumen creates the Python test file it invokes. No file overlap.
+
+### Test harness architecture
+- .NET E2E: `WebApplicationFactory<Program>` with SQLite in-memory provider (existing `SqliteTestProvider` pattern). Deterministic MCP doubles already established in `WorkflowEndpointContractTests`. No new test infrastructure needed.
+- Python hosted: `unittest.IsolatedAsyncioTestCase` (existing pattern in `test_agents.py`). Mock `get_agent_graph` to return deterministic graph. Use `starlette.testclient.TestClient` for HTTP-level tests of `app`.
+- No live Azure, no external network calls, no flaky timing.
+
+### Validation commands
+```
+# Local quality gate (all must pass)
+task test:unit           # Existing .NET + infra tests
+task test:e2e            # New E2E lifecycle tests
+task test:python-agents  # Existing + new hosted agent tests
+task test:python-deployer
+dotnet format banking-agent.sln --verify-no-changes
+```
+
+### Reviewer gates
+- Theo's .NET tests → reviewed by Aria (architecture/contract compliance)
+- Lumen's Python tests → reviewed by Theo (cross-boundary contract alignment)
+- Nia's CI/docs → reviewed by Aria (pipeline correctness, no weakened security)
+
+### Security guardrails
+- No test-only endpoints in production code
+- E2E tests use `WebApplicationFactory` — the test host is in-process, not a deployed service
+- No authentication bypass; E2E tests use the same `FakeJwtBearerHandler` pattern as existing API tests
+- `deploy-production.yml` already triggers only after CI completes; E2E in CI provides the gate
+- No `cloud:down` modifications
+
+## Issue #9 Review — Test Coverage, Persistence, E2E, Hosted-Agent Contracts (2026-07-31)
+
+### Artifacts reviewed
+- `.github/workflows/ci.yml` (Nia)
+- `.github/workflows/deploy-production.yml` (Nia)
+- `tasks/Taskfile.test.yml` (Nia)
+- `docs/testing.md` (Nia)
+- `README.md` (Nia)
+- `tests/BankingAgent.Api.Tests/ProblemDetailsContractTests.cs` (Theo)
+- `tests/BankingAgent.Api.Tests/TestOrchestratorHost.cs` (Theo)
+- `tests/BankingAgent.Api.Tests/WorkflowEndpointContractTests.cs` (Theo)
+- `tests/BankingAgent.Api.Tests/WorkflowE2eTests.cs` (Theo)
+- `tests/BankingAgent.Infrastructure.Tests/WorkflowRestartRecoveryTests.cs` (Theo)
+- `src/agents/python/app/hosted.py` (Lumen)
+- `src/agents/python/tests/test_hosted.py` (Lumen)
+
+### Learnings
+- CI `dotnet-e2e` job runs E2E tests with `--filter Category=E2E`, but the `dotnet` job runs the same project without exclusion, causing E2E tests to execute twice. This is explicitly documented as intentional in docs/testing.md. Not a blocking issue but adds CI time.
+- The `python-hosted-tests` CI job uses an `if [ -f ... ]` guard that silently skips when the file is absent. Now that `test_hosted.py` exists, this is moot for current state but the guard should be removed to prevent future regressions where the file is accidentally deleted.
+- `WorkflowRestartRecoveryTests` uses `Path.GetTempPath()` for SQLite files — acceptable for CI runners but noted as an OS-specific detail. Files are cleaned up in `DisposeAsync`.
+- TestOrchestratorHost has two constructors: one for mock-based contract tests, one for real-service E2E tests. Clean separation, good pattern.
+- The E2E tests use in-memory repositories (not SQLite), while Infrastructure.Tests use real SQLite. This is an intentional layering decision: E2E proves HTTP→service→repo chain, Infrastructure.Tests prove EF↔SQLite persistence. No duplication.
