@@ -17,6 +17,7 @@ This repository contains a banking-focused agentic application built around:
 - `apps/` - Terraform for application identities, Container Apps, Hosted Agent deployment job, and application RBAC
 - `tasks/` - Taskfile definitions for infrastructure, image builds, and deployments
 - `docs/` - project constitution and specifications
+- `docs/README.md` - documentation table of contents and task-based navigation
 - `docs/observability.md` - workflow tracing, safe telemetry fields, and Application Insights queries
 - `docs/demo-scenarios.md` - non-PII seed data and expected guided scenario outcomes
 - `docs/testing.md` - test taxonomy, local commands, CI mapping, prerequisites, and acceptance scenarios
