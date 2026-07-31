@@ -73,6 +73,13 @@ public sealed class FoundryMcpClient : IMcpClient
             }
 
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            if (parameters.TryGetValue("correlation_id", out var correlationId) &&
+                correlationId is not null)
+            {
+                request.Headers.TryAddWithoutValidation(
+                    "x-correlation-id",
+                    correlationId.ToString());
+            }
 
             using var response = await _httpClient.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);

@@ -17,6 +17,7 @@ This repository contains a banking-focused agentic application built around:
 - `apps/` - Terraform for application identities, Container Apps, Hosted Agent deployment job, and application RBAC
 - `tasks/` - Taskfile definitions for infrastructure, image builds, and deployments
 - `docs/` - project constitution and specifications
+- `docs/observability.md` - workflow tracing, safe telemetry fields, and Application Insights queries
 
 ## Prerequisites
 

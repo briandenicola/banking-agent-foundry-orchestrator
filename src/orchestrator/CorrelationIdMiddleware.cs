@@ -17,13 +17,20 @@ public sealed class CorrelationIdMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var correlationId = context.Request.Headers.TryGetValue(HeaderName, out StringValues headerValue)
-            ? headerValue.ToString()
-            : Guid.NewGuid().ToString("N");
+        var requestedCorrelationId =
+            context.Request.Headers.TryGetValue(HeaderName, out StringValues headerValue)
+                ? headerValue.ToString()
+                : null;
+        var correlationId =
+            !string.IsNullOrWhiteSpace(requestedCorrelationId) &&
+            requestedCorrelationId.Length <= 128
+                ? requestedCorrelationId
+                : Guid.NewGuid().ToString("N");
 
         context.Items["CorrelationId"] = correlationId;
         context.Response.Headers[HeaderName] = correlationId;
         Activity.Current?.SetTag("correlation_id", correlationId);
+        Activity.Current?.SetTag("correlation.id", correlationId);
 
         using var scope = _logger.BeginScope(new Dictionary<string, object?>
         {

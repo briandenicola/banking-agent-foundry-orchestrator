@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
+using OpenTelemetry.Trace;
 
 const string PostgreSqlScope = "https://ossrdbms-aad.database.windows.net/.default";
 
@@ -129,7 +130,11 @@ builder.Services.AddScoped<IWorkflowService, WorkflowService>();
 // -----------------------------------------------------------------------
 // Observability
 // -----------------------------------------------------------------------
-var openTelemetryBuilder = builder.Services.AddOpenTelemetry();
+var openTelemetryBuilder = builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddSource(WorkflowTelemetry.ActivitySourceName)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation());
 if (!string.IsNullOrWhiteSpace(applicationInsightsConnectionString))
 {
     openTelemetryBuilder.UseAzureMonitor();

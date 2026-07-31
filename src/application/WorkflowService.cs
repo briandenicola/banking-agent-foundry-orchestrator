@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BankingAgent.Domain;
@@ -47,8 +48,14 @@ public sealed class WorkflowService : IWorkflowService
 
     public async Task<WorkflowState> StartAsync(string userMessage, CancellationToken cancellationToken = default)
     {
-        var traceId = Guid.NewGuid().ToString("N");
         var workflowId = Guid.NewGuid();
+        using var workflowActivity = WorkflowTelemetry.StartActivity(
+            "workflow.lifecycle",
+            workflowId);
+        var traceId = Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N");
+        workflowActivity?.SetTag("workflow.trace_id", traceId);
+        workflowActivity?.SetTag("workflow.operation", "start");
+        var startedAt = Stopwatch.GetTimestamp();
         var createdAt = DateTimeOffset.UtcNow;
 
         // Phase 1 — persist draft before invoking any agent.
@@ -66,7 +73,7 @@ public sealed class WorkflowService : IWorkflowService
             Events: [new WorkflowEvent("workflow.started", "Workflow started", createdAt, "system")],
             Version: 0);
 
-        await _workflowRepository.AddAsync(draftState, cancellationToken);
+        await AddWorkflowAsync(draftState, cancellationToken);
         var current = draftState;
 
         // Phase 2 — planner agent.
@@ -75,14 +82,18 @@ public sealed class WorkflowService : IWorkflowService
             ["user_message"] = userMessage,
             ["trace_id"] = traceId,
             ["workflow_id"] = workflowId.ToString(),
-            ["workflow_status"] = "planning"
+            ["workflow_status"] = "planning",
+            ["correlation_id"] = WorkflowTelemetry.GetCorrelationId()
         };
 
         McpToolResult plannerResult;
         try
         {
-            plannerResult = await _mcpClient.InvokeAsync(
+            plannerResult = await InvokeAgentAsync(
                 "workflow.plan",
+                "workflow-planning",
+                workflowId,
+                traceId,
                 plannerParameters,
                 cancellationToken);
         }
@@ -164,8 +175,11 @@ public sealed class WorkflowService : IWorkflowService
         McpToolResult specialistResult;
         try
         {
-            specialistResult = await _mcpClient.InvokeAsync(
+            specialistResult = await InvokeAgentAsync(
                 specialistTool,
+                route.Agent,
+                workflowId,
+                traceId,
                 specialistParameters,
                 cancellationToken);
         }
@@ -217,11 +231,16 @@ public sealed class WorkflowService : IWorkflowService
             Version = current.Version + 1
         };
 
-        await _workflowRepository.UpdateAsync(finalState, current.Version, cancellationToken);
+        await UpdateWorkflowAsync(finalState, current.Version, cancellationToken);
+        WorkflowTelemetry.RecordSuccess(workflowActivity, finalState.Status.ToString());
 
         _logger.LogInformation(
-            "Workflow {WorkflowId} completed routing for trace {TraceId} with status {Status} and specialist {Specialist}",
-            workflowId, traceId, finalState.Status, route.Agent);
+            "Workflow {WorkflowId} completed routing for trace {TraceId} with status {Status}, specialist {Specialist}, and duration {DurationMs} ms",
+            workflowId,
+            traceId,
+            finalState.Status,
+            route.Agent,
+            Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
 
         return finalState;
     }
@@ -232,20 +251,47 @@ public sealed class WorkflowService : IWorkflowService
         string reason,
         CancellationToken cancellationToken = default)
     {
-        var current = await _workflowRepository.GetAsync(workflowId, cancellationToken)
-            ?? throw new WorkflowNotFoundException(workflowId);
+        using var approvalActivity = WorkflowTelemetry.StartActivity(
+            "workflow.approval",
+            workflowId);
+        approvalActivity?.SetTag("approval.decision", decision);
+        var startedAt = Stopwatch.GetTimestamp();
+        var current = await GetWorkflowAsync(workflowId, cancellationToken);
+        if (current is null)
+        {
+            var exception = new WorkflowNotFoundException(workflowId);
+            WorkflowTelemetry.RecordFailure(approvalActivity, exception, "not_found");
+            throw exception;
+        }
+
+        approvalActivity?.SetTag("workflow.trace_id", current.TraceId);
 
         // Idempotency — return immediately if the same decision is already recorded.
         if (current.ApprovalDecision is not null)
         {
             if (string.Equals(current.ApprovalDecision, decision, StringComparison.OrdinalIgnoreCase))
+            {
+                WorkflowTelemetry.RecordSuccess(approvalActivity, "idempotent");
                 return current;
+            }
 
-            throw new ConflictingDecisionException(workflowId, current.ApprovalDecision, decision);
+            var exception = new ConflictingDecisionException(
+                workflowId,
+                current.ApprovalDecision,
+                decision);
+            WorkflowTelemetry.RecordFailure(approvalActivity, exception, "conflict");
+            throw exception;
         }
 
         if (current.Status != WorkflowStatus.WaitingForApproval)
-            throw new InvalidTransitionException(workflowId, current.Status, WorkflowStatus.WaitingForApproval.ToString());
+        {
+            var exception = new InvalidTransitionException(
+                workflowId,
+                current.Status,
+                WorkflowStatus.WaitingForApproval.ToString());
+            WorkflowTelemetry.RecordFailure(approvalActivity, exception, "invalid_transition");
+            throw exception;
+        }
 
         var isApproved = decision.Equals("approve", StringComparison.OrdinalIgnoreCase);
         var finalStatus = isApproved ? WorkflowStatus.Completed : WorkflowStatus.Rejected;
@@ -292,23 +338,37 @@ public sealed class WorkflowService : IWorkflowService
             Actor: "user",
             CreatedAt: now);
 
-        await _workflowActionRepository.RecordDecisionAsync(
-            newState,
-            approvalRecord,
-            actionExecution,
-            supportCase,
-            expectedVersion: current.Version,
-            cancellationToken);
+        try
+        {
+            await RecordDecisionAsync(
+                newState,
+                approvalRecord,
+                actionExecution,
+                supportCase,
+                expectedVersion: current.Version,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            WorkflowTelemetry.RecordFailure(approvalActivity, ex);
+            throw;
+        }
 
-        _logger.LogInformation("Workflow {WorkflowId} decision recorded: {Decision}", workflowId, decision);
-        return await _workflowRepository.GetAsync(workflowId, cancellationToken) ?? newState;
+        WorkflowTelemetry.RecordSuccess(approvalActivity, finalStatus.ToString());
+        _logger.LogInformation(
+            "Workflow {WorkflowId} decision {Decision} recorded with outcome {Outcome} in {DurationMs} ms",
+            workflowId,
+            decision,
+            finalStatus,
+            Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+        return await GetWorkflowAsync(workflowId, cancellationToken) ?? newState;
     }
 
     public Task<WorkflowState?> GetAsync(Guid workflowId, CancellationToken cancellationToken = default)
-        => _workflowRepository.GetAsync(workflowId, cancellationToken);
+        => GetWorkflowAsync(workflowId, cancellationToken);
 
     public Task<SupportCase?> GetSupportCaseAsync(Guid workflowId, CancellationToken cancellationToken = default)
-        => _workflowActionRepository.GetSupportCaseAsync(workflowId, cancellationToken);
+        => LoadSupportCaseAsync(workflowId, cancellationToken);
 
     // -------------------------------------------------------------------------
     // Helpers
@@ -354,7 +414,7 @@ public sealed class WorkflowService : IWorkflowService
             UpdatedAt = DateTimeOffset.UtcNow,
             Version = current.Version + 1
         };
-        await _workflowRepository.UpdateAsync(next, current.Version, cancellationToken);
+        await UpdateWorkflowAsync(next, current.Version, cancellationToken);
         return next;
     }
 
@@ -376,13 +436,188 @@ public sealed class WorkflowService : IWorkflowService
             Version = current.Version + 1
         };
 
-        await _workflowRepository.UpdateAsync(failedState, current.Version, cancellationToken);
+        await UpdateWorkflowAsync(failedState, current.Version, cancellationToken);
+        Activity.Current?.SetTag("workflow.status", WorkflowStatus.Failed.ToString());
+        Activity.Current?.SetTag("outcome", "failed");
+        Activity.Current?.SetStatus(ActivityStatusCode.Error);
 
         _logger.LogError(
-            "Workflow {WorkflowId} failed for trace {TraceId}: {Error}",
-            current.Id, current.TraceId, error);
+            "Workflow {WorkflowId} failed for trace {TraceId} with error code {ErrorCode} after {DurationMs} ms",
+            current.Id,
+            current.TraceId,
+            "workflow_execution_failed",
+            (now - current.CreatedAt).TotalMilliseconds);
 
         return failedState;
+    }
+
+    private async Task<McpToolResult> InvokeAgentAsync(
+        string toolName,
+        string agentName,
+        Guid workflowId,
+        string traceId,
+        IDictionary<string, object?> parameters,
+        CancellationToken cancellationToken)
+    {
+        using var activity = WorkflowTelemetry.StartActivity(
+            "hosted_agent.invoke",
+            workflowId,
+            traceId);
+        activity?.SetTag("agent.name", agentName);
+        activity?.SetTag("tool.name", toolName);
+        var startedAt = Stopwatch.GetTimestamp();
+
+        try
+        {
+            var result = await _mcpClient.InvokeAsync(toolName, parameters, cancellationToken);
+            activity?.SetTag("agent.status", result.Status);
+            activity?.SetTag("duration_ms", Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+            if (result.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
+            {
+                WorkflowTelemetry.RecordSuccess(activity);
+            }
+            else
+            {
+                activity?.SetTag("outcome", "agent_error");
+                activity?.SetStatus(ActivityStatusCode.Error);
+            }
+
+            _logger.LogInformation(
+                "Hosted Agent {AgentName} completed tool {ToolName} for workflow {WorkflowId} and trace {TraceId} with outcome {Outcome} in {DurationMs} ms",
+                agentName,
+                toolName,
+                workflowId,
+                traceId,
+                result.Status,
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            WorkflowTelemetry.RecordFailure(activity, ex);
+            activity?.SetTag("duration_ms", Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+            throw;
+        }
+    }
+
+    private async Task AddWorkflowAsync(
+        WorkflowState workflow,
+        CancellationToken cancellationToken)
+    {
+        using var activity = WorkflowTelemetry.StartActivity(
+            "persistence.workflow.add",
+            workflow.Id,
+            workflow.TraceId);
+        try
+        {
+            await _workflowRepository.AddAsync(workflow, cancellationToken);
+            WorkflowTelemetry.RecordSuccess(activity);
+        }
+        catch (Exception ex)
+        {
+            WorkflowTelemetry.RecordFailure(activity, ex);
+            throw;
+        }
+    }
+
+    private async Task<WorkflowState?> GetWorkflowAsync(
+        Guid workflowId,
+        CancellationToken cancellationToken)
+    {
+        using var activity = WorkflowTelemetry.StartActivity(
+            "persistence.workflow.get",
+            workflowId);
+        try
+        {
+            var workflow = await _workflowRepository.GetAsync(workflowId, cancellationToken);
+            activity?.SetTag("persistence.found", workflow is not null);
+            WorkflowTelemetry.RecordSuccess(activity);
+            return workflow;
+        }
+        catch (Exception ex)
+        {
+            WorkflowTelemetry.RecordFailure(activity, ex);
+            throw;
+        }
+    }
+
+    private async Task UpdateWorkflowAsync(
+        WorkflowState workflow,
+        long expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        using var activity = WorkflowTelemetry.StartActivity(
+            "persistence.workflow.update",
+            workflow.Id,
+            workflow.TraceId);
+        activity?.SetTag("workflow.expected_version", expectedVersion);
+        activity?.SetTag("workflow.version", workflow.Version);
+        try
+        {
+            await _workflowRepository.UpdateAsync(workflow, expectedVersion, cancellationToken);
+            WorkflowTelemetry.RecordSuccess(activity);
+        }
+        catch (Exception ex)
+        {
+            WorkflowTelemetry.RecordFailure(activity, ex);
+            throw;
+        }
+    }
+
+    private async Task RecordDecisionAsync(
+        WorkflowState workflow,
+        ApprovalDecision decision,
+        ActionExecution? actionExecution,
+        SupportCase? supportCase,
+        long expectedVersion,
+        CancellationToken cancellationToken)
+    {
+        using var activity = WorkflowTelemetry.StartActivity(
+            "persistence.approval.record",
+            workflow.Id,
+            workflow.TraceId);
+        activity?.SetTag("approval.decision", decision.Decision);
+        activity?.SetTag("action.type", actionExecution?.ActionType);
+        activity?.SetTag("support_case.created", supportCase is not null);
+        try
+        {
+            await _workflowActionRepository.RecordDecisionAsync(
+                workflow,
+                decision,
+                actionExecution,
+                supportCase,
+                expectedVersion,
+                cancellationToken);
+            WorkflowTelemetry.RecordSuccess(activity);
+        }
+        catch (Exception ex)
+        {
+            WorkflowTelemetry.RecordFailure(activity, ex);
+            throw;
+        }
+    }
+
+    private async Task<SupportCase?> LoadSupportCaseAsync(
+        Guid workflowId,
+        CancellationToken cancellationToken)
+    {
+        using var activity = WorkflowTelemetry.StartActivity(
+            "persistence.support_case.get",
+            workflowId);
+        try
+        {
+            var supportCase = await _workflowActionRepository.GetSupportCaseAsync(
+                workflowId,
+                cancellationToken);
+            activity?.SetTag("persistence.found", supportCase is not null);
+            WorkflowTelemetry.RecordSuccess(activity);
+            return supportCase;
+        }
+        catch (Exception ex)
+        {
+            WorkflowTelemetry.RecordFailure(activity, ex);
+            throw;
+        }
     }
 
     private static WorkflowEvent CreateInvocationEvent(McpToolResult result) =>

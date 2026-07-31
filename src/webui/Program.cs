@@ -1,10 +1,14 @@
 using Azure.Core;
 using Azure.Identity;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
+using BankingAgent.WebUi;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 var orchestratorApiBaseUrl = builder.Configuration["ORCHESTRATOR_API_BASE_URL"] ?? "http://localhost:5000";
+var applicationInsightsConnectionString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
 var dataProtectionKeysPath = builder.Configuration["DATA_PROTECTION_KEYS_PATH"]
     ?? Path.Combine(Path.GetTempPath(), "banking-agent-data-protection");
 
@@ -14,6 +18,8 @@ if (!Uri.TryCreate(orchestratorApiBaseUrl, UriKind.Absolute, out var orchestrato
 }
 
 builder.Services.AddRazorPages();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddTransient<CorrelationIdHandler>();
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders =
@@ -55,14 +61,25 @@ if (!string.IsNullOrWhiteSpace(orchestratorTokenScope))
     builder.Services.AddHttpClient("orchestrator", client =>
     {
         client.BaseAddress = orchestratorApiBaseUri;
-    }).AddHttpMessageHandler<OrchestratorTokenHandler>();
+    })
+        .AddHttpMessageHandler<CorrelationIdHandler>()
+        .AddHttpMessageHandler<OrchestratorTokenHandler>();
 }
 else
 {
     builder.Services.AddHttpClient("orchestrator", client =>
     {
         client.BaseAddress = orchestratorApiBaseUri;
-    });
+    }).AddHttpMessageHandler<CorrelationIdHandler>();
+}
+
+var openTelemetryBuilder = builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation());
+if (!string.IsNullOrWhiteSpace(applicationInsightsConnectionString))
+{
+    openTelemetryBuilder.UseAzureMonitor();
 }
 
 Directory.CreateDirectory(dataProtectionKeysPath);
@@ -74,6 +91,7 @@ builder.Services
 var app = builder.Build();
 
 app.UseForwardedHeaders();
+app.UseMiddleware<WebUiCorrelationMiddleware>();
 
 if (!app.Environment.IsDevelopment())
 {
