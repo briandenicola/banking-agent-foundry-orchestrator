@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -6,8 +8,20 @@ using Azure.Core;
 using Azure.Identity;
 using BankingAgent.Application;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BankingAgent.Infrastructure;
+
+public sealed class FoundryMcpClientOptions
+{
+    public string? DefaultEndpoint { get; set; }
+    public string? AgentName { get; set; }
+    public string Scope { get; set; } = "https://ai.azure.com/.default";
+    public string? ToolEndpointsJson { get; set; }
+    public int MaxAttempts { get; set; } = 3;
+    public int AttemptTimeoutSeconds { get; set; } = 30;
+    public int BaseDelayMilliseconds { get; set; } = 250;
+}
 
 public sealed class FoundryMcpClient : IMcpClient
 {
@@ -23,15 +37,24 @@ public sealed class FoundryMcpClient : IMcpClient
     private readonly string? _agentName;
     private readonly string _scope;
     private readonly IReadOnlyDictionary<string, string> _toolEndpoints;
+    private readonly FoundryMcpClientOptions _options;
 
-    public FoundryMcpClient(HttpClient httpClient, ILogger<FoundryMcpClient> logger)
+    public FoundryMcpClient(
+        HttpClient httpClient,
+        ILogger<FoundryMcpClient> logger,
+        IOptions<FoundryMcpClientOptions>? options = null)
     {
         _httpClient = httpClient;
         _logger = logger;
-        _defaultEndpoint = ReadSetting("FOUNDRY_AGENT_ENDPOINT");
-        _agentName = ReadSetting("FOUNDRY_AGENT_NAME");
-        _scope = ReadSetting("FOUNDRY_SCOPE") ?? "https://ai.azure.com/.default";
-        _toolEndpoints = ReadToolEndpointMap(ReadSetting("FOUNDRY_TOOL_ENDPOINTS"));
+        _options = options?.Value ?? new FoundryMcpClientOptions();
+        ValidateOptions(_options);
+        _defaultEndpoint = _options.DefaultEndpoint ?? ReadSetting("FOUNDRY_AGENT_ENDPOINT");
+        _agentName = _options.AgentName ?? ReadSetting("FOUNDRY_AGENT_NAME");
+        _scope = string.IsNullOrWhiteSpace(_options.Scope)
+            ? ReadSetting("FOUNDRY_SCOPE") ?? "https://ai.azure.com/.default"
+            : _options.Scope;
+        _toolEndpoints = ReadToolEndpointMap(
+            _options.ToolEndpointsJson ?? ReadSetting("FOUNDRY_TOOL_ENDPOINTS"));
     }
 
     public async Task<McpToolResult> InvokeAsync(string toolName, IDictionary<string, object?> parameters, CancellationToken cancellationToken = default)
@@ -43,99 +66,140 @@ public sealed class FoundryMcpClient : IMcpClient
             return CreateFallbackResult(toolName, parameters, endpoint);
         }
 
-        try
+        var traceId = parameters.TryGetValue("trace_id", out var traceIdValue) ? traceIdValue?.ToString() : null;
+        var payload = new
         {
-            var traceId = parameters.TryGetValue("trace_id", out var traceIdValue) ? traceIdValue?.ToString() : null;
-            var payload = new
+            tool_name = toolName,
+            agent_name = ResolveAgentName(toolName),
+            input = parameters,
+            trace_id = traceId,
+            message = parameters.TryGetValue("user_message", out var userMessage) ? userMessage?.ToString() : null,
+            metadata = new
             {
                 tool_name = toolName,
-                agent_name = ResolveAgentName(toolName),
-                input = parameters,
                 trace_id = traceId,
-                message = parameters.TryGetValue("user_message", out var userMessage) ? userMessage?.ToString() : null,
-                metadata = new
+                workflow_id = parameters.TryGetValue("workflow_id", out var workflowId) ? workflowId?.ToString() : null
+            }
+        };
+
+        for (var attempt = 1; attempt <= _options.MaxAttempts; attempt++)
+        {
+            using var attemptCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            attemptCancellation.CancelAfter(TimeSpan.FromSeconds(_options.AttemptTimeoutSeconds));
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
                 {
-                    tool_name = toolName,
-                    trace_id = traceId,
-                    workflow_id = parameters.TryGetValue("workflow_id", out var workflowId) ? workflowId?.ToString() : null
+                    Content = JsonContent.Create(payload)
+                };
+
+                if (RequiresFoundryToken(endpoint))
+                {
+                    var token = await _credential.GetTokenAsync(
+                        new TokenRequestContext([_scope]),
+                        attemptCancellation.Token);
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
                 }
-            };
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
-            {
-                Content = JsonContent.Create(payload)
-            };
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                if (parameters.TryGetValue("correlation_id", out var correlationId) &&
+                    correlationId is not null)
+                {
+                    request.Headers.TryAddWithoutValidation(
+                        "x-correlation-id",
+                        correlationId.ToString());
+                }
 
-            if (RequiresFoundryToken(endpoint))
-            {
-                var token = await _credential.GetTokenAsync(new TokenRequestContext(new[] { _scope }), cancellationToken);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+                using var response = await _httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    attemptCancellation.Token);
+                var body = await response.Content.ReadAsStringAsync(attemptCancellation.Token);
+                if (IsTransient(response.StatusCode) && attempt < _options.MaxAttempts)
+                {
+                    await DelayBeforeRetryAsync(
+                        toolName,
+                        attempt,
+                        $"HTTP {(int)response.StatusCode}",
+                        cancellationToken);
+                    continue;
+                }
+
+                return CreateResponseResult(toolName, endpoint, response, body, attempt);
             }
-
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            if (parameters.TryGetValue("correlation_id", out var correlationId) &&
-                correlationId is not null)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                request.Headers.TryAddWithoutValidation(
-                    "x-correlation-id",
-                    correlationId.ToString());
+                throw;
             }
-
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            var parsedResponse = TryParseResponse(body);
-            var (errorCode, errorMessage) = ReadError(parsedResponse);
-            var agentInvocationId = HeaderValue(response, "x-agent-invocation-id");
-            var agentSessionId = HeaderValue(response, "x-agent-session-id");
-            var data = new Dictionary<string, object?>
+            catch (OperationCanceledException ex)
             {
-                ["endpoint"] = endpoint,
-                ["agent_name"] = ResolveAgentName(toolName),
-                ["status_code"] = (int)response.StatusCode,
-                ["response_body"] = body,
-                ["response_json"] = parsedResponse,
-                ["error_code"] = errorCode,
-                ["error_message"] = errorMessage,
-                ["agent_invocation_id"] = agentInvocationId,
-                ["agent_session_id"] = agentSessionId
-            };
+                if (attempt < _options.MaxAttempts)
+                {
+                    await DelayBeforeRetryAsync(
+                        toolName,
+                        attempt,
+                        "attempt timeout",
+                        cancellationToken);
+                    continue;
+                }
 
-            var message = response.IsSuccessStatusCode
-                ? "Foundry adapter invocation completed successfully."
-                : $"Foundry adapter returned HTTP {(int)response.StatusCode}"
-                    + (string.IsNullOrWhiteSpace(errorCode) ? "." : $" ({errorCode}).");
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogError(
-                    "Foundry invocation failed for {ToolName} with HTTP {StatusCode} and error {ErrorCode}. InvocationId={AgentInvocationId}, SessionId={AgentSessionId}",
+                return CreateInvocationErrorResult(
                     toolName,
-                    (int)response.StatusCode,
-                    errorCode,
-                    agentInvocationId,
-                    agentSessionId);
+                    endpoint,
+                    ex,
+                    "timeout",
+                    attempt);
             }
+            catch (HttpRequestException ex)
+            {
+                if (attempt < _options.MaxAttempts)
+                {
+                    await DelayBeforeRetryAsync(
+                        toolName,
+                        attempt,
+                        ex.GetType().Name,
+                        cancellationToken);
+                    continue;
+                }
 
-            return response.IsSuccessStatusCode
-                ? new McpToolResult(toolName, "ok", message, data)
-                : new McpToolResult(toolName, "error", message, data);
+                return CreateInvocationErrorResult(
+                    toolName,
+                    endpoint,
+                    ex,
+                    "transport_error",
+                    attempt);
+            }
+            catch (RequestFailedException ex) when (
+                IsTransient(ex.Status) &&
+                attempt < _options.MaxAttempts)
+            {
+                await DelayBeforeRetryAsync(
+                    toolName,
+                    attempt,
+                    $"Azure HTTP {ex.Status}",
+                    cancellationToken);
+            }
+            catch (AuthenticationFailedException ex)
+            {
+                return CreateInvocationErrorResult(
+                    toolName,
+                    endpoint,
+                    ex,
+                    "authentication_failed",
+                    attempt);
+            }
+            catch (RequestFailedException ex)
+            {
+                return CreateInvocationErrorResult(
+                    toolName,
+                    endpoint,
+                    ex,
+                    "azure_request_failed",
+                    attempt);
+            }
         }
-        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            return CreateInvocationErrorResult(toolName, endpoint, ex);
-        }
-        catch (HttpRequestException ex)
-        {
-            return CreateInvocationErrorResult(toolName, endpoint, ex);
-        }
-        catch (AuthenticationFailedException ex)
-        {
-            return CreateInvocationErrorResult(toolName, endpoint, ex);
-        }
-        catch (RequestFailedException ex)
-        {
-            return CreateInvocationErrorResult(toolName, endpoint, ex);
-        }
+
+        throw new UnreachableException();
     }
 
     private string ResolveEndpoint(string toolName)
@@ -156,6 +220,16 @@ public sealed class FoundryMcpClient : IMcpClient
          uri.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase));
 
     private static string? ReadSetting(string key) => Environment.GetEnvironmentVariable(key);
+
+    private static void ValidateOptions(FoundryMcpClientOptions options)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.MaxAttempts, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.MaxAttempts, 5);
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.AttemptTimeoutSeconds, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.AttemptTimeoutSeconds, 120);
+        ArgumentOutOfRangeException.ThrowIfNegative(options.BaseDelayMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.BaseDelayMilliseconds, 5000);
+    }
 
     private static IReadOnlyDictionary<string, string> ReadToolEndpointMap(string? rawValue)
     {
@@ -221,6 +295,82 @@ public sealed class FoundryMcpClient : IMcpClient
             ? values.FirstOrDefault()
             : null;
 
+    private McpToolResult CreateResponseResult(
+        string toolName,
+        string endpoint,
+        HttpResponseMessage response,
+        string body,
+        int attempt)
+    {
+        var parsedResponse = TryParseResponse(body);
+        var (errorCode, errorMessage) = ReadError(parsedResponse);
+        var agentInvocationId = HeaderValue(response, "x-agent-invocation-id");
+        var agentSessionId = HeaderValue(response, "x-agent-session-id");
+        var data = new Dictionary<string, object?>
+        {
+            ["endpoint"] = endpoint,
+            ["agent_name"] = ResolveAgentName(toolName),
+            ["status_code"] = (int)response.StatusCode,
+            ["response_body"] = body,
+            ["response_json"] = parsedResponse,
+            ["error_code"] = errorCode,
+            ["error_message"] = errorMessage,
+            ["agent_invocation_id"] = agentInvocationId,
+            ["agent_session_id"] = agentSessionId,
+            ["attempts"] = attempt
+        };
+
+        var message = response.IsSuccessStatusCode
+            ? "Foundry adapter invocation completed successfully."
+            : $"Foundry adapter returned HTTP {(int)response.StatusCode}"
+                + (string.IsNullOrWhiteSpace(errorCode) ? "." : $" ({errorCode}).");
+
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogError(
+                "Foundry invocation failed for {ToolName} with HTTP {StatusCode}, error {ErrorCode}, and {Attempts} attempt(s). InvocationId={AgentInvocationId}, SessionId={AgentSessionId}",
+                toolName,
+                (int)response.StatusCode,
+                errorCode,
+                attempt,
+                agentInvocationId,
+                agentSessionId);
+        }
+
+        return response.IsSuccessStatusCode
+            ? new McpToolResult(toolName, "ok", message, data)
+            : new McpToolResult(toolName, "error", message, data);
+    }
+
+    private async Task DelayBeforeRetryAsync(
+        string toolName,
+        int attempt,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        var delay = TimeSpan.FromMilliseconds(
+            _options.BaseDelayMilliseconds * Math.Pow(2, attempt - 1));
+        _logger.LogWarning(
+            "Retrying Foundry tool {ToolName} after {Reason}. Attempt {Attempt} of {MaxAttempts}; delay {DelayMs} ms",
+            toolName,
+            reason,
+            attempt,
+            _options.MaxAttempts,
+            delay.TotalMilliseconds);
+        await Task.Delay(delay, cancellationToken);
+    }
+
+    private static bool IsTransient(HttpStatusCode statusCode) =>
+        statusCode is HttpStatusCode.RequestTimeout
+            or HttpStatusCode.TooManyRequests
+            or HttpStatusCode.InternalServerError
+            or HttpStatusCode.BadGateway
+            or HttpStatusCode.ServiceUnavailable
+            or HttpStatusCode.GatewayTimeout;
+
+    private static bool IsTransient(int statusCode) =>
+        IsTransient((HttpStatusCode)statusCode);
+
     private static McpToolResult CreateFallbackResult(string toolName, IDictionary<string, object?> parameters, string? endpoint)
     {
         return new McpToolResult(
@@ -236,14 +386,25 @@ public sealed class FoundryMcpClient : IMcpClient
             });
     }
 
-    private McpToolResult CreateInvocationErrorResult(string toolName, string endpoint, Exception exception)
+    private McpToolResult CreateInvocationErrorResult(
+        string toolName,
+        string endpoint,
+        Exception exception,
+        string errorCode,
+        int attempts)
     {
-        _logger.LogError(exception, "Foundry adapter invocation failed for {ToolName}", toolName);
+        _logger.LogError(
+            "Foundry adapter invocation failed for {ToolName} with {ErrorType} after {Attempts} attempt(s)",
+            toolName,
+            exception.GetType().Name,
+            attempts);
         return new McpToolResult(toolName, "error", "Agent invocation failed.", new Dictionary<string, object?>
         {
             ["endpoint"] = endpoint,
             ["agent_name"] = ResolveAgentName(toolName),
-            ["error"] = exception.Message
+            ["error_code"] = errorCode,
+            ["error_type"] = exception.GetType().Name,
+            ["attempts"] = attempts
         });
     }
 }

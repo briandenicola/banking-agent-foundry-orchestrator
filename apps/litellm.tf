@@ -37,6 +37,35 @@ resource "azurerm_container_app" "litellm" {
       cpu    = 0.5
       memory = "1Gi"
 
+      startup_probe {
+        transport               = "HTTP"
+        port                    = 4000
+        path                    = "/health/liveliness"
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 30
+      }
+
+      liveness_probe {
+        transport               = "HTTP"
+        port                    = 4000
+        path                    = "/health/liveliness"
+        initial_delay           = 10
+        interval_seconds        = 15
+        timeout                 = 3
+        failure_count_threshold = 3
+      }
+
+      readiness_probe {
+        transport               = "HTTP"
+        port                    = 4000
+        path                    = "/health/readiness"
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }
+
       env {
         name  = "AZURE_API_BASE"
         value = local.foundry_openai_endpoint

@@ -3,26 +3,12 @@ using BankingAgent.Infrastructure.Persistence;
 using BankingAgent.Infrastructure.Persistence.Entities;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using System.Reflection;
-using System.Runtime.InteropServices;
 using Xunit;
 
 namespace BankingAgent.Infrastructure.Tests;
 
 public sealed class EfWorkflowActionRepositoryTests
 {
-    static EfWorkflowActionRepositoryTests()
-    {
-        if (OperatingSystem.IsLinux())
-        {
-            NativeLibrary.SetDllImportResolver(
-                typeof(SQLitePCL.SQLite3Provider_sqlite3).Assembly,
-                ResolveLinuxSqlite);
-        }
-
-        SQLitePCL.raw.SetProvider(new SQLitePCL.SQLite3Provider_sqlite3());
-    }
-
     [Fact]
     public async Task RecordDecisionAsync_ApprovedDispute_PersistsDecisionActionCaseAndEvents()
     {
@@ -198,14 +184,6 @@ public sealed class EfWorkflowActionRepositoryTests
         ApprovalDecision Decision,
         ActionExecution Action,
         SupportCase SupportCase);
-
-    private static IntPtr ResolveLinuxSqlite(
-        string libraryName,
-        Assembly assembly,
-        DllImportSearchPath? searchPath) =>
-        libraryName == "sqlite3"
-            ? NativeLibrary.Load("libsqlite3.so.0", assembly, searchPath)
-            : IntPtr.Zero;
 
     private sealed class TestDatabase : IAsyncDisposable
     {

@@ -5,7 +5,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace BankingAgent.Infrastructure.Persistence;
 
-public sealed class EfWorkflowRepository(BankingAgentDbContext context) : IWorkflowRepository
+public sealed class EfWorkflowRepository(BankingAgentDbContext context)
+    : IWorkflowRepository, IWorkflowRecoveryRepository
 {
     public async Task AddAsync(WorkflowState workflow, CancellationToken cancellationToken = default)
     {
@@ -66,6 +67,96 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context) : IWorkf
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         context.ChangeTracker.Clear();
+    }
+
+    public async Task<WorkflowState?> ClaimNextAsync(
+        DateTimeOffset staleBefore,
+        DateTimeOffset claimedAt,
+        CancellationToken cancellationToken = default)
+    {
+        WorkflowEntity? candidate;
+        if (string.Equals(
+                context.Database.ProviderName,
+                "Microsoft.EntityFrameworkCore.Sqlite",
+                StringComparison.Ordinal))
+        {
+            candidate = (await context.Workflows
+                    .AsNoTracking()
+                    .Include(workflow => workflow.Events)
+                    .Where(workflow =>
+                        workflow.Status == WorkflowStatus.Draft ||
+                        workflow.Status == WorkflowStatus.Recovering)
+                    .ToListAsync(cancellationToken))
+                .Where(workflow => workflow.UpdatedAt <= staleBefore)
+                .OrderBy(workflow => workflow.UpdatedAt)
+                .FirstOrDefault();
+        }
+        else
+        {
+            candidate = await context.Workflows
+                .AsNoTracking()
+                .Include(workflow => workflow.Events)
+                .Where(workflow =>
+                    (workflow.Status == WorkflowStatus.Draft ||
+                     workflow.Status == WorkflowStatus.Recovering) &&
+                    workflow.UpdatedAt <= staleBefore)
+                .OrderBy(workflow => workflow.UpdatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+        if (candidate is null)
+        {
+            return null;
+        }
+
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var affectedRows = await context.Workflows
+            .Where(workflow =>
+                workflow.Id == candidate.Id &&
+                workflow.Version == candidate.Version &&
+                (workflow.Status == WorkflowStatus.Draft ||
+                 workflow.Status == WorkflowStatus.Recovering))
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(workflow => workflow.Status, WorkflowStatus.Recovering)
+                    .SetProperty(workflow => workflow.UpdatedAt, claimedAt)
+                    .SetProperty(workflow => workflow.Version, candidate.Version + 1),
+                cancellationToken);
+        if (affectedRows != 1)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            context.ChangeTracker.Clear();
+            return null;
+        }
+
+        var sequence = candidate.Events.Count;
+        var recoveryEvent = new WorkflowEvent(
+            "workflow.recovery_claimed",
+            "Workflow execution claimed for restart recovery",
+            claimedAt,
+            "system");
+        context.WorkflowEvents.Add(new WorkflowEventEntity
+        {
+            Id = Guid.NewGuid(),
+            WorkflowId = candidate.Id,
+            Sequence = sequence,
+            Type = recoveryEvent.Type,
+            Message = recoveryEvent.Message,
+            Timestamp = recoveryEvent.Timestamp,
+            Actor = recoveryEvent.Actor,
+            Details = recoveryEvent.Details
+        });
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        context.ChangeTracker.Clear();
+
+        var claimed = MapToDomain(candidate);
+        return claimed with
+        {
+            Status = WorkflowStatus.Recovering,
+            UpdatedAt = claimedAt,
+            Events = claimed.Events.Append(recoveryEvent).ToList(),
+            Version = candidate.Version + 1
+        };
     }
 
     private void AddNewEvents(WorkflowState workflow, int existingCount)

@@ -8,7 +8,9 @@ using BankingAgent.Infrastructure.Persistence;
 using BankingAgent.Orchestrator;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using OpenTelemetry.Trace;
@@ -66,6 +68,7 @@ builder.Services.AddDbContext<BankingAgentDbContext>((sp, options) =>
     options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
 
 builder.Services.AddScoped<IWorkflowRepository, EfWorkflowRepository>();
+builder.Services.AddScoped<IWorkflowRecoveryRepository, EfWorkflowRepository>();
 builder.Services.AddScoped<IWorkflowActionRepository, EfWorkflowActionRepository>();
 builder.Services.AddScoped<IWorkflowEvidenceRepository, EfWorkflowEvidenceRepository>();
 builder.Services.AddScoped<IWorkflowEvidenceService, WorkflowEvidenceService>();
@@ -126,8 +129,37 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddBankingAgentProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.Configure<FoundryMcpClientOptions>(options =>
+{
+    options.DefaultEndpoint = builder.Configuration["FOUNDRY_AGENT_ENDPOINT"];
+    options.AgentName = builder.Configuration["FOUNDRY_AGENT_NAME"];
+    options.Scope = builder.Configuration["FOUNDRY_SCOPE"] ?? "https://ai.azure.com/.default";
+    options.ToolEndpointsJson = builder.Configuration["FOUNDRY_TOOL_ENDPOINTS"];
+    options.MaxAttempts = builder.Configuration.GetValue("FOUNDRY_MAX_ATTEMPTS", 3);
+    options.AttemptTimeoutSeconds =
+        builder.Configuration.GetValue("FOUNDRY_ATTEMPT_TIMEOUT_SECONDS", 30);
+    options.BaseDelayMilliseconds =
+        builder.Configuration.GetValue("FOUNDRY_RETRY_BASE_DELAY_MILLISECONDS", 250);
+});
 builder.Services.AddHttpClient<IMcpClient, FoundryMcpClient>();
 builder.Services.AddScoped<IWorkflowService, WorkflowService>();
+builder.Services.Configure<WorkflowRecoveryOptions>(options =>
+{
+    options.ScanIntervalSeconds =
+        builder.Configuration.GetValue("WORKFLOW_RECOVERY_SCAN_INTERVAL_SECONDS", 30);
+    options.StaleAfterSeconds =
+        builder.Configuration.GetValue("WORKFLOW_RECOVERY_STALE_AFTER_SECONDS", 120);
+    options.BatchSize =
+        builder.Configuration.GetValue("WORKFLOW_RECOVERY_BATCH_SIZE", 10);
+});
+builder.Services.AddHostedService<WorkflowRecoveryWorker>();
+builder.Services.AddHealthChecks()
+    .AddCheck<PostgreSqlReadinessCheck>(
+        "postgresql",
+        tags: ["ready"])
+    .AddCheck<FoundryConfigurationReadinessCheck>(
+        "foundry_configuration",
+        tags: ["ready"]);
 
 // -----------------------------------------------------------------------
 // Observability
@@ -169,6 +201,14 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false
+});
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready")
+});
 app.MapWorkflowEndpoints();
 
 app.Run();

@@ -3,6 +3,7 @@ namespace BankingAgent.Domain;
 public enum WorkflowStatus
 {
     Draft,
+    Recovering,
     WaitingForApproval,
     Approved,
     Rejected,

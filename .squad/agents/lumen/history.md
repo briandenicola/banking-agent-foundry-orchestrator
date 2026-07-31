@@ -91,3 +91,58 @@ correctly on `eastus` and that the password is redacted in plan output.
 - The upstream `ghcr.io/berriai/litellm:main-stable` image runs as root and has
   no named non-root user; forced `USER 1000` with `HOME=/tmp` for cache writes.
   Needs a smoke test.
+
+### 2026-07-30 — Workstream 2 Phase A: Entra service-to-service auth
+
+**What was implemented (non-colliding, Theo-independent):**
+
+**Terraform (`apps/`):**
+
+| File | Change |
+|------|--------|
+| `providers.tf` | Added `hashicorp/azuread ~> 3.0` provider; installed as v3.9.0 |
+| `references.tf` | Added `data "azurerm_client_config" "current" {}` for tenant_id |
+| `entra.tf` | New file: `azuread_application` (Workflow.Invoke app role), `azuread_application_identifier_uri` (api://{client_id}), `azuread_service_principal`, `azuread_app_role_assignment` for webui UAI |
+| `webui.tf` | Added `AZURE_CLIENT_ID` (webui identity client_id) + `ORCHESTRATOR_TOKEN_SCOPE` env vars; added `azuread_app_role_assignment.webui_workflow_invoke` to `depends_on` |
+| `orchestrator.tf` | Added `AZURE_TENANT_ID` (from client config) + `ORCHESTRATOR_APP_ID` (Entra app client_id) env vars |
+| `outputs.tf` | Added `ORCHESTRATOR_TOKEN_SCOPE` output for smoke tests |
+
+**Web UI (`src/webui/`):**
+
+| File | Change |
+|------|--------|
+| `webui.csproj` | Added `Azure.Identity 1.21.0` (matches database-migrator/infrastructure versions) |
+| `OrchestratorTokenHandler.cs` | New global-namespace `DelegatingHandler`; calls `credential.GetTokenAsync` per request; attaches `Authorization: Bearer` |
+| `Program.cs` | Uses `ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(...))` when `AZURE_CLIENT_ID` set (production); falls back to `DefaultAzureCredential` for dev. Registers handler conditionally when `ORCHESTRATOR_TOKEN_SCOPE` is set. |
+
+**Validation:**
+- `terraform fmt -recursive` → no changes
+- `terraform init -backend=false` → `azuread v3.9.0` installed, lock file updated
+- `terraform validate` → `Success! The configuration is valid.`
+- `dotnet build -c Release` → 0 warnings, 0 errors
+
+**Key Terraform patterns learned:**
+- `azuread_application_identifier_uri` as a separate resource avoids the self-reference problem when `identifier_uris = ["api://{client_id}"]` — `client_id` is a computed attribute and can't appear in the same `azuread_application` block.
+- `azuread_application` + `azuread_service_principal` must both be explicitly created; Terraform's `azuread_application` does NOT auto-create the service principal.
+- App role `id` must be a stable hardcoded UUID — do not use `random_uuid` just to avoid adding a provider for one value.
+- `azuread ~> 3.0` (v3.9.0 resolved) installs cleanly alongside `azurerm ~> 4.0` and `azapi ~> 2.0`.
+
+**Orchestrator JWT integration (NOT implemented — Theo goes first):**
+
+See `decisions/inbox/lumen-service-auth.md` for the exact follow-up spec.
+
+**Env vars / config names the orchestrator Program.cs will consume:**
+- `AZURE_TENANT_ID` — Entra tenant ID (injected by Terraform)
+- `ORCHESTRATOR_APP_ID` — the Entra app's client_id (injected by Terraform, used as JWT audience)
+
+**Required orchestrator changes (after Theo):**
+1. `orchestrator.csproj`: add `Microsoft.Identity.Web` (e.g. `1.25.*`)
+2. `Program.cs` service registration:
+   ```csharp
+   builder.Services
+       .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+       .AddMicrosoftIdentityWebApi(builder.Configuration, jwtBearerScheme: JwtBearerDefaults.AuthenticationScheme);
+   ```
+   Configure via `AzureAd__TenantId` = `AZURE_TENANT_ID` and `AzureAd__ClientId` = `ORCHESTRATOR_APP_ID`.
+3. `Program.cs` middleware: add `app.UseAuthentication();` before `app.UseAuthorization();`
+4. `WorkflowEndpoints.cs`: add `.RequireAuthorization()` to the workflow endpoint group; health check stays open.

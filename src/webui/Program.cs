@@ -3,6 +3,7 @@ using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using BankingAgent.WebUi;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
 using OpenTelemetry.Trace;
 
@@ -19,6 +20,14 @@ if (!Uri.TryCreate(orchestratorApiBaseUrl, UriKind.Absolute, out var orchestrato
 
 builder.Services.AddRazorPages();
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient("orchestrator-health", client =>
+{
+    client.BaseAddress = orchestratorApiBaseUri;
+});
+builder.Services.AddHealthChecks()
+    .AddCheck<OrchestratorReadinessCheck>(
+        "orchestrator",
+        tags: ["ready"]);
 builder.Services.AddTransient<CorrelationIdHandler>();
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
@@ -102,5 +111,13 @@ app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthorization();
 app.MapRazorPages();
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false
+});
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready")
+});
 
 app.Run();

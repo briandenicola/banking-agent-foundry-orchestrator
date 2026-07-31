@@ -1,0 +1,46 @@
+{
+  "agents": {
+    "lead-architect": {
+      "persistent_name": "Aria",
+      "universe": "legacy",
+      "created_at": "2026-07-29T00:00:00Z",
+      "legacy_named": true,
+      "status": "active"
+    },
+    "backend-engineer": {
+      "persistent_name": "Theo",
+      "universe": "legacy",
+      "created_at": "2026-07-29T00:00:00Z",
+      "legacy_named": true,
+      "status": "active"
+    },
+    "ai-platform-engineer": {
+      "persistent_name": "Lumen",
+      "universe": "legacy",
+      "created_at": "2026-07-29T00:00:00Z",
+      "legacy_named": true,
+      "status": "active"
+    },
+    "qa-devops-engineer": {
+      "persistent_name": "Nia",
+      "universe": "legacy",
+      "created_at": "2026-07-29T00:00:00Z",
+      "legacy_named": true,
+      "status": "active"
+    },
+    "scribe": {
+      "persistent_name": "Scribe",
+      "universe": "exempt",
+      "created_at": "2026-07-29T00:00:00Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "ralph": {
+      "persistent_name": "Ralph",
+      "universe": "exempt",
+      "created_at": "2026-07-29T00:00:00Z",
+      "legacy_named": false,
+      "status": "active"
+    }
+  }
+}

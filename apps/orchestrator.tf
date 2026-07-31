@@ -37,6 +37,35 @@ resource "azurerm_container_app" "orchestrator" {
       cpu    = 0.5
       memory = "1Gi"
 
+      startup_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health/live"
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 30
+      }
+
+      liveness_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health/live"
+        initial_delay           = 10
+        interval_seconds        = 15
+        timeout                 = 3
+        failure_count_threshold = 3
+      }
+
+      readiness_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health/ready"
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }
+
       env {
         name  = "ASPNETCORE_URLS"
         value = "http://+:8080"
@@ -85,6 +114,36 @@ resource "azurerm_container_app" "orchestrator" {
       env {
         name  = "FOUNDRY_TOOL_ENDPOINTS"
         value = local.foundry_tool_endpoints
+      }
+
+      env {
+        name  = "FOUNDRY_MAX_ATTEMPTS"
+        value = "3"
+      }
+
+      env {
+        name  = "FOUNDRY_ATTEMPT_TIMEOUT_SECONDS"
+        value = "30"
+      }
+
+      env {
+        name  = "FOUNDRY_RETRY_BASE_DELAY_MILLISECONDS"
+        value = "250"
+      }
+
+      env {
+        name  = "WORKFLOW_RECOVERY_SCAN_INTERVAL_SECONDS"
+        value = "30"
+      }
+
+      env {
+        name  = "WORKFLOW_RECOVERY_STALE_AFTER_SECONDS"
+        value = "120"
+      }
+
+      env {
+        name  = "WORKFLOW_RECOVERY_BATCH_SIZE"
+        value = "10"
       }
 
       env {

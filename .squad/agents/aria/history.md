@@ -37,3 +37,15 @@ Description: A banking agent prototype where a C# orchestrator uses Microsoft Ag
 - LiteLLM routing (Phase 2): When does orchestrator call LiteLLM vs. Foundry agents directly? Document decision in ADR.
 - HorizonDB schema (Phase 2): Exact storage of WorkflowState and AuditEvent; pagination and query patterns.
 - Multi-agent coordination (Phase 2+): How do multiple MCP tools orchestrate? Dependency ordering? Branching workflows?
+
+## P0 Design Review — Durable Persistence & Entra Service Auth (2026-07-30)
+
+### Learnings
+- The existing `IWorkflowRepository` and `IWorkflowActionRepository` interfaces are already well-designed for EF implementation — no interface changes needed. The `expectedVersion` parameter aligns perfectly with EF's `IsConcurrencyToken()` on `Version`.
+- `WorkflowService` uses `ConcurrentDictionary` as a singleton; switching to scoped EF requires changing the DI lifetime from `AddSingleton` to `AddScoped`. This is a subtle but critical change — the FoundryMcpClient is registered via `AddHttpClient` (transient) so it stays compatible.
+- The database-migrator already establishes the Entra token pattern for PostgreSQL (`ManagedIdentityCredential` + `https://ossrdbms-aad.database.windows.net/.default`). The orchestrator should use the same pattern but via `NpgsqlDataSourceBuilder.UsePeriodicPasswordProvider` for automatic token refresh.
+- Service-to-service auth between webui and orchestrator requires app roles (not delegated scopes) because managed identities use client credentials flow. The `roles` claim in the JWT carries the app role, not `scp`.
+- The `apps/providers.tf` does not currently include `azuread` provider or `data.azurerm_client_config.current` — both must be added for Entra app registration Terraform.
+- `smoke-mvp.py` already has `ORCHESTRATOR_TOKEN_SCOPE` support and authentication baseline checking, so minimal smoke test changes are needed. The main gap is adding `ORCHESTRATOR_TOKEN_SCOPE` as a Terraform output.
+- Both Theo and Lumen touch `src/orchestrator/Program.cs` — Theo for persistence composition, Lumen for auth middleware. The insertion points are structurally separate (service registration vs. middleware pipeline), but Theo must go first to avoid merge conflicts.
+- The `cloud:down` task in `Taskfile.cloud.yml` is off-limits for modification; auth teardown must rely on Terraform's own `destroy` path.

@@ -10,6 +10,7 @@ public interface IWorkflowService
 {
     Task<WorkflowState> StartAsync(string userMessage, CancellationToken cancellationToken = default);
     Task<WorkflowState> StartDemoAsync(string scenarioId, CancellationToken cancellationToken = default);
+    Task<WorkflowState> RecoverAsync(Guid workflowId, CancellationToken cancellationToken = default);
     Task<WorkflowState> ApproveAsync(Guid workflowId, string decision, string reason, CancellationToken cancellationToken = default);
     Task<WorkflowState?> GetAsync(Guid workflowId, CancellationToken cancellationToken = default);
     Task<SupportCase?> GetSupportCaseAsync(Guid workflowId, CancellationToken cancellationToken = default);
@@ -76,7 +77,6 @@ public sealed class WorkflowService : IWorkflowService
         workflowActivity?.SetTag("workflow.trace_id", traceId);
         workflowActivity?.SetTag("workflow.operation", "start");
         workflowActivity?.SetTag("demo.scenario", demoScenario?.Id);
-        var startedAt = Stopwatch.GetTimestamp();
         var createdAt = DateTimeOffset.UtcNow;
         var initialEvents = new List<WorkflowEvent>
         {
@@ -89,7 +89,7 @@ public sealed class WorkflowService : IWorkflowService
                 $"Demo scenario: {demoScenario.Title}",
                 createdAt,
                 "system",
-                $"Expected initial status: {demoScenario.ExpectedInitialStatus}; expected decision: {demoScenario.ExpectedDecision ?? "none"}"));
+                demoScenario.Id));
         }
 
         // Phase 1 — persist draft before invoking any agent.
@@ -108,7 +108,64 @@ public sealed class WorkflowService : IWorkflowService
             Version: 0);
 
         await AddWorkflowAsync(draftState, cancellationToken);
-        var current = draftState;
+        return await ExecuteRoutingAsync(draftState, demoScenario, cancellationToken);
+    }
+
+    public async Task<WorkflowState> RecoverAsync(
+        Guid workflowId,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await GetWorkflowAsync(workflowId, cancellationToken)
+            ?? throw new WorkflowNotFoundException(workflowId);
+        if (current.Status != WorkflowStatus.Recovering)
+        {
+            throw new InvalidTransitionException(
+                workflowId,
+                current.Status,
+                WorkflowStatus.Recovering.ToString());
+        }
+
+        var scenarioId = current.Events
+            .LastOrDefault(workflowEvent => workflowEvent.Type == "workflow.demo_scenario")
+            ?.Details;
+        DemoScenarioDefinition? demoScenario = null;
+        if (!string.IsNullOrWhiteSpace(scenarioId))
+        {
+            DemoScenarioCatalog.TryGet(scenarioId, out demoScenario);
+        }
+
+        using var recoveryActivity = WorkflowTelemetry.StartActivity(
+            "workflow.recovery",
+            current.Id,
+            current.TraceId);
+        recoveryActivity?.SetTag("workflow.operation", "recover");
+        recoveryActivity?.SetTag("demo.scenario", demoScenario?.Id);
+        try
+        {
+            var recovered = await ExecuteRoutingAsync(
+                current,
+                demoScenario,
+                cancellationToken);
+            WorkflowTelemetry.RecordSuccess(recoveryActivity, recovered.Status.ToString());
+            return recovered;
+        }
+        catch (Exception ex)
+        {
+            WorkflowTelemetry.RecordFailure(recoveryActivity, ex);
+            throw;
+        }
+    }
+
+    private async Task<WorkflowState> ExecuteRoutingAsync(
+        WorkflowState initialState,
+        DemoScenarioDefinition? demoScenario,
+        CancellationToken cancellationToken)
+    {
+        var current = initialState;
+        var workflowId = current.Id;
+        var traceId = current.TraceId;
+        var userMessage = current.UserMessage;
+        var startedAt = Stopwatch.GetTimestamp();
 
         // Phase 2 — planner agent.
         var plannerParameters = new Dictionary<string, object?>
@@ -268,7 +325,7 @@ public sealed class WorkflowService : IWorkflowService
         };
 
         await UpdateWorkflowAsync(finalState, current.Version, cancellationToken);
-        WorkflowTelemetry.RecordSuccess(workflowActivity, finalState.Status.ToString());
+        WorkflowTelemetry.RecordSuccess(Activity.Current, finalState.Status.ToString());
 
         _logger.LogInformation(
             "Workflow {WorkflowId} completed routing for trace {TraceId} with status {Status}, specialist {Specialist}, and duration {DurationMs} ms",

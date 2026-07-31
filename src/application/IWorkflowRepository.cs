@@ -33,6 +33,14 @@ public interface IWorkflowActionRepository
         CancellationToken cancellationToken = default);
 }
 
+public interface IWorkflowRecoveryRepository
+{
+    Task<WorkflowState?> ClaimNextAsync(
+        DateTimeOffset staleBefore,
+        DateTimeOffset claimedAt,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IWorkflowEvidenceRepository
 {
     Task<IReadOnlyList<WorkflowEvidence>> ListAsync(

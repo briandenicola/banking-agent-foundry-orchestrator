@@ -37,6 +37,35 @@ resource "azurerm_container_app" "webui" {
       cpu    = 0.5
       memory = "1Gi"
 
+      startup_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health/live"
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 30
+      }
+
+      liveness_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health/live"
+        initial_delay           = 10
+        interval_seconds        = 15
+        timeout                 = 3
+        failure_count_threshold = 3
+      }
+
+      readiness_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health/ready"
+        interval_seconds        = 10
+        timeout                 = 6
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }
+
       env {
         name  = "ASPNETCORE_URLS"
         value = "http://+:8080"

@@ -243,15 +243,85 @@ def expect_status(actual: int, expected: int, body: dict[str, Any]) -> None:
 
 
 def check_health(orchestrator_url: str, timeout: int) -> dict[str, Any]:
-    status, body = request_json(
-        "GET",
-        f"{orchestrator_url}/health",
-        timeout=timeout,
+    endpoints = {
+        "liveness": f"{orchestrator_url}/health/live",
+        "readiness": f"{orchestrator_url}/health/ready",
+    }
+    statuses: dict[str, int] = {}
+    for name, url in endpoints.items():
+        request = Request(
+            url,
+            headers={"User-Agent": "banking-agent-mvp-smoke/1.0"},
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                response.read()
+                statuses[name] = response.status
+        except HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            raise SmokeFailure(
+                f"Orchestrator {name} returned HTTP {error.code}: {body}"
+            ) from error
+    return statuses
+
+
+def check_webui_readiness(webui_url: str, timeout: int) -> dict[str, Any]:
+    request = Request(
+        f"{webui_url}/health/ready",
+        headers={"User-Agent": "banking-agent-mvp-smoke/1.0"},
+        method="GET",
     )
-    expect_status(status, 200, body)
-    if body.get("status") != "ok":
-        raise SmokeFailure(f"Unexpected health response: {body}")
-    return {"http_status": status, "service_status": body["status"]}
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            response.read()
+            return {"readiness": response.status}
+    except HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise SmokeFailure(
+            f"Web UI readiness returned HTTP {error.code}: {body}"
+        ) from error
+
+
+def check_container_app_revisions(
+    resource_group: str,
+    app_urls: tuple[str, ...],
+) -> dict[str, Any]:
+    revisions: dict[str, Any] = {}
+    for app_url in app_urls:
+        hostname = urlparse(app_url).hostname
+        if not hostname:
+            raise SmokeFailure(f"Unable to derive Container App name from {app_url}.")
+        app_name = hostname.split(".", 1)[0]
+        result = subprocess.run(
+            [
+                "az",
+                "containerapp",
+                "show",
+                "--name",
+                app_name,
+                "--resource-group",
+                resource_group,
+                "--query",
+                "{latestRevisionName:properties.latestRevisionName,"
+                "latestReadyRevisionName:properties.latestReadyRevisionName,"
+                "runningStatus:properties.runningStatus}",
+                "--output",
+                "json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        revision = json.loads(result.stdout)
+        if (
+            revision.get("latestRevisionName")
+            != revision.get("latestReadyRevisionName")
+            or revision.get("runningStatus") != "Running"
+        ):
+            raise SmokeFailure(f"Container App {app_name} is not ready: {revision}")
+        revisions[app_name] = revision
+    return revisions
 
 
 def check_webui(webui_url: str, timeout: int) -> dict[str, Any]:
@@ -726,6 +796,14 @@ def main() -> int:
 
     checks = [
         run_check("orchestrator-health", lambda: check_health(orchestrator_url, args.timeout)),
+        run_check("webui-readiness", lambda: check_webui_readiness(webui_url, args.timeout)),
+        run_check(
+            "container-app-revisions",
+            lambda: check_container_app_revisions(
+                resource_group,
+                (orchestrator_url, webui_url),
+            ),
+        ),
         run_check("webui-form", lambda: check_webui(webui_url, args.timeout)),
         run_check("foundry-hosted-agents", lambda: check_agents(foundry_endpoint, args.timeout)),
         run_check(

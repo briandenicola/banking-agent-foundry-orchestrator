@@ -82,7 +82,7 @@ task app:init
 task app:apply -- swedencentral
 ```
 
-This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, and the manual database migration and Hosted Agent deployment jobs. For the MVP, the web UI runs one replica and keeps ASP.NET Data Protection keys in local container storage because subscription policy disables public Storage access. Replacing the web UI replica invalidates existing antiforgery cookies.
+This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, and the manual database migration and Hosted Agent deployment jobs. For the MVP, the web UI runs one replica and keeps ASP.NET Data Protection keys in local container storage because subscription policy disables public Storage access. Any web UI restart, redeployment, revision replacement, or replica replacement invalidates existing antiforgery cookies; users must refresh the page before resubmitting a form.
 
 Service-to-service API authentication is disabled by default so deployment does not require Entra directory administration. To enable it in a tenant where the deployer has suitable directory permissions, set `TF_VAR_enable_service_auth=true` before planning and applying the `apps/` stack.
 
@@ -150,7 +150,7 @@ Run the deployed MVP smoke checks after the job succeeds:
 task app:smoke
 ```
 
-The smoke runner verifies the web UI form, orchestrator health, all four Hosted Agents, informational and approval-required routing, and an approval transition. It emits machine-readable JSON and returns a nonzero exit code when a check fails.
+The smoke runner verifies orchestrator and web UI readiness, current Container Apps revisions, the web UI form, all four Hosted Agents, informational and approval-required routing, and an approval transition. It emits machine-readable JSON and returns a nonzero exit code when a check fails.
 
 ## Complete deployment shortcut
 

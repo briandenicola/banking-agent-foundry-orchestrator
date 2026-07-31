@@ -1,9 +1,9 @@
 ---
-updated_at: 2026-07-29T12:30:00Z
-focus_area: Terraform infrastructure refactor and Azure deployment scaffolding
+updated_at: 2026-07-30T18:50:04Z
+focus_area: Durable workflow persistence and Entra service-to-service authentication
 active_issues: []
 ---
 
 # What We're Focused On
 
-Refactoring the Terraform deployment layout to a convention-based repository-level infra structure and making the cloud deployment path work with only the Azure region as configuration.
+Implementing the next two P0 MVP workstreams: EF-backed durable workflow state/events and managed-identity app-role authentication between the Web UI and orchestrator.
