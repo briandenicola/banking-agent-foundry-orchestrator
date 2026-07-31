@@ -65,3 +65,13 @@ public sealed record SupportCase(
     string Summary,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+
+public sealed record WorkflowEvidence(
+    Guid Id,
+    Guid WorkflowId,
+    string FileName,
+    string ContentType,
+    long Length,
+    string Sha256,
+    byte[] Content,
+    DateTimeOffset UploadedAt);

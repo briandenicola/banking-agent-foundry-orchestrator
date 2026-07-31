@@ -34,3 +34,18 @@ public sealed class InvalidTransitionException(Guid workflowId, WorkflowStatus c
     public WorkflowStatus CurrentStatus { get; } = currentStatus;
     public string RequiredStatus { get; } = requiredStatus;
 }
+
+public sealed class EvidenceValidationException(string message) : WorkflowConflictException(message);
+
+public sealed class EvidenceNotAllowedException(Guid workflowId)
+    : WorkflowConflictException($"Workflow {workflowId} does not accept dispute evidence.")
+{
+    public Guid WorkflowId { get; } = workflowId;
+}
+
+public sealed class EvidenceNotFoundException(Guid workflowId, Guid evidenceId)
+    : Exception($"Evidence {evidenceId} does not exist for workflow {workflowId}.")
+{
+    public Guid WorkflowId { get; } = workflowId;
+    public Guid EvidenceId { get; } = evidenceId;
+}

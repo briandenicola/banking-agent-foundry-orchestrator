@@ -64,7 +64,19 @@ public class IndexModel : PageModel
                 return Page();
             }
 
-            StatusMessage = "Workflow submitted successfully.";
+            if (Input.EvidenceFiles.Count > 0)
+            {
+                var uploadError = await UploadEvidenceAsync(workflow.WorkflowId, Input.EvidenceFiles);
+                if (uploadError is not null)
+                {
+                    ErrorMessage = uploadError;
+                    return RedirectToPage(new { workflowId = workflow.WorkflowId });
+                }
+            }
+
+            StatusMessage = Input.EvidenceFiles.Count > 0
+                ? "Workflow submitted successfully with supporting evidence."
+                : "Workflow submitted successfully.";
             return RedirectToPage(new { workflowId = workflow.WorkflowId });
         }
         catch (HttpRequestException exception)
@@ -128,6 +140,36 @@ public class IndexModel : PageModel
         }
     }
 
+    public async Task<IActionResult> OnGetEvidenceAsync(Guid workflowId, Guid evidenceId)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync(
+                $"/api/v1/workflows/{workflowId}/evidence/{evidenceId}");
+            if (!response.IsSuccessStatusCode)
+            {
+                return NotFound();
+            }
+
+            var content = await response.Content.ReadAsByteArrayAsync();
+            var contentType = response.Content.Headers.ContentType?.MediaType
+                ?? "application/octet-stream";
+            var fileName = response.Content.Headers.ContentDisposition?.FileNameStar
+                ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"')
+                ?? "evidence";
+            return File(content, contentType, fileName);
+        }
+        catch (HttpRequestException exception)
+        {
+            _logger.LogError(
+                exception,
+                "Evidence {EvidenceId} for workflow {WorkflowId} could not be loaded",
+                evidenceId,
+                workflowId);
+            return NotFound();
+        }
+    }
+
     private async Task LoadWorkflowAsync(Guid workflowId)
     {
         try
@@ -172,10 +214,43 @@ public class IndexModel : PageModel
         }
     }
 
+    private async Task<string?> UploadEvidenceAsync(
+        Guid workflowId,
+        IReadOnlyList<IFormFile> files)
+    {
+        if (files.Count > 5)
+        {
+            return "Select no more than five evidence files.";
+        }
+
+        using var form = new MultipartFormDataContent();
+        foreach (var file in files)
+        {
+            if (file.Length > 10 * 1024 * 1024)
+            {
+                return $"{file.FileName} is larger than 10 MB.";
+            }
+
+            var content = new StreamContent(file.OpenReadStream());
+            content.Headers.ContentType = new(file.ContentType);
+            form.Add(content, "files", file.FileName);
+        }
+
+        var response = await _httpClient.PostAsync(
+            $"/api/v1/workflows/{workflowId}/evidence",
+            form);
+        return response.IsSuccessStatusCode
+            ? null
+            : await ReadFailureAsync(response, "The evidence files could not be uploaded.");
+    }
+
     public sealed class InputModel
     {
         [BindProperty]
         public string? UserMessage { get; set; }
+
+        [BindProperty]
+        public List<IFormFile> EvidenceFiles { get; set; } = [];
     }
 
     public sealed class ApprovalInputModel
@@ -204,6 +279,14 @@ public class IndexModel : PageModel
         DateTimeOffset CreatedAt,
         DateTimeOffset UpdatedAt);
 
+    public sealed record WorkflowEvidenceResponse(
+        Guid Id,
+        string FileName,
+        string ContentType,
+        long Length,
+        string Sha256,
+        DateTimeOffset UploadedAt);
+
     public sealed record WorkflowDetailResponse(
         Guid WorkflowId,
         string TraceId,
@@ -217,7 +300,8 @@ public class IndexModel : PageModel
         DateTimeOffset UpdatedAt,
         long Version,
         IReadOnlyList<WorkflowEventResponse> Events,
-        SupportCaseResponse? SupportCase);
+        SupportCaseResponse? SupportCase,
+        IReadOnlyList<WorkflowEvidenceResponse> Evidence);
 
     private sealed record ProblemResponse(string? Title);
 }

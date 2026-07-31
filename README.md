@@ -92,6 +92,11 @@ task app:migrate
 
 The job applies EF Core migrations and grants the orchestrator managed identity runtime-only access to the application tables. Database schema administration remains isolated from the orchestrator.
 
+Dispute workflows can include up to five supporting PDF, PNG, JPG, or JPEG files of
+10 MB each. Evidence content, validated metadata, and SHA-256 hashes are stored in
+PostgreSQL with the workflow rather than Azure Storage, avoiding public-network
+storage dependencies. Uploaded evidence is available from the durable workflow view.
+
 Review the Terraform plan before applying when changing infrastructure:
 
 ```bash

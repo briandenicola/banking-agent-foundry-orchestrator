@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -278,6 +279,7 @@ def submit_webui_workflow(
     webui_url: str,
     message: str,
     timeout: int,
+    evidence: tuple[str, str, bytes] | None = None,
 ) -> tuple[dict[str, str], str]:
     with opener.open(webui_url, timeout=timeout) as response:
         page = response.read().decode("utf-8")
@@ -288,16 +290,26 @@ def submit_webui_workflow(
     if token_match is None:
         raise SmokeFailure("Web UI did not render an antiforgery token.")
 
-    form = urlencode(
-        {
+    fields = {
             "Input.UserMessage": message,
             "__RequestVerificationToken": token_match.group(1),
-        }
-    ).encode("utf-8")
+    }
+    if evidence is None:
+        form = urlencode(fields).encode("utf-8")
+        content_type = "application/x-www-form-urlencoded"
+    else:
+        boundary = f"banking-agent-smoke-{uuid.uuid4().hex}"
+        form = encode_multipart(
+            fields,
+            [("Input.EvidenceFiles", evidence[0], evidence[1], evidence[2])],
+            boundary,
+        )
+        content_type = f"multipart/form-data; boundary={boundary}"
+
     request = Request(
         webui_url,
         data=form,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        headers={"Content-Type": content_type},
         method="POST",
     )
     try:
@@ -305,7 +317,7 @@ def submit_webui_workflow(
             submitted_page = response.read().decode("utf-8")
             if response.status != 200:
                 raise SmokeFailure(f"Web UI form returned HTTP {response.status}.")
-            if "Workflow submitted successfully." not in submitted_page:
+            if "Workflow submitted successfully" not in submitted_page:
                 raise SmokeFailure("Web UI did not display a successful workflow submission.")
     except HTTPError as error:
         response_body = error.read().decode("utf-8", errors="replace")
@@ -314,6 +326,31 @@ def submit_webui_workflow(
         ) from error
 
     return parse_webui_workflow(submitted_page), submitted_page
+
+
+def encode_multipart(
+    fields: dict[str, str],
+    files: list[tuple[str, str, str, bytes]],
+    boundary: str,
+) -> bytes:
+    body = bytearray()
+    for name, value in fields.items():
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+        body.extend(value.encode())
+        body.extend(b"\r\n")
+
+    for field_name, file_name, content_type, content in files:
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{file_name}"\r\n'.encode()
+        )
+        body.extend(f"Content-Type: {content_type}\r\n\r\n".encode())
+        body.extend(content)
+        body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}--\r\n".encode())
+    return bytes(body)
 
 
 def parse_webui_workflow(page: str) -> dict[str, str]:
@@ -538,13 +575,26 @@ def check_workflows_via_webui(webui_url: str, timeout: int) -> dict[str, Any]:
     pages: dict[str, str] = {}
 
     for name, message, expected_status in scenarios:
-        workflow, page = submit_webui_workflow(opener, webui_url, message, timeout)
+        evidence = (
+            "smoke-evidence.png",
+            "image/png",
+            b"\x89PNG\r\n\x1a\nsmoke",
+        ) if name == "dispute" else None
+        workflow, page = submit_webui_workflow(
+            opener,
+            webui_url,
+            message,
+            timeout,
+            evidence,
+        )
         if workflow["status"] != expected_status:
             raise SmokeFailure(
                 f"Scenario {name} expected {expected_status}, received {workflow['status']}."
             )
         results[name] = workflow
         pages[name] = page
+        if evidence is not None and evidence[0] not in page:
+            raise SmokeFailure("Uploaded dispute evidence was not displayed by the Web UI.")
 
     dispute = results["dispute"]
     approval = approve_webui_workflow(

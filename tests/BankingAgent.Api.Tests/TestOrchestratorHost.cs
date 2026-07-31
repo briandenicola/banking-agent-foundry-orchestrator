@@ -35,7 +35,9 @@ public sealed class TestOrchestratorHost : IDisposable
     private readonly IHost _host;
     private bool _disposed;
 
-    public TestOrchestratorHost(Mock<IWorkflowService> workflowServiceMock)
+    public TestOrchestratorHost(
+        Mock<IWorkflowService> workflowServiceMock,
+        Mock<IWorkflowEvidenceService>? evidenceServiceMock = null)
     {
         _host = new HostBuilder()
             .ConfigureWebHost(webHost =>
@@ -43,7 +45,10 @@ public sealed class TestOrchestratorHost : IDisposable
                 webHost.UseTestServer();
                 webHost.Configure(ConfigurePipeline);
                 webHost.ConfigureServices(services =>
-                    ConfigureServices(services, workflowServiceMock));
+                    ConfigureServices(
+                        services,
+                        workflowServiceMock,
+                        evidenceServiceMock ?? CreateEvidenceServiceMock()));
             })
             .Build();
 
@@ -81,11 +86,13 @@ public sealed class TestOrchestratorHost : IDisposable
 
     private static void ConfigureServices(
         IServiceCollection services,
-        Mock<IWorkflowService> workflowServiceMock)
+        Mock<IWorkflowService> workflowServiceMock,
+        Mock<IWorkflowEvidenceService> evidenceService)
     {
         services.AddRouting();
         services.AddProblemDetails();
         services.AddSingleton(workflowServiceMock.Object);
+        services.AddSingleton(evidenceService.Object);
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SigningKeySecret));
 
@@ -111,6 +118,17 @@ public sealed class TestOrchestratorHost : IDisposable
             options.AddPolicy("WorkflowInvoke", policy =>
                 policy.RequireRole(WorkflowInvokeRole));
         });
+    }
+
+    private static Mock<IWorkflowEvidenceService> CreateEvidenceServiceMock()
+    {
+        var evidenceService = new Mock<IWorkflowEvidenceService>(MockBehavior.Loose);
+        evidenceService
+            .Setup(service => service.ListAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        return evidenceService;
     }
 
     private static void ConfigurePipeline(IApplicationBuilder app)

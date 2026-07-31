@@ -12,6 +12,7 @@ public sealed class BankingAgentDbContext(DbContextOptions<BankingAgentDbContext
     public DbSet<ActionExecutionEntity> ActionExecutions => Set<ActionExecutionEntity>();
     public DbSet<SupportCaseEntity> SupportCases => Set<SupportCaseEntity>();
     public DbSet<DemoTransactionEntity> DemoTransactions => Set<DemoTransactionEntity>();
+    public DbSet<WorkflowEvidenceEntity> WorkflowEvidence => Set<WorkflowEvidenceEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

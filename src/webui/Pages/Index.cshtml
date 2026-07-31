@@ -49,7 +49,7 @@
             <span class="live-indicator"><span></span> Agent network online</span>
         </div>
 
-        <form method="post" data-loading-form>
+        <form method="post" enctype="multipart/form-data" data-loading-form>
             <label asp-for="Input.UserMessage" class="form-label">Customer request</label>
             <textarea asp-for="Input.UserMessage"
                       class="form-control request-input"
@@ -62,6 +62,20 @@
                 <button type="button" class="prompt-chip" data-prompt="Why is this card transaction pending?">Explain a transaction</button>
                 <button type="button" class="prompt-chip" data-prompt="This transaction is not mine. Explain what I should review.">Review suspicious activity</button>
                 <button type="button" class="prompt-chip" data-prompt="Dispute this charge.">Dispute a charge</button>
+            </div>
+
+            <div class="evidence-upload">
+                <label asp-for="Input.EvidenceFiles" class="form-label">Dispute evidence <span>Optional</span></label>
+                <label class="file-drop" for="Input_EvidenceFiles">
+                    <span class="file-drop-icon" aria-hidden="true">＋</span>
+                    <span><strong>Add receipts, statements, or screenshots</strong><small>PDF, PNG, JPG, or JPEG · up to 5 files · 10 MB each</small></span>
+                </label>
+                <input asp-for="Input.EvidenceFiles"
+                       class="visually-hidden"
+                       type="file"
+                       accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                       multiple />
+                <div class="selected-files" data-selected-files></div>
             </div>
 
             <button type="submit" class="primary-action">
@@ -137,6 +151,44 @@
                         <p><strong>Version:</strong> @Model.Workflow.Version</p>
                     </details>
                 </article>
+
+                @if (Model.Workflow.Evidence.Count > 0)
+                {
+                    <article class="surface evidence-card">
+                        <div class="section-heading compact">
+                            <div>
+                                <span class="step-label">Supporting evidence</span>
+                                <h3>@Model.Workflow.Evidence.Count uploaded @(Model.Workflow.Evidence.Count == 1 ? "file" : "files")</h3>
+                            </div>
+                            <span class="evidence-secure">Stored with workflow</span>
+                        </div>
+                        <div class="evidence-grid">
+                            @foreach (var evidence in Model.Workflow.Evidence)
+                            {
+                                var evidenceUrl = Url.Page(
+                                    "/Index",
+                                    "Evidence",
+                                    new { workflowId = Model.Workflow.WorkflowId, evidenceId = evidence.Id });
+                                <a class="evidence-item" href="@evidenceUrl" target="_blank" rel="noopener">
+                                    @if (evidence.ContentType.StartsWith("image/", StringComparison.Ordinal))
+                                    {
+                                        <span class="evidence-preview">
+                                            <img src="@evidenceUrl" alt="" loading="lazy" />
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="evidence-preview evidence-pdf" aria-hidden="true">PDF</span>
+                                    }
+                                    <span class="evidence-info">
+                                        <strong>@evidence.FileName</strong>
+                                        <small>@((evidence.Length / 1024d).ToString("N0")) KB · View file</small>
+                                    </span>
+                                </a>
+                            }
+                        </div>
+                    </article>
+                }
 
                 @if (Model.Workflow.Status == "WaitingForApproval")
                 {

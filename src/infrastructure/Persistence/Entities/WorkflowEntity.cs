@@ -18,5 +18,6 @@ public sealed class WorkflowEntity
     public ICollection<WorkflowEventEntity> Events { get; } = [];
     public ICollection<ApprovalDecisionEntity> Decisions { get; } = [];
     public ICollection<ActionExecutionEntity> ActionExecutions { get; } = [];
+    public ICollection<WorkflowEvidenceEntity> Evidence { get; } = [];
     public SupportCaseEntity? SupportCase { get; set; }
 }

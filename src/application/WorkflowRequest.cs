@@ -23,6 +23,14 @@ public sealed record SupportCaseResponse(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
+public sealed record WorkflowEvidenceResponse(
+    Guid Id,
+    string FileName,
+    string ContentType,
+    long Length,
+    string Sha256,
+    DateTimeOffset UploadedAt);
+
 public sealed record WorkflowDetailResponse(
     Guid WorkflowId,
     string TraceId,
@@ -36,9 +44,13 @@ public sealed record WorkflowDetailResponse(
     DateTimeOffset UpdatedAt,
     long Version,
     IReadOnlyList<WorkflowEventResponse> Events,
-    SupportCaseResponse? SupportCase)
+    SupportCaseResponse? SupportCase,
+    IReadOnlyList<WorkflowEvidenceResponse> Evidence)
 {
-    public static WorkflowDetailResponse From(WorkflowState workflow, SupportCase? supportCase) =>
+    public static WorkflowDetailResponse From(
+        WorkflowState workflow,
+        SupportCase? supportCase,
+        IReadOnlyList<WorkflowEvidence> evidence) =>
         new(
             WorkflowId: workflow.Id,
             TraceId: workflow.TraceId,
@@ -60,5 +72,12 @@ public sealed record WorkflowDetailResponse(
                 supportCase.Status,
                 supportCase.Summary,
                 supportCase.CreatedAt,
-                supportCase.UpdatedAt));
+                supportCase.UpdatedAt),
+            Evidence: evidence.Select(item => new WorkflowEvidenceResponse(
+                item.Id,
+                item.FileName,
+                item.ContentType,
+                item.Length,
+                item.Sha256,
+                item.UploadedAt)).ToList());
 }

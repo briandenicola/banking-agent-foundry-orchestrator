@@ -7,6 +7,7 @@ using BankingAgent.Infrastructure;
 using BankingAgent.Infrastructure.Persistence;
 using BankingAgent.Orchestrator;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
@@ -65,6 +66,14 @@ builder.Services.AddDbContext<BankingAgentDbContext>((sp, options) =>
 
 builder.Services.AddScoped<IWorkflowRepository, EfWorkflowRepository>();
 builder.Services.AddScoped<IWorkflowActionRepository, EfWorkflowActionRepository>();
+builder.Services.AddScoped<IWorkflowEvidenceRepository, EfWorkflowEvidenceRepository>();
+builder.Services.AddScoped<IWorkflowEvidenceService, WorkflowEvidenceService>();
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit =
+        (WorkflowEvidenceService.MaximumFiles * WorkflowEvidenceService.MaximumFileBytes)
+        + (1024 * 1024);
+});
 
 if (serviceAuthEnabled)
 {

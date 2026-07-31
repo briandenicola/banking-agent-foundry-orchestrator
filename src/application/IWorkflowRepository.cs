@@ -32,3 +32,19 @@ public interface IWorkflowActionRepository
         long expectedVersion,
         CancellationToken cancellationToken = default);
 }
+
+public interface IWorkflowEvidenceRepository
+{
+    Task<IReadOnlyList<WorkflowEvidence>> ListAsync(
+        Guid workflowId,
+        CancellationToken cancellationToken = default);
+
+    Task<WorkflowEvidence?> GetAsync(
+        Guid workflowId,
+        Guid evidenceId,
+        CancellationToken cancellationToken = default);
+
+    Task AddAsync(
+        IReadOnlyList<WorkflowEvidence> evidence,
+        CancellationToken cancellationToken = default);
+}
