@@ -710,6 +710,10 @@ def check_workflows(
                     f"Expected terminal status {expected_status!r}, received {polled['status']!r}. "
                     f"Timeline: {json.dumps(polled.get('events', [])[-5:])}"
                 )
+            polled["agent_execution_modes"] = require_live_model_execution(
+                polled.get("events", []),
+                name,
+            )
             results[name] = {**accepted, **polled}
         except SmokeFailure as error:
             raise SmokeFailure(f"Scenario {name} failed: {error}") from error
@@ -755,6 +759,7 @@ def check_workflows(
                 "trace_id": result["traceId"],
                 "status": result["status"],
                 "poll_attempts": result.get("poll_attempts"),
+                "agent_execution_modes": result["agent_execution_modes"],
             }
             for name, result in results.items()
         },
@@ -826,6 +831,10 @@ def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -
                 f"Scenario {name} expected {expected_status!r}, "
                 f"received {workflow['status']!r}."
             )
+        workflow["agentExecutionModes"] = require_live_model_execution(
+            workflow.get("events", []),
+            name,
+        )
         workflow["initialStatus"] = initial_status
         results[name] = workflow
         if evidence is not None and evidence[0] not in page:
@@ -860,6 +869,7 @@ def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -
                 "trace_id": result["traceId"],
                 "initial_status": result["initialStatus"],
                 "final_status": result["status"],
+                "agent_execution_modes": result["agentExecutionModes"],
             }
             for name, result in results.items()
         },
@@ -872,6 +882,42 @@ def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -
             "reason": "Direct API token unavailable; workflow lookup remains covered by API tests.",
         },
     }
+
+
+def require_live_model_execution(
+    events: list[dict[str, Any]],
+    scenario_name: str,
+) -> list[str]:
+    required_event_types = {"workflow.plan", "mcp.invoked"}
+    execution_modes: dict[str, str] = {}
+    for event in events:
+        event_type = event.get("type")
+        if event_type not in required_event_types:
+            continue
+        details = event.get("details")
+        if not isinstance(details, str):
+            continue
+        try:
+            parsed = json.loads(details)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict) or "execution_mode" not in parsed:
+            continue
+        mode = parsed.get("execution_mode")
+        if isinstance(mode, str):
+            execution_modes[event_type] = mode
+
+    missing_event_types = required_event_types - execution_modes.keys()
+    if missing_event_types:
+        raise SmokeFailure(
+            f"Scenario {scenario_name} did not record planner and specialist "
+            f"execution modes; missing events: {sorted(missing_event_types)}"
+        )
+    if any(mode != "model" for mode in execution_modes.values()):
+        raise SmokeFailure(
+            f"Scenario {scenario_name} used non-model agent execution: {execution_modes}"
+        )
+    return [execution_modes["workflow.plan"], execution_modes["mcp.invoked"]]
 
 
 def check_workflow_get_state(

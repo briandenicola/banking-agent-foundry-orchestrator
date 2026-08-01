@@ -185,7 +185,12 @@ types are [`AgentRequest` and `AgentResult`](../src/agents/python/app/contracts.
 - the response body parses;
 - the agent result status is `ok`;
 - `intent` and `summary` are nonempty; and
-- the returned agent name exactly matches the expected agent.
+- the returned agent name exactly matches the expected agent;
+- a supplied contract version is supported; and
+- a supplied execution mode is either `model` or `fallback`.
+
+Hosted invocation spans and durable invocation-event details record the contract
+version and execution mode without recording the user message or evidence content.
 
 Transient HTTP 408, 429, 500, 502, 503, and 504 responses are retried up to three
 attempts. Other transport, authentication, timeout, or contract failures become
@@ -221,15 +226,14 @@ but only the C# application and persistence layers access it:
 5. It validates the specialist result and persists the next workflow state and
    events.
 
-This is intended to be **orchestrator-mediated context passing**, not shared agent
-memory. The current transport nests these fields under `AgentRequest.input`, while
-the Python model prompt reads `AgentRequest.context`; therefore the specialist does
-not currently consume the planner fields. The detailed
-[agent implementation walkthrough](agent-implementation.md#important-current-context-binding-gap)
-traces that mismatch to the exact code. Regardless of that gap, the specialist cannot
-observe later database changes, another agent's private state, uploaded files, or
-uncommitted work. State transitions, approvals, and audit authority remain in C# and
-PostgreSQL.
+This is **orchestrator-mediated context passing**, not shared agent memory. The
+versioned invocation envelope exposes the planner handoff as top-level
+`AgentRequest.context`; the Python boundary also promotes legacy `input.context`.
+The specialist model prompt consumes the normalized context. The detailed
+[agent implementation walkthrough](agent-implementation.md#versioned-planner-to-specialist-context-handoff)
+traces the contract to the exact code. The specialist still cannot observe later
+database changes, another agent's private state, uploaded files, or uncommitted work.
+State transitions, approvals, and audit authority remain in C# and PostgreSQL.
 
 ### Recommended shared-state evolution
 
@@ -668,12 +672,14 @@ Do not approve the production workflow until:
 agent, and waits for `active` or `running`. Registrations use the Foundry
 `invocations` protocol version `2.0.0`, 0.5 CPU, 1 GiB memory, the shared hosted-agent
 image, and agent-specific `BANKING_AGENT_KIND`.
+Each registration also receives the Foundry project endpoint, model deployment, and
+`ALLOW_FALLBACK=false`; changes to any runtime setting create a new agent version.
 
 After the job succeeds,
 [`deploy-hosted-agents.sh`](../scripts/deploy-hosted-agents.sh) grants each active
 hosted-agent instance identity `Cognitive Services OpenAI User` on the Foundry
-account. Without this grant, model invocation can fail or the current Python code can
-use its deterministic fallback.
+account. Without this grant, production model invocation fails; it cannot silently
+degrade to deterministic fallback.
 
 ## 11. Operating the MVP
 

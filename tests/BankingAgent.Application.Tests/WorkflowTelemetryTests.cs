@@ -109,6 +109,19 @@ public sealed class WorkflowTelemetryTests
 
         Assert.Equal(WorkflowStatus.Completed, approved.Status);
         Assert.NotNull(persistedSupportCase);
+        var invocationEvents = persisted!.Events
+            .Where(workflowEvent =>
+                workflowEvent.Details?.Contains("\"execution_mode\"", StringComparison.Ordinal) == true)
+            .ToList();
+        Assert.Equal(2, invocationEvents.Count);
+        Assert.All(
+            invocationEvents,
+            workflowEvent =>
+            {
+                Assert.Contains("\"contract_version\":\"1.0\"", workflowEvent.Details);
+                Assert.Contains("\"execution_mode\":\"model\"", workflowEvent.Details);
+                Assert.DoesNotContain(userMessage, workflowEvent.Details, StringComparison.Ordinal);
+            });
 
         var spans = activities
             .Where(activity =>
@@ -116,6 +129,13 @@ public sealed class WorkflowTelemetryTests
             .ToList();
         Assert.Contains(spans, activity => activity.OperationName == "workflow.lifecycle");
         Assert.Equal(2, spans.Count(activity => activity.OperationName == "hosted_agent.invoke"));
+        Assert.All(
+            spans.Where(activity => activity.OperationName == "hosted_agent.invoke"),
+            activity =>
+            {
+                Assert.Equal("1.0", activity.GetTagItem("agent.contract_version")?.ToString());
+                Assert.Equal("model", activity.GetTagItem("agent.execution_mode")?.ToString());
+            });
         Assert.Contains(spans, activity => activity.OperationName == "persistence.workflow.add");
         Assert.Contains(spans, activity => activity.OperationName == "persistence.workflow.update");
         Assert.Contains(spans, activity => activity.OperationName == "workflow.approval");
@@ -153,8 +173,10 @@ public sealed class WorkflowTelemetryTests
         var responseBody =
             $$"""
             {
+              "contract_version": "1.0",
               "agent": "{{agent}}",
               "status": "ok",
+              "execution_mode": "model",
               "intent": "{{intent}}",
               "summary": "Safe non-PII summary.",
               "requires_approval": {{requiresApproval.ToString().ToLowerInvariant()}},

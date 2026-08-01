@@ -67,6 +67,42 @@ public sealed class WorkflowServiceCurrentBehaviorTests
     }
 
     [Fact]
+    public async Task RecoverAsync_NonObjectAgentResponse_PersistsFailedWorkflow()
+    {
+        WorkflowState? current = null;
+        _repo.Setup(repository => repository.AddAsync(
+                It.IsAny<WorkflowState>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, CancellationToken>((workflow, _) => current = workflow)
+            .Returns(Task.CompletedTask);
+        _repo.Setup(repository => repository.GetAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => current);
+        _repo.Setup(repository => repository.UpdateAsync(
+                It.IsAny<WorkflowState>(),
+                It.IsAny<long>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, long, CancellationToken>((workflow, _, _) => current = workflow)
+            .Returns(Task.CompletedTask);
+        _mcpClient.Setup(client => client.InvokeAsync(
+                "workflow.plan",
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpToolResult(
+                "workflow.plan",
+                "ok",
+                "Agent completed.",
+                new Dictionary<string, object?> { ["response_body"] = "[]" }));
+
+        var draft = await _sut.StartAsync("Why is this charge pending?");
+        var result = await _sut.RecoverAsync(draft.Id);
+
+        Assert.Equal(WorkflowStatus.Failed, result.Status);
+        Assert.Contains(result.Events, workflowEvent => workflowEvent.Type == "workflow.failed");
+    }
+
+    [Fact]
     public async Task StartAsync_CanceledPlanner_PersistsFailureBeforeRethrowing()
     {
         // In the async model, cancellation during planner execution happens in RecoverAsync.

@@ -6,10 +6,36 @@ from collections.abc import Awaitable, Callable
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
-from app.contracts import AgentName, AgentRequest, AgentResult
+from app.contracts import CONTRACT_VERSION, AgentName, AgentRequest, AgentResult
 
 
 StructuredReasoner = Callable[[AgentName, str, AgentRequest], Awaitable[AgentResult]]
+
+
+class ModelUnavailableError(RuntimeError):
+    """Raised when no model endpoint is configured and deterministic
+    fallback has been explicitly disabled (e.g. in production). Callers
+    must surface this as an explicit failure, never a success-shaped
+    fallback response.
+    """
+
+
+def _fallback_allowed() -> bool:
+    """Whether deterministic local fallback may be used when no model
+    endpoint is configured.
+
+    Fallback is **strictly opt-in**: only an affirmative value for
+    ``ALLOW_FALLBACK`` (``true``, ``1``, ``yes``, or ``on``, all
+    case-insensitive and whitespace-tolerant) enables the local
+    deterministic path.  Unset, empty, ``false``, ``0``, ``no``,
+    ``off``, and any other value all disable fallback so that missing
+    model configuration surfaces as an explicit failure rather than a
+    silent success-shaped degradation.
+    """
+    raw = os.getenv("ALLOW_FALLBACK")
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
 def _model() -> AzureChatOpenAI | ChatOpenAI | None:
@@ -47,9 +73,15 @@ def _model() -> AzureChatOpenAI | ChatOpenAI | None:
 async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> AgentResult:
     model = _model()
     if model is None:
+        if not _fallback_allowed():
+            raise ModelUnavailableError(
+                "No model endpoint is configured and deterministic fallback "
+                "is disabled (ALLOW_FALLBACK=false)."
+            )
         return _local_result(agent, request)
 
     structured_model = model.with_structured_output(AgentResult)
+    context = request.specialist_context
     result = await structured_model.ainvoke(
         [
             ("system", instructions),
@@ -57,15 +89,19 @@ async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> 
                 "user",
                 f"Trace ID: {request.trace_id}\n"
                 f"Customer request: {request.message}\n"
-                f"Context: {request.context}",
+                f"Context: {context}",
             ),
         ]
     )
+    # Runtime-owned fields: model output must never be able to spoof agent
+    # identity, status, trace id, contract version, or execution mode.
     return result.model_copy(
         update={
             "agent": agent,
             "status": "ok",
             "trace_id": request.trace_id,
+            "contract_version": CONTRACT_VERSION,
+            "execution_mode": "model",
         }
     )
 
@@ -93,6 +129,8 @@ def _local_result(agent: AgentName, request: AgentRequest) -> AgentResult:
         return AgentResult(
             agent=agent,
             trace_id=request.trace_id,
+            contract_version=CONTRACT_VERSION,
+            execution_mode="fallback",
             intent=intent,
             summary="Classified the request and selected a specialist agent.",
             risk_level=risk_level,
@@ -107,6 +145,8 @@ def _local_result(agent: AgentName, request: AgentRequest) -> AgentResult:
         return AgentResult(
             agent=agent,
             trace_id=request.trace_id,
+            contract_version=CONTRACT_VERSION,
+            execution_mode="fallback",
             intent="transaction_explanation",
             summary="The request asks for an informational explanation of a transaction.",
             risk_level="low",
@@ -121,6 +161,8 @@ def _local_result(agent: AgentName, request: AgentRequest) -> AgentResult:
         return AgentResult(
             agent=agent,
             trace_id=request.trace_id,
+            contract_version=CONTRACT_VERSION,
+            execution_mode="fallback",
             intent="suspicious_activity",
             summary="The request concerns potentially unauthorized account activity.",
             risk_level="high",
@@ -133,6 +175,8 @@ def _local_result(agent: AgentName, request: AgentRequest) -> AgentResult:
     return AgentResult(
         agent=agent,
         trace_id=request.trace_id,
+        contract_version=CONTRACT_VERSION,
+        execution_mode="fallback",
         intent="dispute",
         summary="The request asks to prepare or initiate a transaction dispute.",
         risk_level="high",

@@ -605,6 +605,9 @@ public sealed class WorkflowService : IWorkflowService
                 _ => await _mcpClient.InvokeAsync(toolName, parameters, cancellationToken)
             };
             activity?.SetTag("agent.status", result.Status);
+            var (contractVersion, executionMode) = ReadAgentContractMetadata(result);
+            activity?.SetTag("agent.contract_version", contractVersion);
+            activity?.SetTag("agent.execution_mode", executionMode);
             activity?.SetTag("duration_ms", Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
             if (result.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
             {
@@ -762,7 +765,53 @@ public sealed class WorkflowService : IWorkflowService
             $"Invoked tool {result.ToolName}",
             DateTimeOffset.UtcNow,
             "system",
-            $"{result.Status}: {result.Message}");
+            CreateInvocationEventDetails(result));
+
+    private static string CreateInvocationEventDetails(McpToolResult result)
+    {
+        var (contractVersion, executionMode) = ReadAgentContractMetadata(result);
+        return JsonSerializer.Serialize(new
+        {
+            status = result.Status,
+            message = result.Message,
+            contract_version = contractVersion,
+            execution_mode = executionMode
+        });
+    }
+
+    private static (string? ContractVersion, string? ExecutionMode) ReadAgentContractMetadata(
+        McpToolResult result)
+    {
+        if (!result.Data.TryGetValue("response_body", out var responseBodyValue) ||
+            responseBodyValue is not string responseBody)
+        {
+            return (null, null);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(responseBody);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return (null, null);
+            }
+
+            var contractVersion = ReadOptionalString(root, "contract_version");
+            var executionMode = ReadOptionalString(root, "execution_mode");
+            return (contractVersion, executionMode);
+        }
+        catch (JsonException)
+        {
+            return (null, null);
+        }
+    }
+
+    private static string? ReadOptionalString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var value) &&
+        value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     private static bool TryReadAgentResult(
         McpToolResult result,
@@ -804,6 +853,20 @@ public sealed class WorkflowService : IWorkflowService
                 return false;
             }
 
+            if (parsed.ContractVersion is not null &&
+                !string.Equals(parsed.ContractVersion, "1.0", StringComparison.Ordinal))
+            {
+                error = $"Tool {result.ToolName} returned unsupported contract version '{parsed.ContractVersion}'.";
+                return false;
+            }
+
+            if (parsed.ExecutionMode is not null &&
+                parsed.ExecutionMode is not ("model" or "fallback"))
+            {
+                error = $"Tool {result.ToolName} returned unsupported execution mode '{parsed.ExecutionMode}'.";
+                return false;
+            }
+
             decision = parsed;
             error = string.Empty;
             return true;
@@ -822,5 +885,7 @@ public sealed class WorkflowService : IWorkflowService
         string Summary,
         [property: JsonPropertyName("requires_approval")] bool RequiresApproval,
         [property: JsonPropertyName("selected_agent")] string? SelectedAgent,
-        IReadOnlyList<string>? Evidence);
+        IReadOnlyList<string>? Evidence,
+        [property: JsonPropertyName("contract_version")] string? ContractVersion = null,
+        [property: JsonPropertyName("execution_mode")] string? ExecutionMode = null);
 }

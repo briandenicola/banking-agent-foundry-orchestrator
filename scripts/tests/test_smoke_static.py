@@ -60,6 +60,14 @@ def _make_stub(*responses):
     return _stub
 
 
+def _model_events():
+    details = '{"contract_version":"1.0","execution_mode":"model"}'
+    return [
+        {"type": "workflow.plan", "details": details},
+        {"type": "mcp.invoked", "details": details},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Test: TERMINAL_STATES completeness
 # ---------------------------------------------------------------------------
@@ -222,7 +230,7 @@ class TestCheckWorkflows(unittest.TestCase):
         resps = []
         for i, st in enumerate(self._SCENARIO_STATUSES):
             resps.append((202, {"workflowId": f"wf-{i}", "traceId": "t", "status": "Draft"}))
-            resps.append((200, {"status": st, "events": []}))
+            resps.append((200, {"status": st, "events": _model_events()}))
         # approval POST
         resps.append((200, {"workflowId": "wf-3", "status": "Completed", "traceId": "t"}))
         # two check_workflow_get_state GETs
@@ -241,6 +249,7 @@ class TestCheckWorkflows(unittest.TestCase):
         self.assertEqual(result["approval"]["status"], "Completed")
         for name, info in result["scenarios"].items():
             self.assertIn("poll_attempts", info)
+            self.assertEqual(info["agent_execution_modes"], ["model", "model"])
 
     def test_wrong_terminal_status_raises(self):
         resps = iter([
@@ -268,6 +277,33 @@ class TestCheckWorkflows(unittest.TestCase):
                 smoke.check_workflows("http://api", 5, 30, "tok")
 
         self.assertIn("transaction-information", str(ctx.exception))
+
+
+class TestRequireLiveModelExecution(unittest.TestCase):
+    def test_accepts_planner_and_specialist_model_execution(self):
+        self.assertEqual(
+            smoke.require_live_model_execution(_model_events(), "demo"),
+            ["model", "model"],
+        )
+
+    def test_rejects_fallback_execution(self):
+        events = _model_events()
+        events[1]["details"] = '{"contract_version":"1.0","execution_mode":"fallback"}'
+        with self.assertRaises(SmokeFailure) as ctx:
+            smoke.require_live_model_execution(events, "demo")
+        self.assertIn("non-model", str(ctx.exception))
+
+    def test_rejects_missing_execution_evidence(self):
+        with self.assertRaises(SmokeFailure) as ctx:
+            smoke.require_live_model_execution([], "demo")
+        self.assertIn("planner and specialist", str(ctx.exception))
+
+    def test_rejects_duplicate_specialist_events_without_planner(self):
+        events = _model_events()
+        events[0]["type"] = "mcp.invoked"
+        with self.assertRaises(SmokeFailure) as ctx:
+            smoke.require_live_model_execution(events, "demo")
+        self.assertIn("workflow.plan", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------

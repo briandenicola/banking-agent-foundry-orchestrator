@@ -4,6 +4,11 @@ from unittest.mock import Mock
 
 from deploy import AgentDefinition, FoundryClient, _definitions, _items, _version
 
+_IMAGE = "example.azurecr.io/hosted-agents:abc123"
+_MODEL = "gpt-5.4-mini"
+_ENDPOINT = "https://foundry.example.test/project"
+_AGENT = AgentDefinition("workflow-planning", "workflow-planning")
+
 
 class DeployerContractTests(unittest.TestCase):
     def test_definitions_parse_all_agents(self):
@@ -34,35 +39,34 @@ class DeployerContractTests(unittest.TestCase):
         self.assertEqual(expected, _items({"value": expected}))
         self.assertEqual(expected, _items({"data": expected}))
 
+    def _make_version_response(self, image, kind, model, endpoint, fallback="false", status="creating"):
+        return {
+            "value": [
+                {
+                    "version": "2",
+                    "status": status,
+                    "definition": {
+                        "container_configuration": {"image": image},
+                        "environment_variables": {
+                            "BANKING_AGENT_KIND": kind,
+                            "AZURE_AI_MODEL_DEPLOYMENT_NAME": model,
+                            "FOUNDRY_PROJECT_ENDPOINT": endpoint,
+                            "ALLOW_FALLBACK": fallback,
+                        },
+                    },
+                }
+            ]
+        }
+
     def test_matching_version_reuses_creating_deployment(self):
         client = FoundryClient.__new__(FoundryClient)
         client._endpoint = "https://example.test/project"
         client._agent_exists = Mock(return_value=True)
         client._request = Mock(
-            return_value={
-                "value": [
-                    {
-                        "version": "2",
-                        "status": "creating",
-                        "definition": {
-                            "container_configuration": {
-                                "image": "example.azurecr.io/hosted-agents:abc123"
-                            },
-                            "environment_variables": {
-                                "BANKING_AGENT_KIND": "workflow-planning",
-                                "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
-                            },
-                        },
-                    }
-                ]
-            }
+            return_value=self._make_version_response(_IMAGE, "workflow-planning", _MODEL, _ENDPOINT)
         )
 
-        result = client._find_matching_version(
-            AgentDefinition("workflow-planning", "workflow-planning"),
-            "example.azurecr.io/hosted-agents:abc123",
-            "gpt-5.4-mini",
-        )
+        result = client._find_matching_version(_AGENT, _IMAGE, _MODEL, _ENDPOINT)
 
         self.assertEqual(("2", "creating"), result)
 
@@ -71,32 +75,42 @@ class DeployerContractTests(unittest.TestCase):
         client._endpoint = "https://example.test/project"
         client._agent_exists = Mock(return_value=True)
         client._request = Mock(
-            return_value={
-                "data": [
-                    {
-                        "version": "3",
-                        "status": "running",
-                        "definition": {
-                            "container_configuration": {
-                                "image": "example.azurecr.io/hosted-agents:abc123"
-                            },
-                            "environment_variables": {
-                                "BANKING_AGENT_KIND": "workflow-planning",
-                                "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
-                            },
-                        },
-                    }
-                ]
-            }
+            return_value=self._make_version_response(_IMAGE, "workflow-planning", _MODEL, _ENDPOINT, status="running")
         )
 
-        result = client._find_matching_version(
-            AgentDefinition("workflow-planning", "workflow-planning"),
-            "example.azurecr.io/hosted-agents:abc123",
-            "gpt-5.4-mini",
+        result = client._find_matching_version(_AGENT, _IMAGE, _MODEL, _ENDPOINT)
+
+        self.assertEqual(("2", "running"), result)
+
+    def test_matching_version_misses_on_different_endpoint(self):
+        """A version with a different FOUNDRY_PROJECT_ENDPOINT must not match."""
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
+        client._agent_exists = Mock(return_value=True)
+        client._request = Mock(
+            return_value=self._make_version_response(
+                _IMAGE, "workflow-planning", _MODEL, "https://other.endpoint/project"
+            )
         )
 
-        self.assertEqual(("3", "running"), result)
+        result = client._find_matching_version(_AGENT, _IMAGE, _MODEL, _ENDPOINT)
+
+        self.assertIsNone(result)
+
+    def test_matching_version_misses_when_fallback_not_disabled(self):
+        """A version without ALLOW_FALLBACK=false must not match."""
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
+        client._agent_exists = Mock(return_value=True)
+        client._request = Mock(
+            return_value=self._make_version_response(
+                _IMAGE, "workflow-planning", _MODEL, _ENDPOINT, fallback="true"
+            )
+        )
+
+        result = client._find_matching_version(_AGENT, _IMAGE, _MODEL, _ENDPOINT)
+
+        self.assertIsNone(result)
 
     def test_deploy_discovers_version_when_create_response_omits_it(self):
         client = FoundryClient.__new__(FoundryClient)
@@ -107,18 +121,31 @@ class DeployerContractTests(unittest.TestCase):
         client._agent_exists = Mock(return_value=False)
         client._request = Mock(return_value={"object": "agent.version"})
 
-        version = client.deploy(
-            AgentDefinition("workflow-planning", "workflow-planning"),
-            "example.azurecr.io/hosted-agents:abc123",
-            "gpt-5.4-mini",
-        )
+        version = client.deploy(_AGENT, _IMAGE, _MODEL, _ENDPOINT)
 
         self.assertEqual("1", version)
         definition = client._request.call_args.args[2]["definition"]
-        self.assertNotIn(
-            "FOUNDRY_PROJECT_ENDPOINT",
-            definition["environment_variables"],
-        )
+        env = definition["environment_variables"]
+        self.assertEqual(_ENDPOINT, env["FOUNDRY_PROJECT_ENDPOINT"])
+        self.assertEqual("false", env["ALLOW_FALLBACK"])
+
+    def test_deploy_definition_includes_required_env_vars(self):
+        """Every runtime-affecting env var must be present in the deployed definition."""
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
+        client._find_matching_version = Mock(return_value=None)
+        client._agent_exists = Mock(return_value=False)
+        client._request = Mock(return_value={"version": "5", "status": "active"})
+
+        client.deploy(_AGENT, _IMAGE, _MODEL, _ENDPOINT)
+
+        definition = client._request.call_args.args[2]["definition"]
+        env = definition["environment_variables"]
+        self.assertIn("BANKING_AGENT_KIND", env)
+        self.assertIn("AZURE_AI_MODEL_DEPLOYMENT_NAME", env)
+        self.assertIn("FOUNDRY_PROJECT_ENDPOINT", env)
+        self.assertIn("ALLOW_FALLBACK", env)
+        self.assertEqual("false", env["ALLOW_FALLBACK"])
 
     def test_version_falls_back_to_agent_version_id(self):
         self.assertEqual("4", _version({"id": "workflow-planning:4"}))

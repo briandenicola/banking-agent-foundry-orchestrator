@@ -44,8 +44,11 @@ class FoundryClient:
         agent: AgentDefinition,
         image: str,
         model_deployment: str,
+        project_endpoint: str,
     ) -> str:
-        existing_version = self._find_matching_version(agent, image, model_deployment)
+        existing_version = self._find_matching_version(
+            agent, image, model_deployment, project_endpoint
+        )
         if existing_version is not None:
             version, status = existing_version
             if status in PENDING_STATUSES:
@@ -67,6 +70,11 @@ class FoundryClient:
             "environment_variables": {
                 "BANKING_AGENT_KIND": agent.kind,
                 "AZURE_AI_MODEL_DEPLOYMENT_NAME": model_deployment,
+                # Explicit runtime configuration — every env var that affects
+                # runtime behaviour participates in version/redeploy matching so
+                # that a config change always creates or updates a version.
+                "FOUNDRY_PROJECT_ENDPOINT": project_endpoint,
+                "ALLOW_FALLBACK": "false",
             },
         }
 
@@ -90,6 +98,7 @@ class FoundryClient:
                 agent,
                 image,
                 model_deployment,
+                project_endpoint,
             )
 
         if status not in READY_STATUSES:
@@ -110,6 +119,7 @@ class FoundryClient:
         agent: AgentDefinition,
         image: str,
         model_deployment: str,
+        project_endpoint: str,
     ) -> tuple[str, str] | None:
         if not self._agent_exists(agent.name):
             return None
@@ -128,6 +138,8 @@ class FoundryClient:
                 container.get("image") == image
                 and environment.get("BANKING_AGENT_KIND") == agent.kind
                 and environment.get("AZURE_AI_MODEL_DEPLOYMENT_NAME") == model_deployment
+                and environment.get("FOUNDRY_PROJECT_ENDPOINT") == project_endpoint
+                and environment.get("ALLOW_FALLBACK") == "false"
             ):
                 return str(version.get("version")), status
 
@@ -138,12 +150,14 @@ class FoundryClient:
         agent: AgentDefinition,
         image: str,
         model_deployment: str,
+        project_endpoint: str,
     ) -> tuple[str, str]:
         for _ in range(30):
             existing_version = self._find_matching_version(
                 agent,
                 image,
                 model_deployment,
+                project_endpoint,
             )
             if existing_version is not None:
                 return existing_version
@@ -271,7 +285,7 @@ def main() -> int:
     client = FoundryClient(endpoint, client_id)
     deployed = {}
     for agent in agents:
-        deployed[agent.name] = client.deploy(agent, image, model_deployment)
+        deployed[agent.name] = client.deploy(agent, image, model_deployment, endpoint)
 
     print(json.dumps({"status": "ok", "agents": deployed}, sort_keys=True), flush=True)
     return 0

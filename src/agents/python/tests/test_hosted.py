@@ -267,3 +267,48 @@ class HostedInvocationTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostedContractVersionTests(unittest.IsolatedAsyncioTestCase):
+    """Verify that AgentResult contract fields appear in hosted responses."""
+
+    async def _post(self, payload: dict) -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=hosted_module.app),
+            base_url="http://test",
+        ) as client:
+            return await client.post("/invocations", json=payload)
+
+    async def test_response_includes_contract_version(self):
+        """Successful response must include contract_version field."""
+        with patch.object(hosted_module, "graph", _make_graph_mock()):
+            resp = await self._post(_VALID_PAYLOAD)
+        self.assertEqual(200, resp.status_code)
+        self.assertIn("contract_version", resp.json())
+        self.assertEqual("1.0", resp.json()["contract_version"])
+
+    async def test_response_includes_execution_mode(self):
+        """Successful response must include execution_mode field."""
+        with patch.object(hosted_module, "graph", _make_graph_mock()):
+            resp = await self._post(_VALID_PAYLOAD)
+        self.assertEqual(200, resp.status_code)
+        self.assertIn("execution_mode", resp.json())
+        self.assertIn(resp.json()["execution_mode"], ("model", "fallback"))
+
+    async def test_model_execution_mode_propagated(self):
+        """When a result has execution_mode=model it propagates to the client."""
+        model_result = AgentResult(
+            agent=AgentName.WORKFLOW_PLANNING,
+            status="ok",
+            trace_id="t-1234",
+            execution_mode="model",
+            intent="workflow_planning",
+            summary="Routed.",
+            risk_level="low",
+            requires_approval=False,
+            recommended_action="Explain.",
+            next_step="respond_to_user",
+        )
+        with patch.object(hosted_module, "graph", _make_graph_mock(model_result)):
+            resp = await self._post(_VALID_PAYLOAD)
+        self.assertEqual("model", resp.json()["execution_mode"])

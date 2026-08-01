@@ -25,6 +25,8 @@ public sealed class FoundryMcpClientOptions
 
 public sealed class FoundryMcpClient : IMcpClient
 {
+    private const string ContractVersion = "1.0";
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<FoundryMcpClient> _logger;
     private readonly DefaultAzureCredential _credential = new(new DefaultAzureCredentialOptions
@@ -67,19 +69,29 @@ public sealed class FoundryMcpClient : IMcpClient
         }
 
         var traceId = parameters.TryGetValue("trace_id", out var traceIdValue) ? traceIdValue?.ToString() : null;
+        var workflowId = parameters.TryGetValue("workflow_id", out var workflowIdValue)
+            ? workflowIdValue?.ToString()
+            : null;
+        var context = parameters.TryGetValue("context", out var contextValue) &&
+            contextValue is not null
+                ? contextValue
+                : new Dictionary<string, object?>();
         var payload = new
         {
+            contract_version = ContractVersion,
             tool_name = toolName,
             agent_name = ResolveAgentName(toolName),
             input = parameters,
             trace_id = traceId,
+            workflow_id = workflowId,
             message = parameters.TryGetValue("user_message", out var userMessage) ? userMessage?.ToString() : null,
             metadata = new
             {
                 tool_name = toolName,
                 trace_id = traceId,
-                workflow_id = parameters.TryGetValue("workflow_id", out var workflowId) ? workflowId?.ToString() : null
-            }
+                workflow_id = workflowId
+            },
+            context
         };
 
         for (var attempt = 1; attempt <= _options.MaxAttempts; attempt++)

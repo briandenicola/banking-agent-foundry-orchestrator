@@ -18,4 +18,10 @@
   <ItemGroup>
     <ProjectReference Include="../../src/infrastructure/infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../fixtures/hosted-agent-invocation-v1.json">
+      <Link>fixtures/hosted-agent-invocation-v1.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

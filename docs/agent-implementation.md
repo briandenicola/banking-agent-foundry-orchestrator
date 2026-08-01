@@ -116,11 +116,16 @@ no dynamic graph discovery.
 boundary:
 
 - `AgentName` limits identity to the four registered names.
+- `contract_version` identifies the `"1.0"` request/result boundary.
 - `AgentRequest.message` is required and nonempty.
 - `trace_id`, `workflow_id`, `input`, `metadata`, and `context` carry invocation
   metadata.
+- Top-level `context` is authoritative; legacy `input.context` is promoted when the
+  top-level value is absent.
 - `AgentResult` requires agent identity, status, trace ID, intent, summary, risk,
   approval recommendation, recommended action, and next step.
+- `execution_mode` reports whether the result came from the live model or the
+  deterministic fallback.
 - The planner can set `selected_agent`.
 - `evidence` is a list of reasoning strings, not uploaded evidence files.
 
@@ -139,24 +144,27 @@ paths:
    `https://ai.azure.com/.default`.
 2. Otherwise, if `AZURE_OPENAI_ENDPOINT` exists, create `AzureChatOpenAI` and acquire
    an Entra token for `https://cognitiveservices.azure.com/.default`.
-3. Otherwise, return `None`.
+3. Otherwise, report that no model is configured.
 
 [`reason`](../src/agents/python/app/model.py#L47-L70) wraps the model with
 `with_structured_output(AgentResult)`, sends the agent-specific instructions as the
-system message, and sends trace ID, customer request, and `request.context` as the
-user message. It then overwrites the returned `agent`, `status`, and `trace_id` so
-those operational fields come from the runtime rather than the model.
+system message, and sends trace ID, customer request, and the normalized specialist
+context as the user message. It then overwrites `agent`, `status`, `trace_id`,
+`contract_version`, and `execution_mode` so those operational fields come from the
+runtime rather than the model.
 
-If `_model()` returns `None`,
+If no model is configured and `ALLOW_FALLBACK` is explicitly set to an affirmative
+value for local development,
 [`_local_result`](../src/agents/python/app/model.py#L73-L143) returns deterministic
 rule-based results for every agent. This makes local tests and demonstrations
-repeatable, but operators must not confuse fallback output with a successful model
-call.
+repeatable and marks every result with `execution_mode: fallback`. Hosted production
+registrations set `ALLOW_FALLBACK=false`, so missing model configuration fails the
+invocation rather than returning a success-shaped fallback.
 
-### Important current context-binding gap
+### Versioned planner-to-specialist context handoff
 
-The C# service builds planner handoff fields under a nested `context` value in
-[`WorkflowService`](../src/application/WorkflowService.cs#L284-L295):
+The C# service builds planner handoff fields under `context` in
+[`WorkflowService`](../src/application/WorkflowService.cs):
 
 ```text
 parameters["context"]["planner_summary"]
@@ -165,18 +173,16 @@ parameters["context"]["planner_selected_agent"]
 parameters["context"]["selected_agent"]
 ```
 
-[`FoundryMcpClient`](../src/infrastructure/FoundryMcpClient.cs#L69-L83) places the
-entire parameter dictionary under the top-level JSON property `input`. On the Python
-side that becomes `AgentRequest.input`; however,
-[`reason`](../src/agents/python/app/model.py#L55-L63) reads `request.context`, not
-`request.input["context"]`.
+[`FoundryMcpClient`](../src/infrastructure/FoundryMcpClient.cs) emits the versioned
+`1.0` envelope with `context` both at the typed top level and within the retained
+`input` dictionary. [`AgentRequest`](../src/agents/python/app/contracts.py) treats the
+top-level value as authoritative and promotes legacy `input.context` when required.
+[`reason`](../src/agents/python/app/model.py) sends that normalized value to the
+selected specialist model. A shared JSON fixture exercises the exact C# serialization
+and Python Pydantic boundary.
 
-Consequently, the current specialist model prompt does **not** consume the planner
-summary/evidence handoff constructed by C#. The orchestrator still sequences the calls
-and persists both outcomes, but the specialists are not yet collaborating through
-that intended context. The immediate runtime fix is tracked in
-[#20](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/20);
-the subsequent typed MCP contract is tracked in
+This handoff is orchestrator-mediated context passing, not direct agent-to-agent
+communication. The subsequent real MCP contract and discovery work remains tracked in
 [#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18).
 
 ## 2. Foundry hosted runtime
@@ -399,24 +405,17 @@ retry configuration into the orchestrator. The orchestrator identity receives
 `Foundry Agent Consumer` in
 [`apps/roles.tf`](../apps/roles.tf#L19-L25).
 
-## 5. Runtime configuration caveat
+## 5. Runtime model enforcement
 
-The hosted-agent registration explicitly sets only `BANKING_AGENT_KIND` and
-`AZURE_AI_MODEL_DEPLOYMENT_NAME` in
-[`deploy.py`](../src/agents/deployer/deploy.py#L61-L71).
-The Python model factory requires `FOUNDRY_PROJECT_ENDPOINT` or
-`AZURE_OPENAI_ENDPOINT` to construct a model client.
+[`deploy.py`](../src/agents/deployer/deploy.py) registers every hosted agent with
+`BANKING_AGENT_KIND`, `AZURE_AI_MODEL_DEPLOYMENT_NAME`,
+`FOUNDRY_PROJECT_ENDPOINT`, and `ALLOW_FALLBACK=false`. All four values participate
+in version matching, so changing runtime behavior creates a new hosted-agent version.
 
-The repository does not explicitly add either endpoint to the hosted-agent definition.
-If Foundry does not inject a compatible endpoint into the runtime, `_model()` returns
-`None` and the agent uses `_local_result`. The repository can prove successful
-hosted-agent invocation, but it cannot prove from configuration alone that every
-response came from the model rather than the deterministic fallback.
-
-A future change should make the model execution mode observable and fail readiness or
-deployment when production requires a live model but required endpoint configuration
-is absent. This correction is tracked in
-[#20](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/20).
+Every result carries `contract_version` and `execution_mode`. The orchestrator records
+those non-PII fields in workflow event details and OpenTelemetry tags. Production smoke
+checks require both planner and specialist events to report `execution_mode: model`;
+missing evidence or any fallback result fails the smoke run.
 
 ## 6. What is durable and what is not
 

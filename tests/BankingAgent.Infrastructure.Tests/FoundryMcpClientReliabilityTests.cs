@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json.Nodes;
 using BankingAgent.Infrastructure;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -94,6 +95,60 @@ public sealed class FoundryMcpClientReliabilityTests
         Assert.Equal(1, handler.Attempts);
     }
 
+    [Fact]
+    public async Task InvokeAsync_VersionOneEnvelope_MatchesSharedPythonContractFixture()
+    {
+        var handler = new CapturingHandler(
+            Response(HttpStatusCode.OK, """{"status":"ok"}"""));
+        var client = CreateClient(handler, maxAttempts: 1);
+        var parameters = new Dictionary<string, object?>
+        {
+            ["user_message"] = "Dispute demo transaction DEMO-TXN-1001.",
+            ["trace_id"] = "0123456789abcdef0123456789abcdef",
+            ["workflow_id"] = "11111111-1111-1111-1111-111111111111",
+            ["workflow_status"] = "specialist_processing",
+            ["intent"] = "dispute",
+            ["context"] = new Dictionary<string, object?>
+            {
+                ["planner_summary"] = "The planner selected dispute handling.",
+                ["planner_evidence"] = new[] { "Dispute language was detected." },
+                ["planner_selected_agent"] = "dispute-planning",
+                ["selected_agent"] = "dispute-planning"
+            }
+        };
+
+        var result = await client.InvokeAsync("workflow.plan", parameters);
+
+        Assert.Equal("ok", result.Status);
+        var expected = JsonNode.Parse(
+            await File.ReadAllTextAsync(ContractFixturePath()));
+        var actual = JsonNode.Parse(Assert.IsType<string>(handler.RequestBody));
+        Assert.True(
+            JsonNode.DeepEquals(expected, actual),
+            $"Expected:{Environment.NewLine}{expected}{Environment.NewLine}Actual:{Environment.NewLine}{actual}");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_PlannerEnvelope_EmitsEmptyTopLevelContext()
+    {
+        var handler = new CapturingHandler(
+            Response(HttpStatusCode.OK, """{"status":"ok"}"""));
+        var client = CreateClient(handler, maxAttempts: 1);
+
+        await client.InvokeAsync(
+            "workflow.plan",
+            new Dictionary<string, object?>
+            {
+                ["user_message"] = "Explain this transaction.",
+                ["trace_id"] = "0123456789abcdef0123456789abcdef",
+                ["workflow_id"] = "11111111-1111-1111-1111-111111111111"
+            });
+
+        var request = JsonNode.Parse(Assert.IsType<string>(handler.RequestBody));
+        var context = Assert.IsType<JsonObject>(request!["context"]);
+        Assert.Empty(context);
+    }
+
     private static FoundryMcpClient CreateClient(
         HttpMessageHandler handler,
         int maxAttempts) =>
@@ -123,6 +178,27 @@ public sealed class FoundryMcpClientReliabilityTests
         {
             Content = new StringContent(body)
         };
+
+    private static string ContractFixturePath() =>
+        Path.Combine(
+            AppContext.BaseDirectory,
+            "fixtures",
+            "hosted-agent-invocation-v1.json");
+
+    private sealed class CapturingHandler(HttpResponseMessage response) : HttpMessageHandler
+    {
+        public string? RequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return response;
+        }
+    }
 
     private sealed class SequenceHandler(
         params Func<CancellationToken, Task<HttpResponseMessage>>[] attempts)

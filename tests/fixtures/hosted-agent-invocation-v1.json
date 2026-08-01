@@ -1,0 +1,36 @@
+{
+  "contract_version": "1.0",
+  "tool_name": "workflow.plan",
+  "agent_name": "workflow.plan",
+  "message": "Dispute demo transaction DEMO-TXN-1001.",
+  "trace_id": "0123456789abcdef0123456789abcdef",
+  "workflow_id": "11111111-1111-1111-1111-111111111111",
+  "input": {
+    "user_message": "Dispute demo transaction DEMO-TXN-1001.",
+    "trace_id": "0123456789abcdef0123456789abcdef",
+    "workflow_id": "11111111-1111-1111-1111-111111111111",
+    "workflow_status": "specialist_processing",
+    "intent": "dispute",
+    "context": {
+      "planner_summary": "The planner selected dispute handling.",
+      "planner_evidence": [
+        "Dispute language was detected."
+      ],
+      "planner_selected_agent": "dispute-planning",
+      "selected_agent": "dispute-planning"
+    }
+  },
+  "metadata": {
+    "tool_name": "workflow.plan",
+    "trace_id": "0123456789abcdef0123456789abcdef",
+    "workflow_id": "11111111-1111-1111-1111-111111111111"
+  },
+  "context": {
+    "planner_summary": "The planner selected dispute handling.",
+    "planner_evidence": [
+      "Dispute language was detected."
+    ],
+    "planner_selected_agent": "dispute-planning",
+    "selected_agent": "dispute-planning"
+  }
+}
