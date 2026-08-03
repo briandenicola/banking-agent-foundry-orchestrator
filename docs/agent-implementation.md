@@ -141,8 +141,9 @@ paths:
 
 1. If `BANKING_AGENT_PROJECT_ENDPOINT` exists, create `ChatOpenAI` against the project's
    `/openai/v1/` endpoint and acquire an Entra token for
-   `https://ai.azure.com/.default`. The runtime also accepts the legacy
-   `FOUNDRY_PROJECT_ENDPOINT` name for compatibility.
+   `https://ai.azure.com/.default`. The deployer job populates this value with the
+   non-reserved `BANKING_AGENT_PROJECT_ENDPOINT` name; the runtime also accepts the
+   legacy `FOUNDRY_PROJECT_ENDPOINT` name for compatibility.
 2. Otherwise, if `AZURE_OPENAI_ENDPOINT` exists, create `AzureChatOpenAI` and acquire
    an Entra token for `https://cognitiveservices.azure.com/.default`.
 3. Otherwise, report that no model is configured.

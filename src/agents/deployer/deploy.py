@@ -280,8 +280,18 @@ def _definitions(raw: str) -> list[AgentDefinition]:
     return definitions
 
 
+def _project_endpoint() -> str:
+    endpoint = os.getenv(PROJECT_ENDPOINT_ENV_VAR) or os.getenv(LEGACY_PROJECT_ENDPOINT_ENV_VAR)
+    if not endpoint:
+        raise KeyError(
+            f"Missing Foundry project endpoint. Set {PROJECT_ENDPOINT_ENV_VAR} or "
+            f"{LEGACY_PROJECT_ENDPOINT_ENV_VAR}."
+        )
+    return endpoint
+
+
 def main() -> int:
-    endpoint = os.environ["FOUNDRY_PROJECT_ENDPOINT"]
+    endpoint = _project_endpoint()
     client_id = os.environ["AZURE_CLIENT_ID"]
     image = os.environ["HOSTED_AGENT_IMAGE"]
     model_deployment = os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"]

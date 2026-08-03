@@ -1,8 +1,16 @@
 import json
+import os
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from deploy import AgentDefinition, FoundryClient, _definitions, _items, _version
+from deploy import (
+    AgentDefinition,
+    FoundryClient,
+    _definitions,
+    _items,
+    _project_endpoint,
+    _version,
+)
 
 _IMAGE = "example.azurecr.io/hosted-agents:abc123"
 _MODEL = "gpt-5.4-mini"
@@ -146,6 +154,22 @@ class DeployerContractTests(unittest.TestCase):
         self.assertIn("BANKING_AGENT_PROJECT_ENDPOINT", env)
         self.assertIn("ALLOW_FALLBACK", env)
         self.assertEqual("false", env["ALLOW_FALLBACK"])
+
+    def test_project_endpoint_prefers_non_reserved_env_var(self):
+        with patch.dict(
+            os.environ,
+            {"BANKING_AGENT_PROJECT_ENDPOINT": _ENDPOINT, "FOUNDRY_PROJECT_ENDPOINT": "https://legacy.example.test/project"},
+            clear=True,
+        ):
+            self.assertEqual(_ENDPOINT, _project_endpoint())
+
+    def test_project_endpoint_falls_back_to_legacy_env_var(self):
+        with patch.dict(
+            os.environ,
+            {"FOUNDRY_PROJECT_ENDPOINT": _ENDPOINT},
+            clear=True,
+        ):
+            self.assertEqual(_ENDPOINT, _project_endpoint())
 
     def test_version_falls_back_to_agent_version_id(self):
         self.assertEqual("4", _version({"id": "workflow-planning:4"}))

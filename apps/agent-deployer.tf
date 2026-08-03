@@ -36,7 +36,7 @@ resource "azurerm_container_app_job" "agent_deployer" {
       }
 
       env {
-        name  = "FOUNDRY_PROJECT_ENDPOINT"
+        name  = "BANKING_AGENT_PROJECT_ENDPOINT"
         value = local.foundry_project_endpoint
       }
 
