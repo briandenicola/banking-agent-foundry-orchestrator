@@ -1078,6 +1078,13 @@ def main() -> int:
                 started_at,
             )
         }
+
+    passed_checks = sum(1 for check in checks if check.passed)
+    total_checks = len(checks)
+    summary_line = (
+        f"Smoke summary: {passed_checks}/{total_checks} checks passed; overall status={evidence['status']}"
+    )
+    print(summary_line)
     rendered = json.dumps(evidence, indent=2, sort_keys=True)
     print(rendered)
 
