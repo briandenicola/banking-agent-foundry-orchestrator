@@ -50,7 +50,7 @@ class DeployerContractTests(unittest.TestCase):
                         "environment_variables": {
                             "BANKING_AGENT_KIND": kind,
                             "AZURE_AI_MODEL_DEPLOYMENT_NAME": model,
-                            "FOUNDRY_PROJECT_ENDPOINT": endpoint,
+                            "BANKING_AGENT_PROJECT_ENDPOINT": endpoint,
                             "ALLOW_FALLBACK": fallback,
                         },
                     },
@@ -83,7 +83,7 @@ class DeployerContractTests(unittest.TestCase):
         self.assertEqual(("2", "running"), result)
 
     def test_matching_version_misses_on_different_endpoint(self):
-        """A version with a different FOUNDRY_PROJECT_ENDPOINT must not match."""
+        """A version with a different BANKING_AGENT_PROJECT_ENDPOINT must not match."""
         client = FoundryClient.__new__(FoundryClient)
         client._endpoint = "https://example.test/project"
         client._agent_exists = Mock(return_value=True)
@@ -126,7 +126,7 @@ class DeployerContractTests(unittest.TestCase):
         self.assertEqual("1", version)
         definition = client._request.call_args.args[2]["definition"]
         env = definition["environment_variables"]
-        self.assertEqual(_ENDPOINT, env["FOUNDRY_PROJECT_ENDPOINT"])
+        self.assertEqual(_ENDPOINT, env["BANKING_AGENT_PROJECT_ENDPOINT"])
         self.assertEqual("false", env["ALLOW_FALLBACK"])
 
     def test_deploy_definition_includes_required_env_vars(self):
@@ -143,7 +143,7 @@ class DeployerContractTests(unittest.TestCase):
         env = definition["environment_variables"]
         self.assertIn("BANKING_AGENT_KIND", env)
         self.assertIn("AZURE_AI_MODEL_DEPLOYMENT_NAME", env)
-        self.assertIn("FOUNDRY_PROJECT_ENDPOINT", env)
+        self.assertIn("BANKING_AGENT_PROJECT_ENDPOINT", env)
         self.assertIn("ALLOW_FALLBACK", env)
         self.assertEqual("false", env["ALLOW_FALLBACK"])
 

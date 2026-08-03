@@ -10,6 +10,8 @@ from app.contracts import CONTRACT_VERSION, AgentName, AgentRequest, AgentResult
 
 
 StructuredReasoner = Callable[[AgentName, str, AgentRequest], Awaitable[AgentResult]]
+PROJECT_ENDPOINT_ENV_VAR = "BANKING_AGENT_PROJECT_ENDPOINT"
+LEGACY_PROJECT_ENDPOINT_ENV_VAR = "FOUNDRY_PROJECT_ENDPOINT"
 
 
 class ModelUnavailableError(RuntimeError):
@@ -39,7 +41,7 @@ def _fallback_allowed() -> bool:
 
 
 def _model() -> AzureChatOpenAI | ChatOpenAI | None:
-    project_endpoint = os.getenv("FOUNDRY_PROJECT_ENDPOINT")
+    project_endpoint = os.getenv(PROJECT_ENDPOINT_ENV_VAR) or os.getenv(LEGACY_PROJECT_ENDPOINT_ENV_VAR)
     deployment = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini")
     credential = DefaultAzureCredential()
 

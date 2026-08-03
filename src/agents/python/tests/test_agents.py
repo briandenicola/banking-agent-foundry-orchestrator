@@ -18,6 +18,7 @@ _FIXTURE = _REPO_ROOT / "tests" / "fixtures" / "hosted-agent-invocation-v1.json"
 class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         os.environ.pop("AZURE_OPENAI_ENDPOINT", None)
+        os.environ.pop("BANKING_AGENT_PROJECT_ENDPOINT", None)
         os.environ.pop("FOUNDRY_PROJECT_ENDPOINT", None)
         os.environ.pop("ALLOW_FALLBACK", None)
 
@@ -210,6 +211,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
     # ------------------------------------------------------------------
 
     async def test_fallback_path_sets_execution_mode_fallback(self):
+        os.environ.pop("BANKING_AGENT_PROJECT_ENDPOINT", None)
         os.environ.pop("FOUNDRY_PROJECT_ENDPOINT", None)
         os.environ.pop("AZURE_OPENAI_ENDPOINT", None)
         os.environ["ALLOW_FALLBACK"] = "true"
@@ -219,6 +221,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fallback_disabled_raises_when_no_model(self):
         os.environ["ALLOW_FALLBACK"] = "false"
+        os.environ.pop("BANKING_AGENT_PROJECT_ENDPOINT", None)
         os.environ.pop("FOUNDRY_PROJECT_ENDPOINT", None)
         os.environ.pop("AZURE_OPENAI_ENDPOINT", None)
         request = AgentRequest(message="Dispute this charge", trace_id="t1")
@@ -228,7 +231,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_error_is_not_masked_as_fallback_success(self):
         """A live model call that raises must propagate — never be silently
         downgraded into a success-shaped deterministic fallback response."""
-        os.environ["FOUNDRY_PROJECT_ENDPOINT"] = "https://example.test"
+        os.environ["BANKING_AGENT_PROJECT_ENDPOINT"] = "https://example.test"
         os.environ["ALLOW_FALLBACK"] = "true"
 
         broken_model = Mock()
@@ -243,6 +246,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_fallback_disabled_when_allow_fallback_unset(self):
         """Unset ALLOW_FALLBACK must disable fallback (strict opt-in)."""
         os.environ.pop("ALLOW_FALLBACK", None)
+        os.environ.pop("BANKING_AGENT_PROJECT_ENDPOINT", None)
         os.environ.pop("FOUNDRY_PROJECT_ENDPOINT", None)
         os.environ.pop("AZURE_OPENAI_ENDPOINT", None)
         request = AgentRequest(message="Dispute this charge", trace_id="t1")
@@ -254,6 +258,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
         request = AgentRequest(message="Dispute this charge", trace_id="t1")
         for value in ("true", "True", "TRUE", "1", "yes", "YES", "on", "ON", " true "):
             with self.subTest(value=value):
+                os.environ.pop("BANKING_AGENT_PROJECT_ENDPOINT", None)
                 os.environ.pop("FOUNDRY_PROJECT_ENDPOINT", None)
                 os.environ.pop("AZURE_OPENAI_ENDPOINT", None)
                 os.environ["ALLOW_FALLBACK"] = value
@@ -265,6 +270,7 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
         request = AgentRequest(message="Dispute this charge", trace_id="t1")
         for value in ("false", "False", "FALSE", "0", "no", "NO", "off", "OFF", "", "maybe", "  "):
             with self.subTest(value=value):
+                os.environ.pop("BANKING_AGENT_PROJECT_ENDPOINT", None)
                 os.environ.pop("FOUNDRY_PROJECT_ENDPOINT", None)
                 os.environ.pop("AZURE_OPENAI_ENDPOINT", None)
                 os.environ["ALLOW_FALLBACK"] = value

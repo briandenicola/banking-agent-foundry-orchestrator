@@ -8,6 +8,9 @@ show_containerapp_job_execution_logs() {
   local environment_id
   local workspace_id
   local logs
+  local execution_details
+  local -a tables=("ContainerAppConsoleLogs_CL" "ContainerAppSystemLogs_CL" "ContainerAppConsoleLogs" "ContainerAppSystemLogs")
+  local table
 
   environment_id="$(
     az containerapp job show \
@@ -36,22 +39,37 @@ show_containerapp_job_execution_logs() {
 
   echo "${log_label}:" >&2
 
-  for _ in $(seq 1 3); do
-    logs="$(
-      az monitor log-analytics query \
-        --workspace "${workspace_id}" \
-        --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s startswith '${execution_name}-' | project TimeGenerated, Log_s | order by TimeGenerated asc" \
-        --query "[].Log_s" \
-        --output tsv 2>/dev/null || true
-    )"
+  execution_details="$(
+    az containerapp job execution show \
+      --name "${job_name}" \
+      --resource-group "${resource_group}" \
+      --job-execution-name "${execution_name}" \
+      --output json 2>/dev/null || true
+  )"
 
-    if [[ -n "${logs}" ]]; then
-      printf '%s\n' "${logs}" >&2
-      return
-    fi
+  if [[ -n "${execution_details}" ]]; then
+    echo "Execution details:" >&2
+    printf '%s\n' "${execution_details}" >&2
+  fi
+
+  for _ in $(seq 1 3); do
+    for table in "${tables[@]}"; do
+      logs="$(
+        az monitor log-analytics query \
+          --workspace "${workspace_id}" \
+          --analytics-query "${table} | where ContainerGroupName_s startswith '${execution_name}' or ContainerGroupName_s contains '${execution_name}' or ContainerAppName_s contains '${execution_name}' | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+          --query "[].Log_s" \
+          --output tsv 2>/dev/null || true
+      )"
+
+      if [[ -n "${logs}" ]]; then
+        printf '%s\n' "${logs}" >&2
+        return
+      fi
+    done
 
     sleep 10
   done
 
-  echo "No execution logs were available after waiting for Log Analytics ingestion." >&2
+  echo "No execution logs were available after waiting for Log Analytics ingestion and checking the common Container Apps log tables." >&2
 }

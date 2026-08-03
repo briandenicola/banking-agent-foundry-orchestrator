@@ -17,6 +17,8 @@ API_VERSION = "v1"
 TOKEN_SCOPE = "https://ai.azure.com/.default"
 READY_STATUSES = {"active", "running"}
 PENDING_STATUSES = {"creating", "starting", "updating"}
+PROJECT_ENDPOINT_ENV_VAR = "BANKING_AGENT_PROJECT_ENDPOINT"
+LEGACY_PROJECT_ENDPOINT_ENV_VAR = "FOUNDRY_PROJECT_ENDPOINT"
 
 
 @dataclass(frozen=True)
@@ -73,7 +75,7 @@ class FoundryClient:
                 # Explicit runtime configuration — every env var that affects
                 # runtime behaviour participates in version/redeploy matching so
                 # that a config change always creates or updates a version.
-                "FOUNDRY_PROJECT_ENDPOINT": project_endpoint,
+                PROJECT_ENDPOINT_ENV_VAR: project_endpoint,
                 "ALLOW_FALLBACK": "false",
             },
         }
@@ -134,11 +136,14 @@ class FoundryClient:
             definition = version.get("definition") or {}
             container = definition.get("container_configuration") or {}
             environment = definition.get("environment_variables") or {}
+            runtime_project_endpoint = environment.get(PROJECT_ENDPOINT_ENV_VAR) or environment.get(
+                LEGACY_PROJECT_ENDPOINT_ENV_VAR
+            )
             if (
                 container.get("image") == image
                 and environment.get("BANKING_AGENT_KIND") == agent.kind
                 and environment.get("AZURE_AI_MODEL_DEPLOYMENT_NAME") == model_deployment
-                and environment.get("FOUNDRY_PROJECT_ENDPOINT") == project_endpoint
+                and runtime_project_endpoint == project_endpoint
                 and environment.get("ALLOW_FALLBACK") == "false"
             ):
                 return str(version.get("version")), status
