@@ -26,4 +26,5 @@ public sealed record McpToolDefinition(
     string Endpoint,
     IReadOnlyDictionary<string, object?> InputSchema,
     string DiscoverySource,
-    bool IsDefault = false);
+    bool IsDefault = false,
+    IReadOnlyDictionary<string, object?>? OutputSchema = null);

@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Azure;
 using Azure.Core;
@@ -43,6 +45,12 @@ public sealed class FoundryMcpClient : IMcpClient
     private readonly IReadOnlyDictionary<string, string> _toolEndpoints;
     private readonly Dictionary<string, McpToolDefinition> _discoveredTools;
     private readonly FoundryMcpClientOptions _options;
+    private static readonly IReadOnlyDictionary<string, object?> EmptySchema = new Dictionary<string, object?>
+    {
+        ["type"] = "object",
+        ["properties"] = new Dictionary<string, object?>(),
+        ["required"] = Array.Empty<string>()
+    };
 
     public FoundryMcpClient(
         HttpClient httpClient,
@@ -71,9 +79,10 @@ public sealed class FoundryMcpClient : IMcpClient
                 "Tool endpoint from configuration",
                 _agentName ?? toolEndpoint.Key,
                 toolEndpoint.Value,
-                new Dictionary<string, object?> { ["type"] = "object" },
+                CreateToolInputSchema(toolEndpoint.Key),
                 "configuration",
-                IsDefault: false);
+                IsDefault: false,
+                OutputSchema: CreateToolOutputSchema(toolEndpoint.Key));
         }
 
         if (!string.IsNullOrWhiteSpace(_defaultEndpoint))
@@ -83,9 +92,10 @@ public sealed class FoundryMcpClient : IMcpClient
                 "Default Foundry endpoint",
                 _agentName ?? "default",
                 _defaultEndpoint,
-                new Dictionary<string, object?> { ["type"] = "object" },
+                CreateToolInputSchema("default"),
                 "configuration",
-                IsDefault: true);
+                IsDefault: true,
+                OutputSchema: CreateToolOutputSchema("default"));
         }
     }
 
@@ -97,6 +107,7 @@ public sealed class FoundryMcpClient : IMcpClient
         {
             try
             {
+                var mcpDiscoveryRequest = BuildDiscoveryRequest(agentName);
                 using var request = new HttpRequestMessage(HttpMethod.Post, _discoveryEndpoint)
                 {
                     Content = JsonContent.Create(new
@@ -107,7 +118,8 @@ public sealed class FoundryMcpClient : IMcpClient
                         input = new Dictionary<string, object?>
                         {
                             ["agent_name"] = agentName ?? ResolveAgentName("default")
-                        }
+                        },
+                        mcp = mcpDiscoveryRequest
                     })
                 };
 
@@ -144,9 +156,10 @@ public sealed class FoundryMcpClient : IMcpClient
                                 "Tool endpoint from configuration",
                                 _agentName ?? toolEndpoint.Key,
                                 toolEndpoint.Value,
-                                new Dictionary<string, object?> { ["type"] = "object" },
+                                CreateToolInputSchema(toolEndpoint.Key),
                                 "configuration",
-                                IsDefault: false);
+                                IsDefault: false,
+                                OutputSchema: CreateToolOutputSchema(toolEndpoint.Key));
                         }
 
                         if (!string.IsNullOrWhiteSpace(_defaultEndpoint))
@@ -156,9 +169,10 @@ public sealed class FoundryMcpClient : IMcpClient
                                 "Default Foundry endpoint",
                                 _agentName ?? "default",
                                 _defaultEndpoint,
-                                new Dictionary<string, object?> { ["type"] = "object" },
+                                CreateToolInputSchema("default"),
                                 "configuration",
-                                IsDefault: true);
+                                IsDefault: true,
+                                OutputSchema: CreateToolOutputSchema("default"));
                         }
 
                         return discovered;
@@ -191,6 +205,7 @@ public sealed class FoundryMcpClient : IMcpClient
             contextValue is not null
                 ? contextValue
                 : new Dictionary<string, object?>();
+        var mcpCallRequest = BuildToolsCallRequest(toolName, parameters);
         var payload = new
         {
             contract_version = ContractVersion,
@@ -204,9 +219,13 @@ public sealed class FoundryMcpClient : IMcpClient
             {
                 tool_name = toolName,
                 trace_id = traceId,
-                workflow_id = workflowId
+                workflow_id = workflowId,
+                mcp_protocol = "jsonrpc-2.0",
+                mcp_method = mcpCallRequest.TryGetValue("method", out var methodValue) ? methodValue?.ToString() : null,
+                mcp_tool_name = toolName
             },
-            context
+            context,
+            mcp = mcpCallRequest
         };
 
         for (var attempt = 1; attempt <= _options.MaxAttempts; attempt++)
@@ -402,10 +421,23 @@ public sealed class FoundryMcpClient : IMcpClient
                 return [];
             }
 
-            if (document.RootElement.TryGetProperty("tools", out var tools) &&
-                tools.ValueKind == JsonValueKind.Array)
+            if (document.RootElement.TryGetProperty("result", out var result) &&
+                result.ValueKind == JsonValueKind.Object)
             {
-                return tools.EnumerateArray()
+                if (result.TryGetProperty("tools", out var tools) && tools.ValueKind == JsonValueKind.Array)
+                {
+                    return tools.EnumerateArray()
+                        .Select(tool => ReadToolDefinition(tool, agentName))
+                        .Where(definition => definition is not null)
+                        .Select(definition => definition!)
+                        .ToList();
+                }
+            }
+
+            if (document.RootElement.TryGetProperty("tools", out var toolsArray) &&
+                toolsArray.ValueKind == JsonValueKind.Array)
+            {
+                return toolsArray.EnumerateArray()
                     .Select(tool => ReadToolDefinition(tool, agentName))
                     .Where(definition => definition is not null)
                     .Select(definition => definition!)
@@ -456,9 +488,10 @@ public sealed class FoundryMcpClient : IMcpClient
             description ?? "Discovered Foundry MCP tool",
             agentName ?? name!,
             endpoint!,
-            new Dictionary<string, object?> { ["type"] = "object" },
+            ReadToolInputSchema(tool),
             "discovery",
-            IsDefault: false);
+            IsDefault: false,
+            OutputSchema: ReadToolOutputSchema(tool));
     }
 
     private static object? TryParseResponse(string responseBody)
@@ -476,6 +509,179 @@ public sealed class FoundryMcpClient : IMcpClient
         {
             return responseBody;
         }
+    }
+
+    private static Dictionary<string, object?> BuildDiscoveryRequest(string? agentName) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = CreateRequestId("tools/list", agentName ?? "default"),
+        ["method"] = "tools/list",
+        ["params"] = new Dictionary<string, object?>
+        {
+            ["cursor"] = (string?)null,
+            ["agent_name"] = agentName ?? "default"
+        }
+    };
+
+    private static Dictionary<string, object?> BuildToolsCallRequest(string toolName, IDictionary<string, object?> parameters) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = CreateRequestId("tools/call", toolName, parameters),
+        ["method"] = "tools/call",
+        ["params"] = new Dictionary<string, object?>
+        {
+            ["name"] = toolName,
+            ["arguments"] = parameters
+        }
+    };
+
+    private static string CreateRequestId(string method, string? seed)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{method}:{seed ?? "default"}"));
+        return Convert.ToHexString(hash)[..16].ToLowerInvariant();
+    }
+
+    private static string CreateRequestId(string method, string toolName, IDictionary<string, object?> parameters)
+    {
+        var traceId = parameters.TryGetValue("trace_id", out var traceIdValue)
+            ? traceIdValue?.ToString() ?? "trace:none"
+            : "trace:none";
+        var workflowId = parameters.TryGetValue("workflow_id", out var workflowIdValue)
+            ? workflowIdValue?.ToString() ?? "workflow:none"
+            : "workflow:none";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{method}:{toolName}:{traceId}:{workflowId}"));
+        return Convert.ToHexString(hash)[..16].ToLowerInvariant();
+    }
+
+    private static IReadOnlyDictionary<string, object?> CreateToolInputSchema(string toolName)
+    {
+        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["user_message"] = new Dictionary<string, object?>
+            {
+                ["type"] = "string",
+                ["description"] = "The customer request or workflow prompt."
+            },
+            ["trace_id"] = new Dictionary<string, object?>
+            {
+                ["type"] = "string",
+                ["description"] = "The workflow trace identifier."
+            },
+            ["workflow_id"] = new Dictionary<string, object?>
+            {
+                ["type"] = "string",
+                ["description"] = "The durable workflow identifier."
+            },
+            ["context"] = new Dictionary<string, object?>
+            {
+                ["type"] = "object",
+                ["description"] = "Context passed from the orchestrator to the specialist."
+            },
+            ["workflow_status"] = new Dictionary<string, object?>
+            {
+                ["type"] = "string",
+                ["description"] = "The orchestrator workflow status."
+            },
+            ["intent"] = new Dictionary<string, object?>
+            {
+                ["type"] = "string",
+                ["description"] = "The orchestrator intent when already known."
+            }
+        };
+
+        return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["type"] = "object",
+            ["title"] = $"{toolName} input",
+            ["properties"] = properties,
+            ["required"] = new[] { "user_message", "trace_id", "workflow_id" },
+            ["additionalProperties"] = true
+        };
+    }
+
+    private static IReadOnlyDictionary<string, object?> CreateToolOutputSchema(string toolName)
+    {
+        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["agent"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["status"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["execution_mode"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["contract_version"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["intent"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["summary"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["requires_approval"] = new Dictionary<string, object?> { ["type"] = "boolean" },
+            ["selected_agent"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["evidence"] = new Dictionary<string, object?> { ["type"] = "array" }
+        };
+
+        return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["type"] = "object",
+            ["title"] = $"{toolName} output",
+            ["properties"] = properties,
+            ["additionalProperties"] = true
+        };
+    }
+
+    private static IReadOnlyDictionary<string, object?> ReadToolInputSchema(JsonElement tool)
+    {
+        if (tool.TryGetProperty("inputSchema", out var inputSchemaElement) &&
+            inputSchemaElement.ValueKind == JsonValueKind.Object)
+        {
+            return ReadSchemaProperties(inputSchemaElement);
+        }
+
+        return CreateToolInputSchema(tool.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String
+            ? nameElement.GetString() ?? "tool"
+            : "tool");
+    }
+
+    private static IReadOnlyDictionary<string, object?> ReadToolOutputSchema(JsonElement tool)
+    {
+        if (tool.TryGetProperty("outputSchema", out var outputSchemaElement) &&
+            outputSchemaElement.ValueKind == JsonValueKind.Object)
+        {
+            return ReadSchemaProperties(outputSchemaElement);
+        }
+
+        return CreateToolOutputSchema(tool.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String
+            ? nameElement.GetString() ?? "tool"
+            : "tool");
+    }
+
+    private static IReadOnlyDictionary<string, object?> ReadSchemaProperties(JsonElement schema)
+    {
+        if (schema.TryGetProperty("properties", out var propertiesElement) &&
+            propertiesElement.ValueKind == JsonValueKind.Object)
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, object?>>(propertiesElement.GetRawText())
+                ?? EmptySchema;
+        }
+
+        if (schema.TryGetProperty("required", out var requiredElement) &&
+            requiredElement.ValueKind == JsonValueKind.Array)
+        {
+            var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in requiredElement.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    properties[item.GetString() ?? string.Empty] = new Dictionary<string, object?>
+                    {
+                        ["type"] = "string",
+                        ["required"] = true
+                    };
+                }
+            }
+
+            if (properties.Count > 0)
+            {
+                return properties;
+            }
+        }
+
+        return JsonSerializer.Deserialize<Dictionary<string, object?>>(schema.GetRawText())
+            ?? EmptySchema;
     }
 
     private static (string? Code, string? Message) ReadError(object? response)
@@ -523,7 +729,10 @@ public sealed class FoundryMcpClient : IMcpClient
             ["error_message"] = errorMessage,
             ["agent_invocation_id"] = agentInvocationId,
             ["agent_session_id"] = agentSessionId,
-            ["attempts"] = attempt
+            ["attempts"] = attempt,
+            ["mcp_protocol"] = "jsonrpc-2.0",
+            ["mcp_method"] = "tools/call",
+            ["mcp_tool_name"] = toolName
         };
 
         var message = response.IsSuccessStatusCode

@@ -12,7 +12,10 @@ PostgreSQL; the Python agents still do not call each other or access PostgreSQL.
 The transport boundary is a Foundry-backed MCP-style adapter that now performs a
 pre-invocation tool discovery step for each agent before sending the hosted-agent
 request, allowing the runtime to use discovered tool catalogs and endpoint metadata
-when available.
+when available. Discovery requests use an MCP-style `tools/list` envelope, tool
+invocations use an MCP-style `tools/call` envelope, and the adapter preserves the
+request metadata needed to trace workflow execution and typed schema information for
+each discovered tool.
 
 ```mermaid
 flowchart LR

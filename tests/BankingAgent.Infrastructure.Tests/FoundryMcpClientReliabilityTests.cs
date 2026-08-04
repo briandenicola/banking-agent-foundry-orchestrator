@@ -150,6 +150,25 @@ public sealed class FoundryMcpClientReliabilityTests
     }
 
     [Fact]
+    public async Task InvokeAsync_AddsMcpMetadataAndCallEnvelope()
+    {
+        var handler = new CapturingHandler(
+            Response(HttpStatusCode.OK, """{"status":"ok"}"""));
+        var client = CreateClient(handler, maxAttempts: 1);
+
+        await client.InvokeAsync("workflow.plan", Parameters());
+
+        var request = JsonNode.Parse(Assert.IsType<string>(handler.RequestBody));
+        var metadata = Assert.IsType<JsonObject>(request!["metadata"]);
+        Assert.Equal("jsonrpc-2.0", metadata["mcp_protocol"]?.GetValue<string>());
+        Assert.Equal("tools/call", metadata["mcp_method"]?.GetValue<string>());
+        Assert.Equal("workflow.plan", metadata["mcp_tool_name"]?.GetValue<string>());
+        var mcp = Assert.IsType<JsonObject>(request["mcp"]);
+        Assert.Equal("tools/call", mcp["method"]?.GetValue<string>());
+        Assert.Equal("workflow.plan", mcp["params"]?["name"]?.GetValue<string>());
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_RemoteCatalog_PopulatesToolDefinitions()
     {
         var handler = new CapturingHandler(
@@ -161,6 +180,22 @@ public sealed class FoundryMcpClientReliabilityTests
         Assert.Single(tools);
         Assert.Equal("workflow.plan", tools[0].Name);
         Assert.Equal("https://example.test/planner", tools[0].Endpoint);
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_McpEnvelope_PopulatesTypedSchemas()
+    {
+        var handler = new CapturingHandler(
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"1","result":{"tools":[{"name":"workflow.plan","description":"Planner","endpoint":"https://example.test/planner","inputSchema":{"type":"object","required":["user_message"]},"outputSchema":{"type":"object"}}]}}"""));
+        var client = CreateClient(handler, maxAttempts: 1, discoveryEndpoint: "https://example.test/discover");
+
+        var tools = await client.DiscoverToolsAsync("workflow-planning");
+
+        var tool = Assert.Single(tools);
+        Assert.Equal("workflow.plan", tool.Name);
+        Assert.NotNull(tool.InputSchema);
+        Assert.NotNull(tool.OutputSchema);
+        Assert.Contains("user_message", tool.InputSchema.Keys);
     }
 
     private static FoundryMcpClient CreateClient(
