@@ -23,11 +23,68 @@ public sealed class WorkflowServiceCurrentBehaviorTests
 
     public WorkflowServiceCurrentBehaviorTests()
     {
+        _mcpClient
+            .Setup(client => client.DiscoverToolsAsync(
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
         _sut = new WorkflowService(
             _mcpClient.Object,
             NullLogger<WorkflowService>.Instance,
             _repo.Object,
             _actionRepo.Object);
+    }
+
+    [Fact]
+    public async Task RecoverAsync_DiscoversToolsBeforeInvokingPlanner()
+    {
+        WorkflowState? current = null;
+        _repo.Setup(repository => repository.AddAsync(
+                It.IsAny<WorkflowState>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, CancellationToken>((workflow, _) => current = workflow)
+            .Returns(Task.CompletedTask);
+        _repo.Setup(repository => repository.GetAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => current);
+        _repo.Setup(repository => repository.UpdateAsync(
+                It.IsAny<WorkflowState>(),
+                It.IsAny<long>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<WorkflowState, long, CancellationToken>((workflow, _, _) => current = workflow)
+            .Returns(Task.CompletedTask);
+
+        _mcpClient.Setup(client => client.DiscoverToolsAsync(
+                "workflow-planning",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new McpToolDefinition(
+                    "workflow-planning",
+                    "Planner tool",
+                    "workflow-planning",
+                    "https://example.invalid/planner",
+                    new Dictionary<string, object?> { ["type"] = "object" },
+                    "discovery")
+            ]);
+        _mcpClient.Setup(client => client.InvokeAsync(
+                "workflow.plan",
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpToolResult(
+                "workflow.plan",
+                "ok",
+                "Agent completed.",
+                new Dictionary<string, object?> { ["response_body"] = "[]" }));
+
+        var draft = await _sut.StartAsync("Why is this charge pending?");
+        await _sut.RecoverAsync(draft.Id);
+
+        _mcpClient.Verify(client => client.DiscoverToolsAsync(
+            "workflow-planning",
+            It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]

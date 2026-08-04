@@ -9,8 +9,10 @@ repository implements today from the Agent Framework and MCP target architecture
 The C# `WorkflowService` now runs a small Agent Framework workflow that sequences
 planner, routing, and specialist execution before it persists workflow state in
 PostgreSQL; the Python agents still do not call each other or access PostgreSQL.
-The transport boundary is a Foundry-backed MCP-style adapter that can discover tool
-catalogs and invoke them through the hosted-agent contract.
+The transport boundary is a Foundry-backed MCP-style adapter that now performs a
+pre-invocation tool discovery step for each agent before sending the hosted-agent
+request, allowing the runtime to use discovered tool catalogs and endpoint metadata
+when available.
 
 ```mermaid
 flowchart LR

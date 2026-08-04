@@ -555,6 +555,17 @@ public sealed class WorkflowService : IWorkflowService
 
         try
         {
+            IReadOnlyList<McpToolDefinition> discoveredTools = [];
+            if (demoFault is not (DemoScenarioFault.HostedAgentFailure or DemoScenarioFault.HostedAgentTimeout))
+            {
+                discoveredTools = await _mcpClient.DiscoverToolsAsync(agentName, cancellationToken);
+                activity?.SetTag("agent.discovered_tools.count", discoveredTools.Count);
+                if (discoveredTools.Count > 0)
+                {
+                    activity?.SetTag("agent.discovered_tools", string.Join(",", discoveredTools.Select(tool => tool.Name)));
+                }
+            }
+
             var result = demoFault switch
             {
                 DemoScenarioFault.HostedAgentFailure => new McpToolResult(
@@ -744,8 +755,20 @@ public sealed class WorkflowService : IWorkflowService
     private static (string? ContractVersion, string? ExecutionMode) ReadAgentContractMetadata(
         McpToolResult result)
     {
-        if (!result.Data.TryGetValue("response_body", out var responseBodyValue) ||
-            responseBodyValue is not string responseBody)
+        if (!result.Data.TryGetValue("response_body", out var responseBodyValue))
+        {
+            return (null, null);
+        }
+
+        var responseBody = responseBodyValue switch
+        {
+            string text when !string.IsNullOrWhiteSpace(text) => text,
+            JsonElement jsonElement when jsonElement.ValueKind == JsonValueKind.String => jsonElement.GetString(),
+            JsonElement jsonElement => jsonElement.ToString(),
+            _ => null
+        };
+
+        if (string.IsNullOrWhiteSpace(responseBody))
         {
             return (null, null);
         }
@@ -789,9 +812,21 @@ public sealed class WorkflowService : IWorkflowService
             return false;
         }
 
-        if (!result.Data.TryGetValue("response_body", out var responseBodyValue) ||
-            responseBodyValue is not string responseBody ||
-            string.IsNullOrWhiteSpace(responseBody))
+        if (!result.Data.TryGetValue("response_body", out var responseBodyValue))
+        {
+            error = $"Tool {result.ToolName} did not return an agent response body.";
+            return false;
+        }
+
+        var responseBody = responseBodyValue switch
+        {
+            string text when !string.IsNullOrWhiteSpace(text) => text,
+            JsonElement jsonElement when jsonElement.ValueKind == JsonValueKind.String => jsonElement.GetString(),
+            JsonElement jsonElement => jsonElement.ToString(),
+            _ => null
+        };
+
+        if (string.IsNullOrWhiteSpace(responseBody))
         {
             error = $"Tool {result.ToolName} did not return an agent response body.";
             return false;

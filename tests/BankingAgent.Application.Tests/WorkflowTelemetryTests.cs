@@ -70,6 +70,11 @@ public sealed class WorkflowTelemetryTests
 
         var mcpClient = new Mock<IMcpClient>(MockBehavior.Strict);
         mcpClient
+            .Setup(client => client.DiscoverToolsAsync(
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        mcpClient
             .Setup(client => client.InvokeAsync(
                 "workflow.plan",
                 It.IsAny<IDictionary<string, object?>>(),

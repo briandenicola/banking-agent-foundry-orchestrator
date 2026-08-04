@@ -41,44 +41,25 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             demoScenario,
             workflow.UserMessage,
             workflow.TraceId,
-            workflow.Id,
-            CancellationToken: cancellationToken);
+            workflow.Id);
 
         try
         {
-            var currentContext = initialContext;
-            currentContext = await ExecutePlannerStepAsync(currentContext, cancellationToken);
-            if (currentContext.Failed)
-            {
-                return new AgentFrameworkWorkflowExecution(
-                    currentContext,
-                    Failed: true,
-                    ErrorMessage: currentContext.ErrorMessage);
-            }
+            var workflowDefinition = BuildWorkflow();
+            var environment = CreateExecutionEnvironment();
+            var run = await environment.RunAsync(
+                workflowDefinition,
+                initialContext,
+                workflow.Id.ToString("N"),
+                cancellationToken);
 
-            currentContext = await ExecuteRoutingStepAsync(currentContext, cancellationToken);
-            if (currentContext.Failed)
-            {
-                return new AgentFrameworkWorkflowExecution(
-                    currentContext,
-                    Failed: true,
-                    ErrorMessage: currentContext.ErrorMessage);
-            }
-
-            currentContext = await ExecuteSpecialistStepAsync(currentContext, cancellationToken);
-            if (currentContext.Failed)
-            {
-                return new AgentFrameworkWorkflowExecution(
-                    currentContext,
-                    Failed: true,
-                    ErrorMessage: currentContext.ErrorMessage);
-            }
-
-            currentContext = await ExecuteTerminalStepAsync(currentContext, cancellationToken);
-            return new AgentFrameworkWorkflowExecution(
-                currentContext,
-                Failed: currentContext.Failed,
-                ErrorMessage: currentContext.ErrorMessage);
+            var newEvents = run.NewEvents.ToList();
+            ThrowIfCanceled(newEvents, cancellationToken);
+            var output = await ExtractOutputAsync(newEvents, cancellationToken);
+            return output ?? new AgentFrameworkWorkflowExecution(
+                initialContext,
+                Failed: true,
+                ErrorMessage: "The Agent Framework workflow did not emit a terminal output.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -113,24 +94,24 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
     private Workflow BuildWorkflow()
     {
         var plannerBinding = ((Func<WorkflowExecutionContext, IWorkflowContext, CancellationToken, ValueTask<WorkflowExecutionContext>>)(
-            async (context, _, cancellationToken) =>
-                await ExecutePlannerStepAsync(context, cancellationToken)))
+            async (context, workflowContext, cancellationToken) =>
+                await ExecutePlannerStepAsync(context, workflowContext, cancellationToken)))
             .BindAsExecutor<WorkflowExecutionContext, WorkflowExecutionContext>("planner", null, false);
 
         var routingBinding = ((Func<WorkflowExecutionContext, IWorkflowContext, CancellationToken, ValueTask<WorkflowExecutionContext>>)(
-            async (context, _, cancellationToken) =>
-                await ExecuteRoutingStepAsync(context, cancellationToken)))
+            async (context, workflowContext, cancellationToken) =>
+                await ExecuteRoutingStepAsync(context, workflowContext, cancellationToken)))
             .BindAsExecutor<WorkflowExecutionContext, WorkflowExecutionContext>("routing", null, false);
 
         var specialistBinding = ((Func<WorkflowExecutionContext, IWorkflowContext, CancellationToken, ValueTask<WorkflowExecutionContext>>)(
-            async (context, _, cancellationToken) =>
-                await ExecuteSpecialistStepAsync(context, cancellationToken)))
+            async (context, workflowContext, cancellationToken) =>
+                await ExecuteSpecialistStepAsync(context, workflowContext, cancellationToken)))
             .BindAsExecutor<WorkflowExecutionContext, WorkflowExecutionContext>("specialist", null, false);
 
-        var terminalBinding = ((Func<WorkflowExecutionContext, IWorkflowContext, CancellationToken, ValueTask<WorkflowExecutionContext>>)(
-            async (context, _, cancellationToken) =>
-                await ExecuteTerminalStepAsync(context, cancellationToken)))
-            .BindAsExecutor<WorkflowExecutionContext, WorkflowExecutionContext>("terminal", null, false);
+        var terminalBinding = ((Func<WorkflowExecutionContext, IWorkflowContext, CancellationToken, ValueTask<string>>)(
+            async (context, workflowContext, cancellationToken) =>
+                await ExecuteTerminalStepAsync(context, workflowContext, cancellationToken)))
+            .BindAsExecutor<WorkflowExecutionContext, string>("terminal", null, false);
 
         return new WorkflowBuilder(plannerBinding)
             .AddEdge(plannerBinding, routingBinding)
@@ -143,9 +124,10 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
 
     private async Task<WorkflowExecutionContext> ExecutePlannerStepAsync(
         WorkflowExecutionContext context,
+        IWorkflowContext workflowContext,
         CancellationToken cancellationToken)
     {
-        context.CancellationToken.ThrowIfCancellationRequested();
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (context.Failed)
         {
@@ -161,6 +143,7 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             ["correlation_id"] = WorkflowTelemetry.GetCorrelationId()
         };
 
+        Console.Error.WriteLine($"[AF-step] planner workflowId={context.WorkflowId}");
         try
         {
             var plannerResult = await _invokeAgentAsync(
@@ -170,7 +153,7 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
                 context.TraceId,
                 plannerParameters,
                 context.DemoScenario?.Fault ?? DemoScenarioFault.None,
-                context.CancellationToken);
+                cancellationToken);
             if (!TryReadAgentResult(plannerResult, "workflow-planning", out var plannerDecision, out var error))
             {
                 return context with
@@ -204,13 +187,17 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
 
     private Task<WorkflowExecutionContext> ExecuteRoutingStepAsync(
         WorkflowExecutionContext context,
+        IWorkflowContext workflowContext,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (context.Failed)
         {
             return Task.FromResult(context);
         }
 
+        Console.Error.WriteLine($"[AF-step] routing workflowId={context.WorkflowId}");
         var route = WorkflowRoutingPolicy.Decide(context.UserMessage);
         return Task.FromResult(context with
         {
@@ -221,15 +208,17 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
 
     private async Task<WorkflowExecutionContext> ExecuteSpecialistStepAsync(
         WorkflowExecutionContext context,
+        IWorkflowContext workflowContext,
         CancellationToken cancellationToken)
     {
-        context.CancellationToken.ThrowIfCancellationRequested();
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (context.Failed || context.PlannerDecision is null || context.Route is null)
         {
             return context;
         }
 
+        Console.Error.WriteLine($"[AF-step] specialist workflowId={context.WorkflowId} agent={context.Route.Agent}");
         var specialistTool = ResolveSpecialistToolName(context.Route.Agent);
         if (string.IsNullOrWhiteSpace(specialistTool))
         {
@@ -265,7 +254,7 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
                 context.TraceId,
                 specialistParameters,
                 context.DemoScenario?.Fault ?? DemoScenarioFault.None,
-                context.CancellationToken);
+                cancellationToken);
             if (!TryReadAgentResult(specialistResult, context.Route.Agent, out var specialistDecision, out var error))
             {
                 return context with
@@ -296,21 +285,25 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
         }
     }
 
-    private Task<WorkflowExecutionContext> ExecuteTerminalStepAsync(
+    private Task<string> ExecuteTerminalStepAsync(
         WorkflowExecutionContext context,
+        IWorkflowContext workflowContext,
         CancellationToken cancellationToken)
     {
-        if (context.Failed)
-        {
-            return Task.FromResult(context);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        Console.Error.WriteLine($"[AF-step] terminal workflowId={context.WorkflowId}");
 
-        return Task.FromResult(context with
-        {
-            FinalRequiresApproval = context.RequiresApproval,
-            FinalIntent = context.Intent,
-            FinalSummary = context.Summary
-        });
+        var finalContext = context.Failed
+            ? context
+            : context with
+            {
+                FinalRequiresApproval = context.RequiresApproval,
+                FinalIntent = context.Intent,
+                FinalSummary = context.Summary
+            };
+
+        var serializedFinalContext = JsonSerializer.Serialize(finalContext, JsonOptions);
+        return Task.FromResult(serializedFinalContext);
     }
 
     private static IWorkflowExecutionEnvironment CreateExecutionEnvironment()
@@ -324,9 +317,9 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
         return (IWorkflowExecutionEnvironment)constructor.Invoke([lockstepMode, false, null])!;
     }
 
-    private static void ThrowIfCanceled(Run run, CancellationToken cancellationToken)
+    private static void ThrowIfCanceled(IReadOnlyList<Microsoft.Agents.AI.Workflows.WorkflowEvent> newEvents, CancellationToken cancellationToken)
     {
-        foreach (var workflowEvent in run.NewEvents)
+        foreach (var workflowEvent in newEvents)
         {
             if (workflowEvent is WorkflowErrorEvent workflowError &&
                 workflowError.Data is Exception exception &&
@@ -349,25 +342,35 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
         }
     }
 
-    private static async Task<AgentFrameworkWorkflowExecution?> ExtractOutputAsync(
-        Run run,
+    private static Task<AgentFrameworkWorkflowExecution?> ExtractOutputAsync(
+        IReadOnlyList<Microsoft.Agents.AI.Workflows.WorkflowEvent> newEvents,
         CancellationToken cancellationToken)
     {
-        await run.GetStatusAsync(cancellationToken);
-
-        var output = run.NewEvents
+        var output = newEvents
             .OfType<WorkflowOutputEvent>()
             .LastOrDefault();
 
-        if (output?.Data is not WorkflowExecutionContext workflowContext)
+        if (output?.Data is string serializedWorkflowContext)
         {
-            return null;
+            var deserializedContext = JsonSerializer.Deserialize<WorkflowExecutionContext>(serializedWorkflowContext, JsonOptions);
+            if (deserializedContext is not null)
+            {
+                return Task.FromResult<AgentFrameworkWorkflowExecution?>(new AgentFrameworkWorkflowExecution(
+                    deserializedContext,
+                    deserializedContext.Failed,
+                    deserializedContext.ErrorMessage));
+            }
         }
 
-        return new AgentFrameworkWorkflowExecution(
-            workflowContext,
-            workflowContext.Failed,
-            workflowContext.ErrorMessage);
+        if (output?.Data is WorkflowExecutionContext workflowContextOutput)
+        {
+            return Task.FromResult<AgentFrameworkWorkflowExecution?>(new AgentFrameworkWorkflowExecution(
+                workflowContextOutput,
+                workflowContextOutput.Failed,
+                workflowContextOutput.ErrorMessage));
+        }
+
+        return Task.FromResult<AgentFrameworkWorkflowExecution?>(null);
     }
 
     private static string? ResolveSpecialistToolName(string agentName) => agentName switch
@@ -392,9 +395,21 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             return false;
         }
 
-        if (!result.Data.TryGetValue("response_body", out var responseBodyValue) ||
-            responseBodyValue is not string responseBody ||
-            string.IsNullOrWhiteSpace(responseBody))
+        if (!result.Data.TryGetValue("response_body", out var responseBodyValue))
+        {
+            error = $"Tool {result.ToolName} did not return an agent response body.";
+            return false;
+        }
+
+        var responseBody = responseBodyValue switch
+        {
+            string text when !string.IsNullOrWhiteSpace(text) => text,
+            JsonElement jsonElement when jsonElement.ValueKind == JsonValueKind.String => jsonElement.GetString(),
+            JsonElement jsonElement => jsonElement.ToString(),
+            _ => null
+        };
+
+        if (string.IsNullOrWhiteSpace(responseBody))
         {
             error = $"Tool {result.ToolName} did not return an agent response body.";
             return false;
@@ -467,7 +482,6 @@ internal sealed record WorkflowExecutionContext(
     string UserMessage,
     string TraceId,
     Guid WorkflowId,
-    CancellationToken CancellationToken = default,
     McpToolResult? PlannerResult = null,
     McpToolResult? SpecialistResult = null,
     AgentDecision? PlannerDecision = null,
