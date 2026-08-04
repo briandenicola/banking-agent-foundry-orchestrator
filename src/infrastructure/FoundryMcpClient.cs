@@ -16,6 +16,7 @@ public sealed class FoundryMcpClientOptions
 {
     public string? DefaultEndpoint { get; set; }
     public string? AgentName { get; set; }
+    public string? DiscoveryEndpoint { get; set; }
     public string Scope { get; set; } = "https://ai.azure.com/.default";
     public string? ToolEndpointsJson { get; set; }
     public int MaxAttempts { get; set; } = 3;
@@ -37,8 +38,10 @@ public sealed class FoundryMcpClient : IMcpClient
 
     private readonly string? _defaultEndpoint;
     private readonly string? _agentName;
+    private readonly string? _discoveryEndpoint;
     private readonly string _scope;
     private readonly IReadOnlyDictionary<string, string> _toolEndpoints;
+    private readonly Dictionary<string, McpToolDefinition> _discoveredTools;
     private readonly FoundryMcpClientOptions _options;
 
     public FoundryMcpClient(
@@ -52,11 +55,123 @@ public sealed class FoundryMcpClient : IMcpClient
         ValidateOptions(_options);
         _defaultEndpoint = _options.DefaultEndpoint ?? ReadSetting("FOUNDRY_AGENT_ENDPOINT");
         _agentName = _options.AgentName ?? ReadSetting("FOUNDRY_AGENT_NAME");
+        _discoveryEndpoint = _options.DiscoveryEndpoint
+            ?? ReadSetting("FOUNDRY_MCP_DISCOVERY_ENDPOINT")
+            ?? ReadSetting("FOUNDRY_DISCOVERY_ENDPOINT");
         _scope = string.IsNullOrWhiteSpace(_options.Scope)
             ? ReadSetting("FOUNDRY_SCOPE") ?? "https://ai.azure.com/.default"
             : _options.Scope;
         _toolEndpoints = ReadToolEndpointMap(
             _options.ToolEndpointsJson ?? ReadSetting("FOUNDRY_TOOL_ENDPOINTS"));
+        _discoveredTools = new Dictionary<string, McpToolDefinition>(StringComparer.OrdinalIgnoreCase);
+        foreach (var toolEndpoint in _toolEndpoints)
+        {
+            _discoveredTools[toolEndpoint.Key] = new McpToolDefinition(
+                toolEndpoint.Key,
+                "Tool endpoint from configuration",
+                _agentName ?? toolEndpoint.Key,
+                toolEndpoint.Value,
+                new Dictionary<string, object?> { ["type"] = "object" },
+                "configuration",
+                IsDefault: false);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_defaultEndpoint))
+        {
+            _discoveredTools["default"] = new McpToolDefinition(
+                "default",
+                "Default Foundry endpoint",
+                _agentName ?? "default",
+                _defaultEndpoint,
+                new Dictionary<string, object?> { ["type"] = "object" },
+                "configuration",
+                IsDefault: true);
+        }
+    }
+
+    public async Task<IReadOnlyList<McpToolDefinition>> DiscoverToolsAsync(
+        string? agentName = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(_discoveryEndpoint))
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, _discoveryEndpoint)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        contract_version = ContractVersion,
+                        operation = "discover",
+                        agent_name = agentName ?? ResolveAgentName("default"),
+                        input = new Dictionary<string, object?>
+                        {
+                            ["agent_name"] = agentName ?? ResolveAgentName("default")
+                        }
+                    })
+                };
+
+                if (RequiresFoundryToken(_discoveryEndpoint))
+                {
+                    var token = await _credential.GetTokenAsync(
+                        new TokenRequestContext([_scope]),
+                        cancellationToken);
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+                }
+
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+                using var response = await _httpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    var discovered = ParseDiscoveredTools(body, agentName);
+                    if (discovered.Count > 0)
+                    {
+                        _discoveredTools.Clear();
+                        foreach (var tool in discovered)
+                        {
+                            _discoveredTools[tool.Name] = tool;
+                        }
+
+                        foreach (var toolEndpoint in _toolEndpoints)
+                        {
+                            _discoveredTools[toolEndpoint.Key] = new McpToolDefinition(
+                                toolEndpoint.Key,
+                                "Tool endpoint from configuration",
+                                _agentName ?? toolEndpoint.Key,
+                                toolEndpoint.Value,
+                                new Dictionary<string, object?> { ["type"] = "object" },
+                                "configuration",
+                                IsDefault: false);
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(_defaultEndpoint))
+                        {
+                            _discoveredTools["default"] = new McpToolDefinition(
+                                "default",
+                                "Default Foundry endpoint",
+                                _agentName ?? "default",
+                                _defaultEndpoint,
+                                new Dictionary<string, object?> { ["type"] = "object" },
+                                "configuration",
+                                IsDefault: true);
+                        }
+
+                        return discovered;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Unable to discover Foundry MCP tools from {DiscoveryEndpoint}", _discoveryEndpoint);
+            }
+        }
+
+        return _discoveredTools.Values.OrderBy(tool => tool.Name).ToList();
     }
 
     public async Task<McpToolResult> InvokeAsync(string toolName, IDictionary<string, object?> parameters, CancellationToken cancellationToken = default)
@@ -216,6 +331,11 @@ public sealed class FoundryMcpClient : IMcpClient
 
     private string ResolveEndpoint(string toolName)
     {
+        if (_discoveredTools.TryGetValue(toolName, out var discoveredTool))
+        {
+            return discoveredTool.Endpoint;
+        }
+
         if (_toolEndpoints.TryGetValue(toolName, out var configuredToolEndpoint))
         {
             return configuredToolEndpoint;
@@ -265,6 +385,80 @@ public sealed class FoundryMcpClient : IMcpClient
                 "FOUNDRY_TOOL_ENDPOINTS must be a JSON object mapping tool names to absolute endpoint URLs.",
                 ex);
         }
+    }
+
+    private static IReadOnlyList<McpToolDefinition> ParseDiscoveredTools(string responseBody, string? agentName)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody))
+        {
+            return [];
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(responseBody);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return [];
+            }
+
+            if (document.RootElement.TryGetProperty("tools", out var tools) &&
+                tools.ValueKind == JsonValueKind.Array)
+            {
+                return tools.EnumerateArray()
+                    .Select(tool => ReadToolDefinition(tool, agentName))
+                    .Where(definition => definition is not null)
+                    .Select(definition => definition!)
+                    .ToList();
+            }
+
+            if (document.RootElement.TryGetProperty("tool_definitions", out var toolDefinitions) &&
+                toolDefinitions.ValueKind == JsonValueKind.Array)
+            {
+                return toolDefinitions.EnumerateArray()
+                    .Select(tool => ReadToolDefinition(tool, agentName))
+                    .Where(definition => definition is not null)
+                    .Select(definition => definition!)
+                    .ToList();
+            }
+        }
+        catch (JsonException)
+        {
+            // Fall back to an empty catalog when the response is not parseable.
+        }
+
+        return [];
+    }
+
+    private static McpToolDefinition? ReadToolDefinition(JsonElement tool, string? agentName)
+    {
+        if (tool.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var name = tool.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String
+            ? nameElement.GetString()
+            : null;
+        var description = tool.TryGetProperty("description", out var descriptionElement) && descriptionElement.ValueKind == JsonValueKind.String
+            ? descriptionElement.GetString()
+            : null;
+        var endpoint = tool.TryGetProperty("endpoint", out var endpointElement) && endpointElement.ValueKind == JsonValueKind.String
+            ? endpointElement.GetString()
+            : null;
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(endpoint))
+        {
+            return null;
+        }
+
+        return new McpToolDefinition(
+            name!,
+            description ?? "Discovered Foundry MCP tool",
+            agentName ?? name!,
+            endpoint!,
+            new Dictionary<string, object?> { ["type"] = "object" },
+            "discovery",
+            IsDefault: false);
     }
 
     private static object? TryParseResponse(string responseBody)

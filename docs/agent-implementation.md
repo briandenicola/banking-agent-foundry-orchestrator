@@ -6,9 +6,11 @@ repository implements today from the Agent Framework and MCP target architecture
 
 ## Current architecture in one sentence
 
-The C# `WorkflowService` sequentially invokes two independent Foundry-hosted agents
-(planner, then one specialist), persists workflow state in PostgreSQL, and owns the
-handoff between calls; the Python agents do not call each other or access PostgreSQL.
+The C# `WorkflowService` now runs a small Agent Framework workflow that sequences
+planner, routing, and specialist execution before it persists workflow state in
+PostgreSQL; the Python agents still do not call each other or access PostgreSQL.
+The transport boundary is a Foundry-backed MCP-style adapter that can discover tool
+catalogs and invoke them through the hosted-agent contract.
 
 ```mermaid
 flowchart LR
@@ -47,10 +49,11 @@ and
 | Model and deterministic fallback | [`model.py`](../src/agents/python/app/model.py#L15-L143) |
 | Foundry hosted entrypoint | [`hosted.py`](../src/agents/python/app/hosted.py#L20-L67) |
 | Shared hosted image | [`Dockerfile.hosted`](../src/agents/python/Dockerfile.hosted) |
-| C# planner/specialist sequence | [`WorkflowService.ExecuteRoutingAsync`](../src/application/WorkflowService.cs#L189-L355) |
-| C# hosted-agent telemetry | [`WorkflowService.InvokeAgentAsync`](../src/application/WorkflowService.cs#L577-L635) |
-| C# result validation | [`WorkflowService.TryReadAgentResult`](../src/application/WorkflowService.cs#L767-L824) |
-| Foundry HTTP invocation | [`FoundryMcpClient.InvokeAsync`](../src/infrastructure/FoundryMcpClient.cs#L54-L199) |
+| Agent Framework workflow orchestration | [`AgentFrameworkWorkflowOrchestrator`](../src/application/AgentFrameworkWorkflowOrchestrator.cs) |
+| C# planner/specialist sequence | [`WorkflowService.ExecuteRoutingAsync`](../src/application/WorkflowService.cs) |
+| C# hosted-agent telemetry | [`WorkflowService.InvokeAgentAsync`](../src/application/WorkflowService.cs) |
+| C# result validation | [`WorkflowService.TryReadAgentResult`](../src/application/WorkflowService.cs) |
+| Foundry MCP discovery and invocation | [`FoundryMcpClient.DiscoverToolsAsync`](../src/infrastructure/FoundryMcpClient.cs) and [`FoundryMcpClient.InvokeAsync`](../src/infrastructure/FoundryMcpClient.cs) |
 | Tool-to-agent endpoint map | [`apps/main.tf`](../apps/main.tf#L27-L32) |
 | Hosted-agent definitions | [`apps/main.tf`](../apps/main.tf#L34-L55) |
 | Deployer Container Apps Job | [`apps/agent-deployer.tf`](../apps/agent-deployer.tf) |

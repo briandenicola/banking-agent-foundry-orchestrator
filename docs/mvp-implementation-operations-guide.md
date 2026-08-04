@@ -646,8 +646,9 @@ terraform -chdir=apps validate
    task app:smoke -- --timeout 30 --poll-timeout 180
    ```
 
-`task app:deploy -- swedencentral` combines image build, application apply, migration,
-and hosted-agent deployment after shared infrastructure already exists.
+`task app:build` publishes the images. `task app:deploy -- swedencentral` applies
+the application stack, runs migration, and deploys the hosted agents after
+shared infrastructure already exists.
 
 ### CI/CD deployment
 

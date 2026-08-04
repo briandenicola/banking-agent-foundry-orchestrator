@@ -2,10 +2,10 @@
 
 ## Overview
 
-Both Terraform stacks (`infrastructure/` and `apps/`) store state in Azure Blob
-Storage with Microsoft Entra data-plane authentication and environment-prefixed state
-keys. Local Task commands use the authenticated Azure CLI identity; GitHub Actions
-explicitly enables OIDC. Shared-key access is disabled.
+Both Terraform stacks (`infrastructure/` and `apps/`) default to local state for
+this demo workflow. Remote Azure Blob state remains documented for future
+production-style environments, but it is no longer required for local deployment
+or simple developer testing.
 
 Azure Blob automatically provides state locking via blob leases. No additional lock table is required.
 
@@ -48,9 +48,18 @@ Run `scripts/bootstrap-remote-state.sh` once per subscription before the first r
 ```
 
 The script creates the resource group, storage account (LRS, HTTPS-only, soft-delete
-30 days, versioning), and blob container. It grants the current Azure CLI identity
-`Storage Blob Data Contributor` on the storage account and waits until data-plane
-access is available. It also prints the exact values needed for GitHub.
+30 days, versioning), and blob container. When subscription policy permits, the
+public storage endpoint remains enabled for local Azure CLI and GitHub-hosted runners,
+but blob public access and shared-key authentication are disabled; every state
+operation requires Microsoft Entra authorization. The script grants the current Azure CLI identity
+`Storage Blob Data Contributor` and waits until data-plane access is available. It
+also prints the exact values needed for GitHub.
+
+If subscription policy disables public storage networking, provide both
+`--private-endpoint-subnet-id` and `--private-dns-zone-id`. The script creates a Blob
+private endpoint and zone group before checking data-plane access. Terraform and CI
+must then run from a network that resolves and routes to that private endpoint; a
+GitHub-hosted runner is not sufficient.
 
 ## Per-environment separation
 

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using BankingAgent.Domain;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BankingAgent.Application;
 
@@ -36,6 +37,7 @@ public sealed class WorkflowService : IWorkflowService
     private readonly IWorkflowRepository _workflowRepository;
     private readonly IWorkflowActionRepository _workflowActionRepository;
     private readonly IDemoScenarioPolicy _demoScenarioPolicy;
+    private readonly AgentFrameworkWorkflowOrchestrator _agentFrameworkWorkflowOrchestrator;
 
     public WorkflowService(
         IMcpClient mcpClient,
@@ -49,6 +51,11 @@ public sealed class WorkflowService : IWorkflowService
         _workflowRepository = workflowRepository;
         _workflowActionRepository = workflowActionRepository;
         _demoScenarioPolicy = demoScenarioPolicy ?? DemoScenarioPolicy.Disabled;
+        _agentFrameworkWorkflowOrchestrator = new AgentFrameworkWorkflowOrchestrator(
+            mcpClient,
+            NullLogger<AgentFrameworkWorkflowOrchestrator>.Instance,
+            (toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken) =>
+                InvokeAgentAsync(toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken));
     }
 
     public Task<WorkflowState> StartAsync(
@@ -191,66 +198,57 @@ public sealed class WorkflowService : IWorkflowService
         DemoScenarioDefinition? demoScenario,
         CancellationToken cancellationToken)
     {
-        var current = initialState;
-        var workflowId = current.Id;
-        var traceId = current.TraceId;
-        var userMessage = current.UserMessage;
+        var workflowId = initialState.Id;
+        var traceId = initialState.TraceId;
         var startedAt = Stopwatch.GetTimestamp();
-
-        // Phase 2 — planner agent.
-        var plannerParameters = new Dictionary<string, object?>
-        {
-            ["user_message"] = userMessage,
-            ["trace_id"] = traceId,
-            ["workflow_id"] = workflowId.ToString(),
-            ["workflow_status"] = "planning",
-            ["correlation_id"] = WorkflowTelemetry.GetCorrelationId()
-        };
-
-        McpToolResult plannerResult;
+        AgentFrameworkWorkflowExecution execution;
         try
         {
-            plannerResult = await InvokeAgentAsync(
-                "workflow.plan",
-                "workflow-planning",
-                workflowId,
-                traceId,
-                plannerParameters,
-                DemoScenarioFault.None,
+            execution = await _agentFrameworkWorkflowOrchestrator.ExecuteAsync(
+                initialState,
+                demoScenario,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             await PersistFailedAsync(
-                current,
+                initialState,
                 [],
                 "Planner invocation was canceled.",
                 CancellationToken.None);
             throw;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TimeoutException)
+
+        if (execution.Failed)
         {
-            _logger.LogError(
-                ex,
-                "Planner invocation failed for workflow {WorkflowId}",
-                workflowId);
+            return await PersistFailedAsync(
+                initialState,
+                [],
+                execution.ErrorMessage ?? "Workflow execution failed.",
+                cancellationToken);
+        }
+
+        var current = initialState;
+        var plannerResult = execution.Context.PlannerResult;
+        if (plannerResult is null)
+        {
             return await PersistFailedAsync(
                 current,
                 [],
-                "Planner invocation failed.",
-                CancellationToken.None);
+                "Planner result was not emitted by the Agent Framework workflow.",
+                cancellationToken);
         }
-        var plannerEvent = CreateInvocationEvent(plannerResult, "workflow.plan");
 
+        var plannerEvent = CreateInvocationEvent(plannerResult, "workflow.plan");
         if (!TryReadAgentResult(plannerResult, "workflow-planning", out var plannerDecision, out var plannerError))
+        {
             return await PersistFailedAsync(current, [plannerEvent], plannerError, cancellationToken);
+        }
 
         current = await AdvanceAndPersistAsync(current, [plannerEvent], cancellationToken);
 
-        // Phase 3 — routing.
-        var route = WorkflowRoutingPolicy.Decide(userMessage);
-
-        if (!SpecialistTools.TryGetValue(route.Agent, out var specialistTool))
+        var route = execution.Context.Route ?? WorkflowRoutingPolicy.Decide(current.UserMessage);
+        if (!SpecialistTools.TryGetValue(route.Agent, out _))
         {
             return await PersistFailedAsync(
                 current,
@@ -259,7 +257,8 @@ public sealed class WorkflowService : IWorkflowService
                 cancellationToken);
         }
 
-        if (!string.Equals(plannerDecision.SelectedAgent, route.Agent, StringComparison.OrdinalIgnoreCase) ||
+        if ((plannerDecision.SelectedAgent is not null &&
+            !string.Equals(plannerDecision.SelectedAgent, route.Agent, StringComparison.OrdinalIgnoreCase)) ||
             plannerDecision.RequiresApproval != route.RequiresApproval)
         {
             _logger.LogWarning(
@@ -280,60 +279,23 @@ public sealed class WorkflowService : IWorkflowService
 
         current = await AdvanceAndPersistAsync(current, [routeEvent], cancellationToken);
 
-        // Phase 4 — specialist agent.
-        var specialistParameters = new Dictionary<string, object?>(plannerParameters)
+        var specialistResult = execution.Context.SpecialistResult;
+        if (specialistResult is null)
         {
-            ["workflow_status"] = "specialist_processing",
-            ["intent"] = plannerDecision.Intent,
-            ["context"] = new Dictionary<string, object?>
-            {
-                ["planner_summary"] = plannerDecision.Summary,
-                ["planner_evidence"] = plannerDecision.Evidence,
-                ["planner_selected_agent"] = plannerDecision.SelectedAgent,
-                ["selected_agent"] = route.Agent
-            }
-        };
-
-        McpToolResult specialistResult;
-        try
-        {
-            specialistResult = await InvokeAgentAsync(
-                specialistTool,
-                route.Agent,
-                workflowId,
-                traceId,
-                specialistParameters,
-                demoScenario?.Fault ?? DemoScenarioFault.None,
-                cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            await PersistFailedAsync(
-                current,
-                [],
-                "Specialist invocation was canceled.",
-                CancellationToken.None);
-            throw;
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TimeoutException)
-        {
-            _logger.LogError(
-                ex,
-                "Specialist invocation failed for workflow {WorkflowId}",
-                workflowId);
             return await PersistFailedAsync(
                 current,
                 [],
-                "Specialist invocation failed.",
-                CancellationToken.None);
+                "Specialist result was not emitted by the Agent Framework workflow.",
+                cancellationToken);
         }
+
         var specialistEvent = CreateInvocationEvent(specialistResult);
-
         if (!TryReadAgentResult(specialistResult, route.Agent, out var specialistDecision, out var specialistError))
+        {
             return await PersistFailedAsync(current, [specialistEvent], specialistError, cancellationToken);
+        }
 
-        // Phase 5 — terminal state.
-        var requiresApproval = route.RequiresApproval;
+        var requiresApproval = execution.Context.FinalRequiresApproval || route.RequiresApproval;
         var terminalStatus = requiresApproval ? WorkflowStatus.WaitingForApproval : WorkflowStatus.Completed;
         var now = DateTimeOffset.UtcNow;
         var terminalEvent = new WorkflowEvent(
@@ -347,7 +309,7 @@ public sealed class WorkflowService : IWorkflowService
         var finalState = current with
         {
             Status = terminalStatus,
-            Intent = specialistDecision.Intent,
+            Intent = execution.Context.FinalIntent ?? specialistDecision.Intent,
             RequiresApproval = requiresApproval,
             UpdatedAt = now,
             Events = finalEvents,

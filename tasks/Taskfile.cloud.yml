@@ -37,33 +37,85 @@ tasks:
   apply:
     desc: Apply Terraform infrastructure
     cmds:
-      - terraform -chdir=./{{.INFRA_DIR}} apply -auto-approve -compact-warnings
-        -var "region={{.REGION}}"
+      - |
+        set -e
+        backend_resource_group="{{.TF_BACKEND_RESOURCE_GROUP}}"
+        backend_storage_account="{{.TF_BACKEND_STORAGE_ACCOUNT}}"
+        backend_container="{{.TF_BACKEND_CONTAINER}}"
+        backend_state_environment="{{.TF_STATE_ENVIRONMENT}}"
+
+        if [ -n "$backend_resource_group" ] || [ -n "$backend_storage_account" ]; then
+          if [ -z "$backend_resource_group" ] || [ -z "$backend_storage_account" ]; then
+            echo "Remote state is partially configured. Provide both TF_BACKEND_RESOURCE_GROUP and TF_BACKEND_STORAGE_ACCOUNT or leave them blank to use local state."
+            exit 1
+          fi
+
+          backend_container="${backend_container:-tfstate}"
+          backend_state_environment="${backend_state_environment:-local}"
+
+          terraform -chdir=./{{.INFRA_DIR}} init -upgrade -reconfigure -input=false \
+            -backend-config="resource_group_name=$backend_resource_group" \
+            -backend-config="storage_account_name=$backend_storage_account" \
+            -backend-config="container_name=$backend_container" \
+            -backend-config="key=$backend_state_environment/infrastructure.tfstate"
+        else
+          terraform -chdir=./{{.INFRA_DIR}} init -reconfigure -input=false
+        fi
+
+        terraform -chdir=./{{.INFRA_DIR}} apply -auto-approve -compact-warnings \
+          -var "region={{.REGION}}"
     vars:
       REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
 
   down:
     desc: Destroys all Azure resources and cleans up Terraform
-    dir: '{{.INFRA_DIR}}'
     cmds:
+      - |
+        set -e
+        if [ -n "{{.TF_BACKEND_RESOURCE_GROUP}}" ] || [ -n "{{.TF_BACKEND_STORAGE_ACCOUNT}}" ] || [ -n "{{.TF_BACKEND_CONTAINER}}" ] || [ -n "{{.TF_STATE_ENVIRONMENT}}" ]; then
+          if [ -z "{{.TF_BACKEND_RESOURCE_GROUP}}" ] || [ -z "{{.TF_BACKEND_STORAGE_ACCOUNT}}" ] || [ -z "{{.TF_BACKEND_CONTAINER}}" ] || [ -z "{{.TF_STATE_ENVIRONMENT}}" ]; then
+            echo "Remote state is partially configured. Provide all TF_BACKEND_RESOURCE_GROUP, TF_BACKEND_STORAGE_ACCOUNT, TF_BACKEND_CONTAINER, and TF_STATE_ENVIRONMENT or leave them blank to use local state."
+            exit 1
+          fi
+
+          terraform -chdir=./{{.INFRA_DIR}} init -upgrade -reconfigure -input=false \
+            -backend-config="resource_group_name={{.TF_BACKEND_RESOURCE_GROUP}}" \
+            -backend-config="storage_account_name={{.TF_BACKEND_STORAGE_ACCOUNT}}" \
+            -backend-config="container_name={{.TF_BACKEND_CONTAINER}}" \
+            -backend-config="key={{.TF_STATE_ENVIRONMENT}}/infrastructure.tfstate"
+        else
+          terraform -chdir=./{{.INFRA_DIR}} init -reconfigure -input=false
+        fi
+
+        terraform -chdir=./{{.INFRA_DIR}} destroy -auto-approve -compact-warnings \
+          -var "region={{.REGION}}"
       - az group list --tag Application="{{.TITLE}}" --query "[].name" -o tsv | xargs --no-run-if-empty -ot -n 1 az group delete -y --no-wait -n || true
       - rm -rf terraform.tfstate.d .terraform.lock.hcl .terraform terraform.tfstate terraform.tfstate.backup .terraform.tfstate.lock.info terraform.tfstate.* || true
+    vars:
+      REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
 
 
   _init:
     internal: true
-    requires:
-      vars:
-        - TF_BACKEND_RESOURCE_GROUP
-        - TF_BACKEND_STORAGE_ACCOUNT
-        - TF_BACKEND_CONTAINER
-        - TF_STATE_ENVIRONMENT
     cmds:
       - bash ./scripts/guard-local-terraform-state.sh {{.INFRA_DIR}}
-      - terraform -chdir=./{{.INFRA_DIR}} init -upgrade -reconfigure
-        -backend-config="resource_group_name={{.TF_BACKEND_RESOURCE_GROUP}}"
-        -backend-config="storage_account_name={{.TF_BACKEND_STORAGE_ACCOUNT}}"
-        -backend-config="container_name={{.TF_BACKEND_CONTAINER}}"
-        -backend-config="key={{.TF_STATE_ENVIRONMENT}}/infrastructure.tfstate"
+      - |
+        set -e
+        if [ -n "{{.TF_BACKEND_RESOURCE_GROUP}}" ] || [ -n "{{.TF_BACKEND_STORAGE_ACCOUNT}}" ] || [ -n "{{.TF_BACKEND_CONTAINER}}" ] || [ -n "{{.TF_STATE_ENVIRONMENT}}" ]; then
+          if [ -z "{{.TF_BACKEND_RESOURCE_GROUP}}" ] || [ -z "{{.TF_BACKEND_STORAGE_ACCOUNT}}" ] || [ -z "{{.TF_BACKEND_CONTAINER}}" ] || [ -z "{{.TF_STATE_ENVIRONMENT}}" ]; then
+            echo "Remote state is partially configured. Provide all TF_BACKEND_RESOURCE_GROUP, TF_BACKEND_STORAGE_ACCOUNT, TF_BACKEND_CONTAINER, and TF_STATE_ENVIRONMENT or leave them blank to use local state."
+            exit 1
+          fi
+
+          terraform -chdir=./{{.INFRA_DIR}} init -upgrade -reconfigure -input=false \
+            -backend-config="resource_group_name={{.TF_BACKEND_RESOURCE_GROUP}}" \
+            -backend-config="storage_account_name={{.TF_BACKEND_STORAGE_ACCOUNT}}" \
+            -backend-config="container_name={{.TF_BACKEND_CONTAINER}}" \
+            -backend-config="key={{.TF_STATE_ENVIRONMENT}}/infrastructure.tfstate"
+        else
+          terraform -chdir=./{{.INFRA_DIR}} init -reconfigure -input=false
+        fi
+
+        terraform -chdir=./{{.INFRA_DIR}} validate
     vars:
       REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'

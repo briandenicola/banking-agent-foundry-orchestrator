@@ -46,19 +46,22 @@ The examples below use `swedencentral`. The selected region must support every s
 ## Quick start
 
 After setting the required values in `.env`, these are the Task commands required to
-validate and deploy a **new environment with no existing local Terraform state**:
+validate and deploy a **new environment with no existing local Terraform state**.
+The Terraform tasks use local state by default; the `TF_BACKEND_*` values are only
+needed if you explicitly want Azure Blob remote state:
 
 ```bash
 task test:all
 task cloud:bootstrap-state -- swedencentral
 task cloud:up -- swedencentral
 task app:init
+task app:build
 task app:deploy -- swedencentral
 task app:smoke -- --timeout 30 --poll-timeout 180
 ```
 
-`app:deploy` includes `app:build`, the application Terraform apply, database
-migration, and Foundry Hosted Agent deployment.
+Use `app:build` to publish images, then `app:deploy` to apply the application
+Terraform stack, run database migration, and deploy the Foundry Hosted Agents.
 
 If this repository already manages an Azure environment from local state, stop and
 follow the [remote-state migration procedure](docs/remote-state.md#migrating-existing-local-state)
@@ -179,10 +182,11 @@ The smoke runner verifies orchestrator and web UI readiness, current Container A
 
 ## Complete deployment shortcut
 
-After the shared infrastructure exists, the following command builds all images, applies the application stack, migrates PostgreSQL, and registers the Hosted Agents:
+After the shared infrastructure exists, the following commands build all images, apply the application stack, migrate PostgreSQL, and register the Hosted Agents:
 
 ```bash
 task app:init
+task app:build
 task app:deploy -- swedencentral
 ```
 
@@ -217,6 +221,8 @@ task cloud:down -- swedencentral
 ```
 
 ## Implementation planning
+
+Deployment status note: `artifacts/deployment-status.txt` captures the current implementation milestone and the next verification steps after Azure deployment finishes.
 
 - `docs/phase-plan.md` outlines the implementation phases for the project.
 - `docs/implementation-backlog.md` captures the near-term backlog and acceptance criteria.

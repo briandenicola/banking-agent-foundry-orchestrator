@@ -33,6 +33,8 @@ CONTAINER="tfstate"
 LOCATION="swedencentral"
 CALLER_OBJECT_ID=""
 CALLER_PRINCIPAL_TYPE=""
+PRIVATE_ENDPOINT_SUBNET_ID=""
+PRIVATE_DNS_ZONE_ID=""
 
 usage() {
   grep '^#' "$0" | sed 's/^# \{0,1\}//'
@@ -47,6 +49,8 @@ while [[ $# -gt 0 ]]; do
     --container)      CONTAINER="$2";      shift 2 ;;
     --location)       LOCATION="$2";       shift 2 ;;
     --caller-object-id) CALLER_OBJECT_ID="$2"; shift 2 ;;
+    --private-endpoint-subnet-id) PRIVATE_ENDPOINT_SUBNET_ID="$2"; shift 2 ;;
+    --private-dns-zone-id) PRIVATE_DNS_ZONE_ID="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -74,6 +78,7 @@ az storage account create \
   --kind StorageV2 \
   --allow-blob-public-access false \
   --allow-shared-key-access false \
+  --public-network-access Enabled \
   --min-tls-version TLS1_2 \
   --https-only true \
   --output none
@@ -98,6 +103,34 @@ az resource create \
   --api-version "2023-05-01" \
   --properties '{}' \
   --output none
+
+if [[ -n "$PRIVATE_ENDPOINT_SUBNET_ID" || -n "$PRIVATE_DNS_ZONE_ID" ]]; then
+  if [[ -z "$PRIVATE_ENDPOINT_SUBNET_ID" || -z "$PRIVATE_DNS_ZONE_ID" ]]; then
+    echo "ERROR: --private-endpoint-subnet-id and --private-dns-zone-id must be supplied together." >&2
+    exit 1
+  fi
+
+  PRIVATE_ENDPOINT_NAME="${STORAGE_ACCOUNT}-blob-pe"
+  echo "Creating storage private endpoint: $PRIVATE_ENDPOINT_NAME"
+  az network private-endpoint create \
+    --name "$PRIVATE_ENDPOINT_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --subnet "$PRIVATE_ENDPOINT_SUBNET_ID" \
+    --private-connection-resource-id "$STORAGE_ACCOUNT_ID" \
+    --group-id blob \
+    --connection-name "${STORAGE_ACCOUNT}-blob" \
+    --output none
+
+  echo "Linking the storage private endpoint to private DNS"
+  az network private-endpoint dns-zone-group create \
+    --name blob \
+    --endpoint-name "$PRIVATE_ENDPOINT_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --private-dns-zone "$PRIVATE_DNS_ZONE_ID" \
+    --zone-name blob \
+    --output none
+fi
 
 ACCOUNT_TYPE=$(az account show --query user.type --output tsv)
 if [[ "$ACCOUNT_TYPE" == "user" ]]; then

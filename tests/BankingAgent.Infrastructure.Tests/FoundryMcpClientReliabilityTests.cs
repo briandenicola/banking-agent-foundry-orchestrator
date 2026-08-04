@@ -149,6 +149,20 @@ public sealed class FoundryMcpClientReliabilityTests
         Assert.Empty(context);
     }
 
+    [Fact]
+    public async Task DiscoverToolsAsync_RemoteCatalog_PopulatesToolDefinitions()
+    {
+        var handler = new CapturingHandler(
+            Response(HttpStatusCode.OK, """{"tools":[{"name":"workflow.plan","description":"Planner","endpoint":"https://example.test/planner"}]}"""));
+        var client = CreateClient(handler, maxAttempts: 1, discoveryEndpoint: "https://example.test/discover");
+
+        var tools = await client.DiscoverToolsAsync("workflow-planning");
+
+        Assert.Single(tools);
+        Assert.Equal("workflow.plan", tools[0].Name);
+        Assert.Equal("https://example.test/planner", tools[0].Endpoint);
+    }
+
     private static FoundryMcpClient CreateClient(
         HttpMessageHandler handler,
         int maxAttempts) =>
@@ -158,6 +172,22 @@ public sealed class FoundryMcpClientReliabilityTests
             Options.Create(new FoundryMcpClientOptions
             {
                 DefaultEndpoint = "https://example.test/agent",
+                MaxAttempts = maxAttempts,
+                AttemptTimeoutSeconds = 1,
+                BaseDelayMilliseconds = 0
+            }));
+
+    private static FoundryMcpClient CreateClient(
+        HttpMessageHandler handler,
+        int maxAttempts,
+        string discoveryEndpoint) =>
+        new(
+            new HttpClient(handler),
+            NullLogger<FoundryMcpClient>.Instance,
+            Options.Create(new FoundryMcpClientOptions
+            {
+                DefaultEndpoint = "https://example.test/agent",
+                DiscoveryEndpoint = discoveryEndpoint,
                 MaxAttempts = maxAttempts,
                 AttemptTimeoutSeconds = 1,
                 BaseDelayMilliseconds = 0

@@ -70,3 +70,70 @@ All inbox decisions have been reviewed for relevance and duplication:
 - **2026-07-31:** Azure deployment runs pre-#7 (outdated) images; do not infer source behavior from deployed runtime. All source-level work remains local; no cloud remediation or deployment executed per parent directive.
 - **2026-07-31:** Workflow UI stage indicators use durable event-type presence checks. Successful planner invocation persists `workflow.plan`; Investigate is active after planning until a terminal event; Decide is active for WaitingForApproval and done for other terminal states.
 - **2026-07-31:** Issue #16 source-level work complete and reviewer-approved (Nia). Build and complete local quality gate pass. Deployment/smoke criterion parent-owned.
+
+---
+
+## Evidence-Optional Form Submission Fix (2026-07-31)
+
+### Problem & Solution
+Non-nullable `EvidenceFiles` model property caused Razor to emit `data-val-required` validation metadata. jQuery Unobtrusive Validation would cancel the submit event AFTER `site.js` had already set `is-loading`, freezing the UI with zero network traffic.
+
+**Fix:**
+1. **Server binding:** `List<IFormFile>?` (nullable) removes implicit `[Required]` metadata. Single coalesce in `OnPostAsync`: `var files = Input.EvidenceFiles ?? [];`
+2. **JS validation:** Deferred `setTimeout(0)` checks `e.defaultPrevented` before entering busy state. If a later listener called `preventDefault()`, form stays interactive. Safety restore timer 100s + bfcache pageshow listener.
+3. **Testing:** 23 jsdom tests (validation ordering, timer), 8 Playwright tests (real headless-browser POST), 3 .NET WebApplicationFactory tests (server POST acceptance).
+
+### Approval Chain
+- **2026-07-31T12:30** Aria: Design gate approved
+- **2026-07-31T12:40** Theo: Implementation complete (nullable + sync validation)
+- **2026-07-31T12:50** Nia: jsdom tests (15 tests)
+- **2026-07-31T13:00** Aria: REJECT — test skips + missing real HTTP POST + cancellation fragility
+- **2026-07-31T13:10** Aria: Escalate cancellation to blocking (deferred setTimeout required)
+- **2026-07-31T13:15** Lumen: Revise site.js (deferred busy, defaultPrevented check) + real-HTTP integration test
+- **2026-07-31T13:20** Aria: APPROVE Lumen's revisions
+- **2026-07-31T13:30** Nia: Playwright hardening (8 browser tests, 100s timer, pageshow, jsdom 23)
+- **2026-07-31T13:40** Aria: APPROVE all (Playwright + jsdom + hardening)
+
+### Final Verdicts
+- ✅ Theo production code (Index.cshtml.cs nullable + coalesce)
+- ✅ Lumen site.js (deferred setTimeout(0), defaultPrevented check, 8s timer initially)
+- ✅ Lumen tests (19 jsdom, 3 WebApplicationFactory)
+- ✅ Nia jsdom updates (23 total, hardened for deferred behavior)
+- ✅ Nia Playwright (8 headless-browser tests, real POST observed)
+- ✅ Nia hardening (100s timer, pageshow listener)
+
+### Artifacts
+- `src/webui/Pages/Index.cshtml.cs` — nullable `EvidenceFiles`, `var files = ?? []`
+- `src/webui/wwwroot/js/site.js` — deferred busy state entry, safety 100s restore, pageshow listener
+- `tests/webui-js/site.submit.test.js` — 23 jsdom tests
+- `tests/webui-playwright/` — 8 Playwright browser tests (real POST observation)
+- `tests/BankingAgent.WebUi.Tests/NoEvidencePostIntegrationTests.cs` — 3 WebApplicationFactory tests
+- `tests/BankingAgent.WebUi.Tests/DemoScenarioUiTests.cs` — skip removed
+- `tasks/Taskfile.test.yml`, `.github/workflows/ci.yml` — test task / CI job additions
+
+### Test Summary
+- 23 jsdom + 8 Playwright + 3 .NET = 34 focused tests, all passing
+- Real headless-browser POST observed in Playwright Test 1
+- Safety mechanisms validated (timer, bfcache, cancellation recovery)
+- No skipped tests
+
+---
+
+## Orchestration Log Summary
+
+Complete orchestration record from evidence-optional workflow preserved in `.squad/orchestration-log/`:
+
+| Timestamp | Agent | Phase | Verdict |
+|-----------|-------|-------|---------|
+| T12:30 | Aria | Design gate | ✅ APPROVE |
+| T12:40 | Theo | Implementation | ✅ Ready |
+| T12:50 | Nia | jsdom tests | ❌ REJECT (insufficient POST proof) |
+| T13:00 | Aria | Review gate | ❌ REJECT (tests + skip + cancellation) |
+| T13:10 | Aria | Escalation | ❌ REJECT (cancellation blocking) |
+| T13:15 | Lumen | Revision | ✅ Complete (deferred, real POST, safety timer) |
+| T13:20 | Aria | Review gate | ✅ APPROVE (Lumen revisions) |
+| T13:30 | Nia | Hardening | ✅ Complete (100s timer, Playwright, jsdom 23) |
+| T13:40 | Aria | Final review | ✅ APPROVE (all artifacts) |
+
+---
+

@@ -2,6 +2,23 @@
 set -euo pipefail
 
 stack="${1:?Terraform stack directory is required.}"
+
+resource_group="${TF_BACKEND_RESOURCE_GROUP:-}"
+storage_account="${TF_BACKEND_STORAGE_ACCOUNT:-}"
+container="${TF_BACKEND_CONTAINER:-}"
+state_environment="${TF_STATE_ENVIRONMENT:-}"
+
+if [[ -n "${resource_group}" ]] || [[ -n "${storage_account}" ]]; then
+  if [[ -z "${resource_group}" ]] || [[ -z "${storage_account}" ]]; then
+    echo "Remote state is partially configured. Provide both TF_BACKEND_RESOURCE_GROUP and TF_BACKEND_STORAGE_ACCOUNT or leave them blank to use local state." >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "${resource_group}" ]] && [[ -z "${storage_account}" ]]; then
+  exit 0
+fi
+
 legacy_state=()
 
 if [[ -s "${stack}/terraform.tfstate" ]]; then
