@@ -3,10 +3,13 @@
 ## Product goal
 Build a banking support agent prototype that can assist with transaction questions and safely carry out approved actions through a multi-step workflow orchestrated by a C# Agent Framework agent.
 
+## Current implementation status
+The repository now contains a working reference implementation for this pattern: a C# workflow orchestration layer, an Agent Framework-driven workflow path, a typed Foundry-hosted agent boundary, durable workflow persistence, and Azure deployment assets for hosted agents. The lab guide in [Hosted Agents lab](hosted-agents-lab.md) uses this implementation as the teaching baseline.
+
 ## Primary user journey
 1. A user submits a request such as "Explain this pending transaction" or "Dispute this charge".
 2. The C# orchestrator agent classifies the request and decides which specialized tool to call.
-3. The orchestrator loads Microsoft Foundry-hosted LangGraph agents as MCP tools and invokes them for reasoning or planning.
+3. The orchestrator loads Microsoft Foundry-hosted LangGraph agents as MCP-style tools and invokes them for reasoning or planning.
 4. If sensitive, the orchestrator pauses and requires explicit approval.
 5. After approval, the orchestrator executes the action and records a complete audit trail.
 

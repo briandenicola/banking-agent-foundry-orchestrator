@@ -33,12 +33,11 @@ flowchart LR
     Service --> DB
 ```
 
-Despite the C# type name `FoundryMcpClient`, the production boundary is the Foundry
-hosted-agent invocation protocol, not MCP. Agent Framework does not currently drive
-the orchestration loop. Those migrations are tracked in GitHub issues
-[#17](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/17)
-and
-[#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18).
+The repository now includes both an Agent Framework workflow orchestration path and
+a Foundry-backed MCP-style transport envelope. The current implementation uses the
+C# orchestrator to own workflow state, approvals, and durable persistence while the
+hosted agents remain specialized reasoning services. The implementation details in
+this document are the source of truth for the current architecture.
 
 ## Source map
 

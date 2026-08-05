@@ -15,6 +15,7 @@ This index organizes the banking-agent documentation by audience and task.
 | Understand product behavior and acceptance expectations | [Functional specification](functional-spec.md) |
 | Understand architecture and implementation boundaries | [Technical specification](technical-spec.md) |
 | Trace the LangGraph agents and Foundry runtime through the code | [Agent implementation and Foundry runtime](agent-implementation.md) |
+| Follow a guided hosted-agents lab for Azure | [Hosted Agents lab](hosted-agents-lab.md) |
 | Run local and CI test suites | [Testing guide](testing.md) |
 | Run a repeatable demonstration | [Demo scenarios](demo-scenarios.md) |
 

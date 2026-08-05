@@ -1,7 +1,7 @@
 # Technical Specification
 
 ## Solution shape
-The target architecture is a C# Microsoft Agent Framework orchestrator calling Microsoft Foundry-hosted LangGraph agents as MCP tools. The current implementation uses procedural `WorkflowService` orchestration and authenticated Foundry hosted-agent HTTP invocation; migrations to Agent Framework and standards-compliant MCP are tracked in issues #17 and #18. LiteLLM is provisioned for a future direct-model path but has no active caller. The implementation follows a layered structure: Domain → Application → Infrastructure → API/Web.
+The reference implementation is now a C# workflow orchestrator that uses an Agent Framework-backed workflow path to call Microsoft Foundry-hosted LangGraph agents through a typed MCP-style transport envelope. The orchestration layer remains responsible for durable workflow state, approvals, correlation IDs, and API behavior, while the hosted agents remain specialized reasoning services. LiteLLM is provisioned for a future direct-model path but is not yet the active execution path. The implementation follows a layered structure: Domain → Application → Infrastructure → API/Web.
 
 ## Components
 - C# orchestrator agent
