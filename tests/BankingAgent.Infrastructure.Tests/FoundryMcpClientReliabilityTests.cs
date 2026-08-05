@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using BankingAgent.Application;
 using BankingAgent.Infrastructure;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -151,7 +152,7 @@ public sealed class FoundryMcpClientReliabilityTests
     }
 
     [Fact]
-    public async Task InvokeAsync_AddsMcpMetadataAndCallEnvelope()
+    public async Task InvokeAsync_LegacyEnvelope_DoesNotClaimMcpTransport()
     {
         var handler = new CapturingHandler(
             Response(HttpStatusCode.OK, """{"status":"ok"}"""));
@@ -163,15 +164,10 @@ public sealed class FoundryMcpClientReliabilityTests
 
         var request = JsonNode.Parse(Assert.IsType<string>(handler.RequestBody));
         var metadata = Assert.IsType<JsonObject>(request!["metadata"]);
-        Assert.Equal("jsonrpc-2.0", metadata["mcp_protocol"]?.GetValue<string>());
-        Assert.Equal("tools/call", metadata["mcp_method"]?.GetValue<string>());
-        Assert.Equal("workflow.plan", metadata["mcp_tool_name"]?.GetValue<string>());
+        Assert.Equal("typed-envelope-v1", metadata["transport"]?.GetValue<string>());
         Assert.Equal("corr-123", metadata["correlation_id"]?.GetValue<string>());
         Assert.Equal("corr-123", request["correlation_id"]?.GetValue<string>());
-        var mcp = Assert.IsType<JsonObject>(request["mcp"]);
-        Assert.Equal("tools/call", mcp["method"]?.GetValue<string>());
-        Assert.Equal("workflow.plan", mcp["params"]?["name"]?.GetValue<string>());
-        Assert.Equal("corr-123", mcp["params"]?["arguments"]?["correlation_id"]?.GetValue<string>());
+        Assert.Null(request["mcp"]);
     }
 
     [Fact]
@@ -201,7 +197,86 @@ public sealed class FoundryMcpClientReliabilityTests
         Assert.Equal("workflow.plan", tool.Name);
         Assert.NotNull(tool.InputSchema);
         Assert.NotNull(tool.OutputSchema);
-        Assert.Contains("user_message", tool.InputSchema.Keys);
+        Assert.Contains("required", tool.InputSchema.Keys);
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_McpEndpoint_PerformsInitializeThenToolsList()
+    {
+        var handler = new CapturingSequenceHandler(
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"init","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}"""),
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"list","result":{"tools":[{"name":"transaction.explain","description":"Explain","inputSchema":{"type":"object","properties":{"user_message":{"type":"string"},"trace_id":{"type":"string"},"workflow_id":{"type":"string"}},"required":["user_message","trace_id","workflow_id"]}}]}}"""));
+        var client = CreateClient(
+            handler,
+            maxAttempts: 1,
+            mcpToolEndpointsJson: """{"transaction.explain":"https://example.test/mcp"}""");
+
+        var tools = await client.DiscoverToolsAsync();
+
+        Assert.Contains(tools, tool => tool.Name == "transaction.explain" && tool.DiscoverySource == "mcp");
+        Assert.Equal(["initialize", "tools/list"], handler.Methods);
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_McpDiscoveryFailure_Throws()
+    {
+        var handler = new CapturingSequenceHandler(
+            Response(HttpStatusCode.BadGateway, """{"error":"unavailable"}"""));
+        var client = CreateClient(
+            handler,
+            maxAttempts: 1,
+            mcpToolEndpointsJson: """{"transaction.explain":"https://example.test/mcp"}""");
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.DiscoverToolsAsync());
+    }
+
+    [Fact]
+    public async Task InvokeAsync_McpUnknownToolName_ReturnsJsonRpcErrorResult()
+    {
+        var handler = new CapturingSequenceHandler(
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"init","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}"""),
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"call","error":{"code":-32602,"message":"Unknown tool: transaction.explain"}}"""));
+        var client = CreateClient(
+            handler,
+            maxAttempts: 1,
+            mcpToolEndpointsJson: """{"transaction.explain":"https://example.test/mcp"}""");
+
+        var result = await client.InvokeAsync("transaction.explain", Parameters());
+
+        Assert.Equal("error", result.Status);
+        Assert.Equal("-32602", result.Data["error_code"]);
+    }
+
+    [Fact]
+    public async Task ValidateRequiredToolsAsync_McpSchemaMismatch_Throws()
+    {
+        var handler = new CapturingSequenceHandler(
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"init","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}"""),
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"list","result":{"tools":[{"name":"transaction.explain","description":"Explain","inputSchema":{"type":"object","properties":{"user_message":{"type":"string"}},"required":["user_message"]}}]}}"""));
+        var client = CreateClient(
+            handler,
+            maxAttempts: 1,
+            mcpToolEndpointsJson: """{"transaction.explain":"https://example.test/mcp"}""");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.ValidateRequiredToolsAsync(
+                [new McpRequiredTool("transaction.explain", ["user_message", "trace_id", "workflow_id"])]));
+    }
+
+    [Fact]
+    public async Task ValidateRequiredToolsAsync_MissingMcpTool_Throws()
+    {
+        var handler = new CapturingSequenceHandler(
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"init","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}"""),
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"list","result":{"tools":[{"name":"transaction.rename","description":"Renamed","inputSchema":{"type":"object","properties":{"user_message":{"type":"string"},"trace_id":{"type":"string"},"workflow_id":{"type":"string"}},"required":["user_message","trace_id","workflow_id"]}}]}}"""));
+        var client = CreateClient(
+            handler,
+            maxAttempts: 1,
+            mcpToolEndpointsJson: """{"transaction.explain":"https://example.test/mcp"}""");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.ValidateRequiredToolsAsync(
+                [new McpRequiredTool("transaction.explain", ["user_message", "trace_id", "workflow_id"])]));
     }
 
     private static FoundryMcpClient CreateClient(
@@ -229,6 +304,23 @@ public sealed class FoundryMcpClientReliabilityTests
             {
                 DefaultEndpoint = "https://example.test/agent",
                 DiscoveryEndpoint = discoveryEndpoint,
+                MaxAttempts = maxAttempts,
+                AttemptTimeoutSeconds = 1,
+                BaseDelayMilliseconds = 0
+            }));
+
+    private static FoundryMcpClient CreateClient(
+        HttpMessageHandler handler,
+        int maxAttempts,
+        string mcpToolEndpointsJson,
+        bool useMcp = true) =>
+        new(
+            new HttpClient(handler),
+            NullLogger<FoundryMcpClient>.Instance,
+            Options.Create(new FoundryMcpClientOptions
+            {
+                ToolEndpointsJson = "{}",
+                McpToolEndpointsJson = useMcp ? mcpToolEndpointsJson : "{}",
                 MaxAttempts = maxAttempts,
                 AttemptTimeoutSeconds = 1,
                 BaseDelayMilliseconds = 0
@@ -285,6 +377,42 @@ public sealed class FoundryMcpClientReliabilityTests
         {
             var attempt = Interlocked.Increment(ref _attempts);
             return attempts[Math.Min(attempt, attempts.Length) - 1](cancellationToken);
+        }
+    }
+
+    private sealed class CapturingSequenceHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    {
+        private int _attempts;
+
+        public List<string> Methods { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var requestBody = request.Content is null
+                ? "{}"
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            var requestJson = JsonNode.Parse(requestBody)!.AsObject();
+            Methods.Add(requestJson["method"]?.GetValue<string>() ?? "");
+            var id = requestJson["id"]?.GetValue<string>();
+
+            var attempt = Interlocked.Increment(ref _attempts);
+            var source = responses[Math.Min(attempt, responses.Length) - 1];
+            var body = source.Content is null
+                ? ""
+                : await source.Content.ReadAsStringAsync(cancellationToken);
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                body = body.Replace("\"id\":\"init\"", $"\"id\":\"{id}\"", StringComparison.Ordinal)
+                    .Replace("\"id\":\"list\"", $"\"id\":\"{id}\"", StringComparison.Ordinal)
+                    .Replace("\"id\":\"call\"", $"\"id\":\"{id}\"", StringComparison.Ordinal);
+            }
+
+            return new HttpResponseMessage(source.StatusCode)
+            {
+                Content = new StringContent(body)
+            };
         }
     }
 }

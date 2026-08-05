@@ -27,9 +27,7 @@
     "trace_id": "0123456789abcdef0123456789abcdef",
     "workflow_id": "11111111-1111-1111-1111-111111111111",
     "correlation_id": "corr-123",
-    "mcp_protocol": "jsonrpc-2.0",
-    "mcp_method": "tools/call",
-    "mcp_tool_name": "workflow.plan"
+    "transport": "typed-envelope-v1"
   },
   "context": {
     "planner_summary": "The planner selected dispute handling.",
@@ -38,29 +36,5 @@
     ],
     "planner_selected_agent": "dispute-planning",
     "selected_agent": "dispute-planning"
-  },
-  "mcp": {
-    "jsonrpc": "2.0",
-    "id": "05b1ec8fad3a4405",
-    "method": "tools/call",
-    "params": {
-      "name": "workflow.plan",
-      "arguments": {
-        "user_message": "Dispute demo transaction DEMO-TXN-1001.",
-        "trace_id": "0123456789abcdef0123456789abcdef",
-        "workflow_id": "11111111-1111-1111-1111-111111111111",
-        "workflow_status": "specialist_processing",
-        "intent": "dispute",
-        "correlation_id": "corr-123",
-        "context": {
-          "planner_summary": "The planner selected dispute handling.",
-          "planner_evidence": [
-            "Dispute language was detected."
-          ],
-          "planner_selected_agent": "dispute-planning",
-          "selected_agent": "dispute-planning"
-        }
-      }
-    }
   }
 }

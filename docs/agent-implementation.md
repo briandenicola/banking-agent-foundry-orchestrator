@@ -9,13 +9,11 @@ repository implements today from the Agent Framework and MCP target architecture
 The C# `WorkflowService` now runs a small Agent Framework workflow that sequences
 planner, routing, and specialist execution before it persists workflow state in
 PostgreSQL; the Python agents still do not call each other or access PostgreSQL.
-The transport boundary is a Foundry-backed MCP-style adapter that now performs a
-pre-invocation tool discovery step for each agent before sending the hosted-agent
-request, allowing the runtime to use discovered tool catalogs and endpoint metadata
-when available. Discovery requests use an MCP-style `tools/list` envelope, tool
-invocations use an MCP-style `tools/call` envelope, and the adapter preserves the
-request metadata needed to trace workflow execution and typed schema information for
-each discovered tool.
+Only the `transaction-explanation` slice currently speaks genuine MCP: the C#
+client sends JSON-RPC 2.0 `initialize`, `tools/list`, and `tools/call` messages to
+the authenticated Foundry hosted-agent endpoint. `workflow-planning`,
+`suspicious-activity`, and `dispute-planning` still use the versioned typed HTTP
+envelope and do not claim MCP metadata on the wire.
 
 ```mermaid
 flowchart LR
@@ -34,10 +32,11 @@ flowchart LR
 ```
 
 The repository now includes both an Agent Framework workflow orchestration path and
-a Foundry-backed MCP-style transport envelope. The current implementation uses the
-C# orchestrator to own workflow state, approvals, and durable persistence while the
-hosted agents remain specialized reasoning services. The implementation details in
-this document are the source of truth for the current architecture.
+a hybrid transport boundary: one real MCP tool plus three typed-envelope tools. The
+current implementation uses the C# orchestrator to own workflow state, approvals,
+and durable persistence while the hosted agents remain specialized reasoning
+services. The implementation details in this document are the source of truth for
+the current architecture.
 
 ## Source map
 
@@ -57,7 +56,7 @@ this document are the source of truth for the current architecture.
 | C# planner/specialist sequence | [`WorkflowService.ExecuteRoutingAsync`](../src/application/WorkflowService.cs) |
 | C# hosted-agent telemetry | [`WorkflowService.InvokeAgentAsync`](../src/application/WorkflowService.cs) |
 | C# result validation | [`WorkflowService.TryReadAgentResult`](../src/application/WorkflowService.cs) |
-| Foundry MCP discovery and invocation | [`FoundryMcpClient.DiscoverToolsAsync`](../src/infrastructure/FoundryMcpClient.cs) and [`FoundryMcpClient.InvokeAsync`](../src/infrastructure/FoundryMcpClient.cs) |
+| Foundry MCP and typed-envelope invocation | [`FoundryMcpClient.DiscoverToolsAsync`](../src/infrastructure/FoundryMcpClient.cs) and [`FoundryMcpClient.InvokeAsync`](../src/infrastructure/FoundryMcpClient.cs) |
 | Tool-to-agent endpoint map | [`apps/main.tf`](../apps/main.tf#L27-L32) |
 | Hosted-agent definitions | [`apps/main.tf`](../apps/main.tf#L34-L55) |
 | Deployer Container Apps Job | [`apps/agent-deployer.tf`](../apps/agent-deployer.tf) |
@@ -182,17 +181,19 @@ parameters["context"]["planner_selected_agent"]
 parameters["context"]["selected_agent"]
 ```
 
-[`FoundryMcpClient`](../src/infrastructure/FoundryMcpClient.cs) emits the versioned
-`1.0` envelope with `context` both at the typed top level and within the retained
-`input` dictionary. [`AgentRequest`](../src/agents/python/app/contracts.py) treats the
+For typed-envelope tools, [`FoundryMcpClient`](../src/infrastructure/FoundryMcpClient.cs)
+emits the versioned `1.0` envelope with `context` both at the typed top level and
+within the retained `input` dictionary. It no longer adds fake MCP metadata to that
+non-MCP body. [`AgentRequest`](../src/agents/python/app/contracts.py) treats the
 top-level value as authoritative and promotes legacy `input.context` when required.
 [`reason`](../src/agents/python/app/model.py) sends that normalized value to the
 selected specialist model. A shared JSON fixture exercises the exact C# serialization
 and Python Pydantic boundary.
 
 This handoff is orchestrator-mediated context passing, not direct agent-to-agent
-communication. The subsequent real MCP contract and discovery work remains tracked in
-[#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18).
+communication. The real MCP contract is implemented only for the transaction
+explanation vertical slice; the remaining three agent migrations are still future
+work.
 
 ## 2. Foundry hosted runtime
 
@@ -219,7 +220,7 @@ separate hosted-agent registrations from the same image with a different
 
 ### Request handling
 
-[`handle_invoke`](../src/agents/python/app/hosted.py#L25-L64):
+[`handle_invoke`](../src/agents/python/app/hosted.py) handles the typed envelope:
 
 1. reads the Foundry HTTP request body;
 2. validates it as `AgentRequest`;
@@ -237,6 +238,12 @@ Boundary behavior is explicit:
 | Graph exceeds timeout | HTTP 504, `timeout` |
 | Graph/model raises | HTTP 500, safe `agent_error` |
 | Valid result | HTTP 200 with the `AgentResult` JSON body |
+
+For `BANKING_AGENT_KIND=transaction-explanation`, the same hosted image also exposes
+a JSON-RPC MCP handler at `/mcp` and accepts JSON-RPC bodies posted through
+`/invocations`. The MCP handler returns `initialize` capabilities, exposes exactly
+the `transaction.explain` tool from `tools/list`, and invokes the transaction graph
+from `tools/call`. Other hosted-agent kinds return an empty MCP tool list.
 
 The real ASGI boundary is exercised in
 [`test_hosted.py`](../src/agents/python/tests/test_hosted.py); graph routing and
@@ -263,11 +270,20 @@ The response becomes a durable `workflow.plan` event only after
 
 ### Routing authority
 
-The planner's `selected_agent` and `requires_approval` are recommendations. The C#
-[`WorkflowRoutingPolicy`](../src/application/WorkflowRoutingPolicy.cs) independently
-chooses the specialist and approval requirement. If planner and policy disagree,
-`WorkflowService` logs the difference and uses the C# policy. This prevents a model
-response from bypassing deterministic approval controls.
+The planner's valid `selected_agent` is the authoritative specialist route. The C#
+[`WorkflowRoutingPolicy`](../src/application/WorkflowRoutingPolicy.cs) still runs as
+a guardrail, but it can only escalate approval by changing
+`requires_approval = false` to `true`; it never replaces a valid planner-selected
+specialist and never de-escalates planner approval.
+
+If the planner omits `selected_agent` or returns an unrecognized specialist name,
+the orchestrator falls back to `WorkflowRoutingPolicy` and persists a
+`workflow.route_fallback` event with the planner value, policy route, winning route,
+and reason code. If the planner and policy disagree on agent selection or approval
+for a valid planner route, the orchestrator persists a
+`workflow.route_disagreement` event with planner agent/approval, policy
+agent/approval, and the winning agent/approval. These events are part of the
+workflow event stream returned by the API and shown by the Web UI.
 
 ### Specialist call
 
@@ -291,20 +307,21 @@ Python's `requires_approval` is not authoritative.
 
 ### Transport and authentication
 
-[`FoundryMcpClient.InvokeAsync`](../src/infrastructure/FoundryMcpClient.cs#L54-L199):
+[`FoundryMcpClient.InvokeAsync`](../src/infrastructure/FoundryMcpClient.cs):
 
 1. resolves the tool name to its configured endpoint;
-2. builds the Foundry invocation JSON envelope;
-3. obtains a managed-identity token for `https://ai.azure.com/.default`;
-4. sends `POST` with bearer authentication;
-5. forwards `x-correlation-id` when present;
-6. retries configured transient failures; and
-7. returns the HTTP body in `McpToolResult.Data["response_body"]`.
+2. uses MCP JSON-RPC when the tool appears in `FOUNDRY_MCP_TOOL_ENDPOINTS`;
+3. otherwise builds the typed Foundry invocation JSON envelope;
+4. obtains a managed-identity token for `https://ai.azure.com/.default`;
+5. sends `POST` with bearer authentication;
+6. forwards `x-correlation-id` for typed-envelope calls when present;
+7. retries configured transient failures; and
+8. returns the HTTP body in `McpToolResult.Data["response_body"]`.
 
 The orchestrator registers this implementation through
 [`AddHttpClient<IMcpClient, FoundryMcpClient>`](../src/orchestrator/Program.cs#L137-L153).
-The `IMcpClient` name is an abstraction inherited from the target design; no MCP wire
-messages are sent today.
+`IMcpClient` is now accurate for MCP-enabled tools. It remains the adapter interface
+for legacy typed-envelope tools until those agents migrate.
 
 ### Result validation
 
