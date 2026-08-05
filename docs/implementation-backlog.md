@@ -1,5 +1,7 @@
 # Implementation Backlog
 
+For a concrete, issue-by-issue close plan for the remaining backlog items, see [issue-close-action-plan.md](./issue-close-action-plan.md).
+
 ## Priority legend
 - P0: must-have for the first implementation milestone
 - P1: important for a usable prototype
