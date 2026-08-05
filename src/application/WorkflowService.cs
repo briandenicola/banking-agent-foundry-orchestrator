@@ -44,7 +44,8 @@ public sealed class WorkflowService : IWorkflowService
         ILogger<WorkflowService> logger,
         IWorkflowRepository workflowRepository,
         IWorkflowActionRepository workflowActionRepository,
-        IDemoScenarioPolicy? demoScenarioPolicy = null)
+        IDemoScenarioPolicy? demoScenarioPolicy = null,
+        ILoggerFactory? loggerFactory = null)
     {
         _mcpClient = mcpClient;
         _logger = logger;
@@ -53,7 +54,8 @@ public sealed class WorkflowService : IWorkflowService
         _demoScenarioPolicy = demoScenarioPolicy ?? DemoScenarioPolicy.Disabled;
         _agentFrameworkWorkflowOrchestrator = new AgentFrameworkWorkflowOrchestrator(
             mcpClient,
-            NullLogger<AgentFrameworkWorkflowOrchestrator>.Instance,
+            loggerFactory?.CreateLogger<AgentFrameworkWorkflowOrchestrator>()
+                ?? NullLogger<AgentFrameworkWorkflowOrchestrator>.Instance,
             (toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken) =>
                 InvokeAgentAsync(toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken));
     }
@@ -177,6 +179,12 @@ public sealed class WorkflowService : IWorkflowService
             current.TraceId);
         recoveryActivity?.SetTag("workflow.operation", "recover");
         recoveryActivity?.SetTag("demo.scenario", demoScenario?.Id);
+        recoveryActivity?.SetTag("workflow.recovery.attempt_count", current.RecoveryAttemptCount);
+        if (current.NextAttemptAt is not null)
+        {
+            recoveryActivity?.SetTag("workflow.recovery.next_attempt_at", current.NextAttemptAt.Value.ToString("O"));
+        }
+
         try
         {
             var recovered = await ExecuteRoutingAsync(

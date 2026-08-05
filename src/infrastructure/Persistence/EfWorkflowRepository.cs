@@ -55,6 +55,9 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
                     .SetProperty(item => item.ApprovalDecision, workflow.ApprovalDecision)
                     .SetProperty(item => item.ApprovalReason, workflow.ApprovalReason)
                     .SetProperty(item => item.UpdatedAt, workflow.UpdatedAt)
+                    .SetProperty(item => item.RecoveryAttemptCount, workflow.RecoveryAttemptCount)
+                    .SetProperty(item => item.NextAttemptAt, workflow.NextAttemptAt)
+                    .SetProperty(item => item.LastErrorCode, workflow.LastErrorCode)
                     .SetProperty(item => item.Version, workflow.Version),
                 cancellationToken);
 
@@ -72,43 +75,73 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
     public async Task<WorkflowState?> ClaimNextAsync(
         DateTimeOffset staleBefore,
         DateTimeOffset claimedAt,
+        int maxRecoveryAttempts = 5,
+        int recoveryBackoffBaseSeconds = 30,
+        int recoveryBackoffMaxSeconds = 900,
         CancellationToken cancellationToken = default)
     {
-        WorkflowEntity? candidate;
+        IReadOnlyList<WorkflowEntity> candidates;
         if (string.Equals(
                 context.Database.ProviderName,
                 "Microsoft.EntityFrameworkCore.Sqlite",
                 StringComparison.Ordinal))
         {
-            candidate = (await context.Workflows
+            candidates = (await context.Workflows
                     .AsNoTracking()
                     .Include(workflow => workflow.Events)
                     .Where(workflow =>
                         workflow.Status == WorkflowStatus.Draft ||
                         workflow.Status == WorkflowStatus.Recovering)
                     .ToListAsync(cancellationToken))
-                .Where(workflow => workflow.UpdatedAt <= staleBefore)
+                .Where(workflow =>
+                    workflow.UpdatedAt <= staleBefore &&
+                    (workflow.NextAttemptAt is null || workflow.NextAttemptAt <= claimedAt))
                 .OrderBy(workflow => workflow.UpdatedAt)
-                .FirstOrDefault();
+                .Take(100)
+                .ToList();
         }
         else
         {
-            candidate = await context.Workflows
+            candidates = await context.Workflows
                 .AsNoTracking()
                 .Include(workflow => workflow.Events)
                 .Where(workflow =>
                     (workflow.Status == WorkflowStatus.Draft ||
                      workflow.Status == WorkflowStatus.Recovering) &&
-                    workflow.UpdatedAt <= staleBefore)
+                    workflow.UpdatedAt <= staleBefore &&
+                    (workflow.NextAttemptAt == null ||
+                     workflow.NextAttemptAt <= claimedAt))
                 .OrderBy(workflow => workflow.UpdatedAt)
-                .FirstOrDefaultAsync(cancellationToken);
-        }
-        if (candidate is null)
-        {
-            return null;
+                .Take(100)
+                .ToListAsync(cancellationToken);
         }
 
-        return await ClaimCandidateAsync(candidate, claimedAt, cancellationToken);
+        foreach (var candidate in candidates)
+        {
+            if (candidate.RecoveryAttemptCount >= maxRecoveryAttempts)
+            {
+                await ExhaustRecoveryAttemptsAsync(
+                    candidate,
+                    claimedAt,
+                    maxRecoveryAttempts,
+                    cancellationToken);
+                continue;
+            }
+
+            var claimed = await ClaimCandidateAsync(
+                candidate,
+                claimedAt,
+                recoveryBackoffBaseSeconds,
+                recoveryBackoffMaxSeconds,
+                incrementRecoveryAttempt: true,
+                cancellationToken);
+            if (claimed is not null)
+            {
+                return claimed;
+            }
+        }
+
+        return null;
     }
 
     public async Task<WorkflowState?> ClaimAsync(
@@ -129,14 +162,33 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
             return null;
         }
 
-        return await ClaimCandidateAsync(candidate, claimedAt, cancellationToken);
+        return await ClaimCandidateAsync(
+            candidate,
+            claimedAt,
+            recoveryBackoffBaseSeconds: 30,
+            recoveryBackoffMaxSeconds: 900,
+            incrementRecoveryAttempt: false,
+            cancellationToken);
     }
 
     private async Task<WorkflowState?> ClaimCandidateAsync(
         WorkflowEntity candidate,
         DateTimeOffset claimedAt,
+        int recoveryBackoffBaseSeconds,
+        int recoveryBackoffMaxSeconds,
+        bool incrementRecoveryAttempt,
         CancellationToken cancellationToken)
     {
+        var nextRecoveryAttemptCount = incrementRecoveryAttempt
+            ? candidate.RecoveryAttemptCount + 1
+            : candidate.RecoveryAttemptCount;
+        var nextAttemptAt = incrementRecoveryAttempt
+            ? CalculateNextAttemptAt(
+                claimedAt,
+                nextRecoveryAttemptCount,
+                recoveryBackoffBaseSeconds,
+                recoveryBackoffMaxSeconds)
+            : candidate.NextAttemptAt;
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
         var affectedRows = await context.Workflows
             .Where(workflow =>
@@ -147,6 +199,9 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
                 setters => setters
                     .SetProperty(workflow => workflow.Status, WorkflowStatus.Recovering)
                     .SetProperty(workflow => workflow.UpdatedAt, claimedAt)
+                    .SetProperty(workflow => workflow.RecoveryAttemptCount, nextRecoveryAttemptCount)
+                    .SetProperty(workflow => workflow.NextAttemptAt, nextAttemptAt)
+                    .SetProperty(workflow => workflow.LastErrorCode, candidate.LastErrorCode)
                     .SetProperty(workflow => workflow.Version, candidate.Version + 1),
                 cancellationToken);
         if (affectedRows != 1)
@@ -183,8 +238,83 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
             Status = WorkflowStatus.Recovering,
             UpdatedAt = claimedAt,
             Events = claimed.Events.Append(recoveryEvent).ToList(),
-            Version = candidate.Version + 1
+            Version = candidate.Version + 1,
+            RecoveryAttemptCount = nextRecoveryAttemptCount,
+            NextAttemptAt = nextAttemptAt,
+            LastErrorCode = candidate.LastErrorCode
         };
+    }
+
+    private async Task ExhaustRecoveryAttemptsAsync(
+        WorkflowEntity candidate,
+        DateTimeOffset failedAt,
+        int maxRecoveryAttempts,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var affectedRows = await context.Workflows
+            .Where(workflow =>
+                workflow.Id == candidate.Id &&
+                workflow.Version == candidate.Version &&
+                workflow.Status == candidate.Status)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(workflow => workflow.Status, WorkflowStatus.Failed)
+                    .SetProperty(workflow => workflow.UpdatedAt, failedAt)
+                    .SetProperty(workflow => workflow.LastErrorCode, "workflow_recovery_attempts_exhausted")
+                    .SetProperty(workflow => workflow.Version, candidate.Version + 1),
+                cancellationToken);
+        if (affectedRows != 1)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            context.ChangeTracker.Clear();
+            return;
+        }
+
+        var recoveryEvent = new WorkflowEvent(
+            "workflow.abandoned",
+            "Workflow abandoned after exhausting recovery attempts",
+            failedAt,
+            "system",
+            $"Recovery exhausted after {candidate.RecoveryAttemptCount} attempts; maximum is {maxRecoveryAttempts}.");
+        context.WorkflowEvents.Add(new WorkflowEventEntity
+        {
+            Id = Guid.NewGuid(),
+            WorkflowId = candidate.Id,
+            Sequence = candidate.Events.Count,
+            Type = recoveryEvent.Type,
+            Message = recoveryEvent.Message,
+            Timestamp = recoveryEvent.Timestamp,
+            Actor = recoveryEvent.Actor,
+            Details = recoveryEvent.Details
+        });
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        context.ChangeTracker.Clear();
+
+        using var abandonedActivity = WorkflowTelemetry.StartActivity(
+            "workflow.recovery.abandoned",
+            candidate.Id,
+            candidate.TraceId);
+        abandonedActivity?.SetTag("workflow.recovery.attempt_count", candidate.RecoveryAttemptCount);
+        abandonedActivity?.SetTag("workflow.recovery.max_attempts", maxRecoveryAttempts);
+        WorkflowTelemetry.RecordFailure(
+            abandonedActivity,
+            new InvalidOperationException("Workflow recovery attempts exhausted."),
+            "abandoned");
+    }
+
+    private static DateTimeOffset CalculateNextAttemptAt(
+        DateTimeOffset claimedAt,
+        int recoveryAttemptCount,
+        int recoveryBackoffBaseSeconds,
+        int recoveryBackoffMaxSeconds)
+    {
+        var exponent = Math.Min(recoveryAttemptCount - 1, 8);
+        var delaySeconds = Math.Min(
+            recoveryBackoffBaseSeconds * (1 << exponent),
+            recoveryBackoffMaxSeconds);
+        return claimedAt.AddSeconds(delaySeconds);
     }
 
     private void AddNewEvents(WorkflowState workflow, int existingCount)
@@ -224,6 +354,9 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
             ApprovalReason = workflow.ApprovalReason,
             CreatedAt = workflow.CreatedAt,
             UpdatedAt = workflow.UpdatedAt,
+            RecoveryAttemptCount = workflow.RecoveryAttemptCount,
+            NextAttemptAt = workflow.NextAttemptAt,
+            LastErrorCode = workflow.LastErrorCode,
             Version = workflow.Version
         };
 
@@ -265,7 +398,10 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
             CreatedAt: entity.CreatedAt,
             UpdatedAt: entity.UpdatedAt,
             Events: events,
-            Version: entity.Version);
+            Version: entity.Version,
+            RecoveryAttemptCount: entity.RecoveryAttemptCount,
+            NextAttemptAt: entity.NextAttemptAt,
+            LastErrorCode: entity.LastErrorCode);
     }
 
 }

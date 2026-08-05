@@ -3,6 +3,8 @@
 ## Solution shape
 The reference implementation is now a C# workflow orchestrator that uses an Agent Framework-backed workflow path to call Microsoft Foundry-hosted LangGraph agents through a typed MCP-style transport envelope. The orchestration layer remains responsible for durable workflow state, approvals, correlation IDs, and API behavior, while the hosted agents remain specialized reasoning services. LiteLLM is provisioned for a future direct-model path but is not yet the active execution path. The implementation follows a layered structure: Domain → Application → Infrastructure → API/Web.
 
+> **Read first:** "MCP-style" means an MCP-shaped REST envelope, not the MCP protocol. See [Known gaps between this spec and `main`](functional-spec.md#known-gaps-between-this-spec-and-main) for the current, verified difference between this document's target design and what `main` actually does.
+
 ## Components
 - C# orchestrator agent
   - Owns workflow state, approvals, correlation IDs, and API integration.

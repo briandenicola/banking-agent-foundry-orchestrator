@@ -1,12 +1,15 @@
 resource "azurerm_postgresql_flexible_server" "this" {
-  name                  = local.postgresql_server_name
-  resource_group_name   = azurerm_resource_group.this.name
-  location              = azurerm_resource_group.this.location
-  version               = "16"
-  storage_mb            = 32768
-  sku_name              = "B_Standard_B1ms"
-  backup_retention_days = 7
-  tags                  = local.tags
+  name                          = local.postgresql_server_name
+  resource_group_name           = azurerm_resource_group.this.name
+  location                      = azurerm_resource_group.this.location
+  version                       = "16"
+  storage_mb                    = 32768
+  sku_name                      = "B_Standard_B1ms"
+  backup_retention_days         = 7
+  delegated_subnet_id           = var.enable_private_networking ? azurerm_subnet.postgresql[0].id : null
+  private_dns_zone_id           = var.enable_private_networking ? azurerm_private_dns_zone.postgresql[0].id : null
+  public_network_access_enabled = var.enable_private_networking ? false : true
+  tags                          = local.tags
 
   identity {
     type = "SystemAssigned"
@@ -24,6 +27,10 @@ resource "azurerm_postgresql_flexible_server" "this" {
       identity[0].identity_ids,
     ]
   }
+
+  depends_on = [
+    azurerm_private_dns_zone_virtual_network_link.postgresql,
+  ]
 }
 
 resource "azurerm_user_assigned_identity" "database_migrator" {
@@ -54,6 +61,11 @@ resource "azurerm_postgresql_flexible_server_database" "this" {
 }
 
 resource "azurerm_postgresql_flexible_server_firewall_rule" "azure_services" {
+  count = var.enable_private_networking ? 0 : 1
+
+  # Demo-grade compatibility path: 0.0.0.0 means "Allow Azure services",
+  # which admits resources from any Azure tenant at the network layer.
+  # Set enable_private_networking=true for shared or regulated environments.
   name             = "AllowAzureServices"
   server_id        = azurerm_postgresql_flexible_server.this.id
   start_ip_address = "0.0.0.0"

@@ -16,7 +16,7 @@ variable "image_tag" {
 }
 
 variable "enable_service_auth" {
-  description = "Provision Entra API resources and require Workflow.Invoke tokens for orchestrator workflow endpoints."
+  description = "Provision Entra API resources and require Workflow.Invoke tokens for orchestrator workflow endpoints. Defaults secure; disabling is only supported for local development and will not run in deployed Production."
   type        = bool
-  default     = false
+  default     = true
 }

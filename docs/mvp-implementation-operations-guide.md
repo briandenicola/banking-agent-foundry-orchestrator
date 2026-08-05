@@ -508,9 +508,14 @@ Identity and role definitions are in
 [`apps/roles.tf`](../apps/roles.tf), and
 [`infrastructure/postgresql.tf`](../infrastructure/postgresql.tf).
 
-### Optional orchestrator API authentication
+### Orchestrator API authentication
 
-Set `TF_VAR_enable_service_auth=true` before planning and applying `apps/`.
+Orchestrator API authentication is enabled by default. Keep
+`enable_service_auth=true` for every deployed environment; setting it to `false`
+is only supported for local Development and the orchestrator refuses to start
+with that value in Production.
+
+With service auth enabled,
 [`apps/entra.tf`](../apps/entra.tf) then:
 
 1. creates an orchestrator API application registration;

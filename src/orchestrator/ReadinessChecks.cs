@@ -4,6 +4,17 @@ using Npgsql;
 
 namespace BankingAgent.Orchestrator;
 
+public sealed class ServiceAuthReadinessCheck(bool serviceAuthEnabled) : IHealthCheck
+{
+    public Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(serviceAuthEnabled
+            ? HealthCheckResult.Healthy("Workflow service authentication is enabled.")
+            : HealthCheckResult.Degraded(
+                "INSECURE LOCAL DEVELOPMENT CONFIGURATION: workflow endpoints accept unauthenticated callers."));
+}
+
 public sealed class PostgreSqlReadinessCheck(NpgsqlDataSource dataSource) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(

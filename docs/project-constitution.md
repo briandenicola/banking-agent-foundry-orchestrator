@@ -44,6 +44,26 @@ Create a banking-focused agentic reference application in which a C# orchestrato
 - Before declaring work complete, run the local quality gate: build, tests, formatting, and targeted validation for changed services.
 - Any deviation from Entra ID-only authentication, no-key policy, or agent framework guidance requires an architecture decision record before merge.
 
+## Definition of done
+
+A green build is necessary but never sufficient. "It compiles and the suite passes" proves no specific acceptance criterion was met — it only proves nothing else broke. Work has repeatedly been reported as complete in this repository while acceptance criteria went unmet; this section exists to stop that.
+
+An issue may be closed only when every box below is checked, with the evidence pasted into the closing comment:
+
+- [ ] Every acceptance criterion is quoted verbatim, each paired with the specific file and line, or the specific test name, that satisfies it.
+- [ ] At least one test exists that **fails if the change is reverted**, and that failure has actually been observed — not assumed.
+- [ ] Behaviour that only manifests at runtime (auth, networking, telemetry, migrations) has deployed smoke or log evidence. A passing unit test does not establish runtime behaviour.
+- [ ] Documentation has been re-read against the code, not against the plan or the intent.
+- [ ] Any criterion **not** met is split into a follow-up issue and linked before closing.
+
+Prefer partial closure over optimistic closure: close what genuinely shipped, and open a linked follow-up carrying the remainder. Reporting a gap honestly costs one comment; discovering it later costs a full re-audit and the credibility of every other status in the backlog.
+
+### Claims in documentation
+
+- Present tense describes what is true of `main` today.
+- Anything aspirational must be explicitly labelled **Target** or **Planned**. Never describe an intended design in the present tense.
+- When a capability is partially implemented, say what is implemented and what is not, rather than choosing the more flattering summary.
+
 ## Success criteria
 - A user can submit a banking request and receive a guided multi-step workflow response.
 - The system can distinguish between informational and sensitive actions.

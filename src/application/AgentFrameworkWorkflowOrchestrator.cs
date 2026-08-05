@@ -143,7 +143,9 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             ["correlation_id"] = WorkflowTelemetry.GetCorrelationId()
         };
 
-        Console.Error.WriteLine($"[AF-step] planner workflowId={context.WorkflowId}");
+        _logger.LogDebug(
+            "Agent Framework planner step starting for workflow {WorkflowId}.",
+            context.WorkflowId);
         try
         {
             var plannerResult = await _invokeAgentAsync(
@@ -197,7 +199,9 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             return Task.FromResult(context);
         }
 
-        Console.Error.WriteLine($"[AF-step] routing workflowId={context.WorkflowId}");
+        _logger.LogDebug(
+            "Agent Framework routing step starting for workflow {WorkflowId}.",
+            context.WorkflowId);
         var route = WorkflowRoutingPolicy.Decide(context.UserMessage);
         return Task.FromResult(context with
         {
@@ -218,7 +222,10 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             return context;
         }
 
-        Console.Error.WriteLine($"[AF-step] specialist workflowId={context.WorkflowId} agent={context.Route.Agent}");
+        _logger.LogDebug(
+            "Agent Framework specialist step starting for workflow {WorkflowId} with agent {AgentName}.",
+            context.WorkflowId,
+            context.Route.Agent);
         var specialistTool = ResolveSpecialistToolName(context.Route.Agent);
         if (string.IsNullOrWhiteSpace(specialistTool))
         {
@@ -292,7 +299,9 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Console.Error.WriteLine($"[AF-step] terminal workflowId={context.WorkflowId}");
+        _logger.LogDebug(
+            "Agent Framework terminal step starting for workflow {WorkflowId}.",
+            context.WorkflowId);
 
         var finalContext = context.Failed
             ? context

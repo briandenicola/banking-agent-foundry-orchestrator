@@ -160,7 +160,9 @@ The SP also requires:
 - `Contributor` on the target subscription (or narrower scopes per resource group)
 - `Role Based Access Control Administrator` where Terraform creates role assignments
 - `Storage Blob Data Contributor` on the Terraform state storage account
-- Appropriate Microsoft Graph application permissions if `enable_service_auth` is enabled
+- Appropriate Microsoft Graph application permissions to create the orchestrator
+  API application and app-role assignment, because `enable_service_auth` defaults
+  to `true` for deployed environments
 
 Create the Entra application and service principal without a password or client secret, then add a federated credential with `az ad app federated-credential create` or the Entra portal. The credential must use:
 
@@ -172,7 +174,7 @@ Never use `az ad sp create-for-rbac --sdk-auth`, create a client secret, or stor
 
 The GitHub `production` environment must define required reviewers. The deployment workflow is triggered only after the `CI` workflow succeeds for a push to `main`, or by an explicitly approved manual dispatch.
 
-If orchestrator service authentication is enabled, grant the deployment identity the `Workflow.Invoke` application role so the post-deployment smoke test can obtain a valid orchestrator token.
+Grant the deployment identity the `Workflow.Invoke` application role so the post-deployment smoke test can obtain a valid orchestrator token.
 
 ## Locking behaviour
 
