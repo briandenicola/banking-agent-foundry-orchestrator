@@ -1,36 +1,41 @@
-# Hosted Agents lab for Azure
+# Hosted Agents lab for Azure platform engineers
 
-This lab turns the banking-agent sample into a guided workshop for teaching
-Microsoft Foundry Hosted Agents, LangGraph-style agentic orchestration, and a
-C#/.NET control plane.
+This lab turns the banking-agent sample into a guided workshop for Azure platform
+engineers who need to understand how to provision, secure, and operate Microsoft
+Foundry Hosted Agents in Azure.
 
 ## What participants will learn
 
 By the end of the lab, attendees should be able to:
 
-- explain how a C# orchestrator can coordinate multi-step agent workflows;
-- describe the difference between a workflow control plane and a specialist agent;
-- deploy Microsoft Foundry-hosted agents to Azure and invoke them securely;
-- trace a single workflow request across orchestration, approvals, and telemetry;
-- extend the sample with a new specialist or a new workflow step.
+- explain how a C# workflow control plane coordinates multi-step agent tasks;
+- describe the platform building blocks required for hosted agents in Azure;
+- provision Container Apps, managed identities, Azure Container Registry, and
+  supporting resources with the repository's infrastructure assets;
+- wire Foundry-hosted specialists into a secure runtime with observability and
+  traceability;
+- identify the operational hardening steps needed before taking the pattern to a
+  shared environment.
 
 ## Suggested audience
 
-- .NET developers who want to learn agentic application patterns;
-- solution architects evaluating Microsoft Foundry Hosted Agents;
-- platform engineers who need a reference implementation for Azure deployment;
-- educators who want a realistic but compact lab for hands-on learning.
+- Azure platform engineers responsible for landing zones, platform services, and
+  shared developer environments;
+- infrastructure engineers evaluating Azure Container Apps and Microsoft Foundry;
+- solution architects who need a concrete reference architecture for hosted agents;
+- developers who want to understand the platform side of agentic application
+  delivery.
 
 ## Lab goals
 
 This lab uses the repository as a working reference implementation. The teaching
-focus is not on banking business logic itself, but on the platform patterns:
+focus is less about banking business logic and more about the platform concerns:
 
-- a C# orchestrator that owns workflow state and approvals;
-- hosted agents that execute specialized reasoning tasks;
-- a typed request/result contract between the orchestrator and the agents;
-- Azure deployment through Container Apps and supporting infrastructure;
-- observability and traceability across the workflow.
+- a C# orchestrator that owns workflow state, approvals, and correlation IDs;
+- hosted agents that execute specialized reasoning tasks behind a secure boundary;
+- identity, RBAC, and managed identity patterns for service-to-service access;
+- Azure deployment through Container Apps, ACR, PostgreSQL, and monitoring;
+- observability and traceability across the workflow for operations teams.
 
 ## Lab architecture
 
@@ -52,18 +57,18 @@ Before the workshop, participants should have:
 - Docker Desktop or equivalent container tooling;
 - Azure CLI, Terraform, and the repository task runner installed.
 
-## Module 1: Explore the reference implementation
+## Module 1: Understand the platform pattern
 
 ### Objectives
 
-- understand the repo layout;
+- understand the repo layout from a platform perspective;
 - identify the control plane, hosted agents, and infrastructure pieces;
-- map a single request to the workflow lifecycle.
+- map a single request to the workflow lifecycle and the Azure services involved.
 
 ### Exercises
 
 1. Review the main documentation set in `docs/`.
-2. Read the API and workflow lifecycle flow in `docs/functional-spec.md`.
+2. Read the workflow lifecycle in `docs/functional-spec.md`.
 3. Trace the orchestrator and hosted-agent boundary in:
    - `src/application/WorkflowService.cs`
    - `src/application/AgentFrameworkWorkflowOrchestrator.cs`
@@ -71,17 +76,16 @@ Before the workshop, participants should have:
 
 ### Discussion points
 
-- Why is the workflow control plane in C# while the specialists are hosted as
-  separate agents?
-- Where do approvals and evidence attach to the workflow lifecycle?
+- Which responsibilities belong in the application layer versus the platform layer?
+- Where are identity, RBAC, and observability enforced in this pattern?
 
-## Module 2: Build and test the sample locally
+## Module 2: Build and test the application baseline
 
 ### Objectives
 
 - validate that the solution builds and tests cleanly;
-- understand what the local quality gate looks like;
-- prepare for deployment.
+- understand the local quality gate before Azure deployment;
+- prepare for environment-specific rollout.
 
 ### Exercises
 
@@ -98,15 +102,15 @@ dotnet build -c Release banking-agent.sln
 ### Expected outcome
 
 Participants should be able to show that the core solution is healthy before they
-start targeting Azure.
+start targeting Azure infrastructure.
 
-## Module 3: Deploy the sample to Azure
+## Module 3: Deploy and secure the platform
 
 ### Objectives
 
 - provision the Azure resources required for the sample;
 - deploy the containerized services and hosted agents;
-- confirm that the application is reachable.
+- verify the identity and access model that the platform uses.
 
 ### Exercises
 
@@ -115,24 +119,29 @@ task app:build
 task app:deploy
 ```
 
+### Platform checkpoints
+
+During deployment, participants should inspect:
+
+- the Azure Container Apps resources;
+- the Container Registry images and tags;
+- the managed identities and role assignments;
+- the PostgreSQL-backed workflow state and the migration job;
+- the Application Insights and telemetry configuration.
+
 ### Expected outcome
 
-Participants should be able to explain how the deployed services are connected:
+Participants should be able to explain how the deployed services are connected and
+where the platform controls are applied.
 
-- the web UI and orchestrator;
-- the hosted agent image registrations;
-- the PostgreSQL-backed workflow state;
-- the observability resources.
-
-## Module 4: Trace a workflow end to end
+## Module 4: Operate and observe the workflow
 
 ### Objectives
 
-- follow one user request through planning, routing, specialist execution, and
+- follow one request through planning, routing, specialist execution, and
   approval;
-- inspect the correlation metadata and workflow events;
-- explain how the system behaves when a specialist returns a recommendation or a
-  failure.
+- inspect correlation metadata and workflow events;
+- explain how the platform team would troubleshoot failures or latency.
 
 ### Exercises
 
@@ -145,40 +154,41 @@ Participants should be able to explain how the deployed services are connected:
 
 - Which parts of the workflow should be durable and which can be ephemeral?
 - What should be visible in telemetry and what should remain private?
+- What operational signals would the platform team monitor first?
 
-## Module 5: Extend the pattern
+## Module 5: Extend and harden the platform pattern
 
 ### Objectives
 
-- introduce a new specialist agent;
-- wire it into the orchestrator;
+- introduce a new specialist agent or workflow step;
+- harden the platform configuration for a shared environment;
 - demonstrate how the pattern scales beyond the initial sample.
 
 ### Suggested extension ideas
 
 - add a new specialist for account-change requests;
 - add a policy-driven approval step for sensitive actions;
-- add a new prompt contract and test fixture for a new agent role;
-- add a new Azure deployment target for a second environment.
+- move more platform controls into Terraform or environment-specific policy;
+- add private networking, stricter RBAC boundaries, or an additional environment.
 
 ### Expected outcome
 
-Participants should leave with a repeatable mental model for how to turn a single
-agent into a multi-step, approval-aware, Azure-hosted workflow.
+Participants should leave with a repeatable mental model for how to blueprint,
+operate, and harden an Azure-hosted agentic workflow for a real platform team.
 
 ## Facilitator notes
 
-- Keep the focus on the orchestration pattern rather than the banking domain.
+- Keep the focus on the platform pattern rather than the banking domain.
 - Use the sample prompts in `docs/demo-scenarios.md` to keep the lab grounded.
-- Encourage attendees to compare the C# orchestrator with the hosted-agent
-  runtime so they see where each layer provides value.
-- Emphasize security, traceability, and approval boundaries rather than raw model
-  prompting.
+- Emphasize identity, security, traceability, and deployment boundaries rather
+  than raw model prompting.
+- Encourage attendees to ask which platform controls would be mandatory before
+  production rollout.
 
 ## Suggested agenda
 
-1. 15 minutes: overview and architecture walk-through
+1. 15 minutes: overview and platform architecture walk-through
 2. 20 minutes: local build and test
-3. 30 minutes: Azure deployment and hosted-agent registration
-4. 25 minutes: trace and observe a workflow
-5. 20 minutes: extension exercise
+3. 35 minutes: Azure deployment, identity, and infrastructure review
+4. 25 minutes: trace, observe, and troubleshoot a workflow
+5. 20 minutes: extension and hardening exercise

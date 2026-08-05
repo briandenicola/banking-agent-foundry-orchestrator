@@ -1,85 +1,75 @@
 # Phase Plan
 
-## Phase 0 — Foundation and alignment
+This plan reflects the current state of the repository after the initial
+implementation and documentation pass. The work is now centered on hardening the
+platform pattern and turning it into a reusable lab and reference architecture.
+
+## Status legend
+- Completed: implemented and validated in the repository.
+- In progress: partially implemented and ready for follow-on hardening.
+- Planned: still needed for broader adoption.
+
+## Phase 0 — Foundation and alignment (Completed)
 Objective: lock the architecture, contracts, and delivery guardrails before implementation begins.
 
-Deliverables:
-- Finalized architecture decision for the C# Agent Framework orchestrator and MCP-backed Foundry tools
-- Initial backlog and implementation ownership
-- Repo conventions for Entra-only auth, tracing, and deployment
+Delivered:
+- Architecture and governance docs for the C# orchestrator, hosted agents, and Azure deployment
+- A backlog and issue-driven implementation path
+- Repository conventions for approvals, tracing, and deployment behavior
 
-Exit criteria:
-- Constitution, functional spec, and technical spec all reflect the target architecture
-- Squad roster and planning documents are in place
-
-## Phase 1 — Orchestrator and workflow core
+## Phase 1 — Orchestrator and workflow core (Completed)
 Objective: build the C# orchestrator skeleton and the core workflow state machine.
 
-Deliverables:
-- Versioned API surface for workflow intake and status lookup
-- Workflow state model with correlation IDs and durable audit fields
-- Approval gate abstraction for sensitive actions
+Delivered:
+- Versioned workflow API surface for intake and status lookup
+- Durable workflow state with correlation IDs, event persistence, and approval transitions
+- A workflow execution path that can pause for approval and recover safely
 
-Exit criteria:
-- A request can be accepted, traced, and paused for approval
-- The orchestrator can return structured responses and trace IDs
-
-## Phase 2 — Minimal UI and workflow experience
+## Phase 2 — Minimal UI and workflow experience (Completed)
 Objective: add a simple user-facing experience so the workflow is easy to demo and test.
 
-Deliverables:
-- A minimal web UI for submitting a request, viewing workflow status, and approving sensitive actions
-- Clear trace ID and workflow status display in the UI
-- Basic error and approval-state feedback for the user
+Delivered:
+- A minimal web UI for submitting requests, viewing workflow progress, and approving sensitive actions
+- Trace ID and workflow status visibility in the UI
+- Basic workflow-state and approval feedback
 
-Exit criteria:
-- A user can submit a request from the browser and see the workflow progress and approval state
-- The UI is connected to the orchestrator API and the demo workflow is understandable end to end
+## Phase 3 — Foundry and hosted-agent integration (Completed with follow-on hardening)
+Objective: connect the orchestrator to Microsoft Foundry-hosted agents through a typed transport boundary.
 
-## Phase 3 — MCP and Foundry tool integration
-Objective: connect the orchestrator to Microsoft Foundry-hosted LangGraph agents through MCP.
+Delivered:
+- A typed Foundry-backed invocation boundary and hosted-agent request/response contract
+- Planner-to-specialist context handoff and execution-mode reporting
+- A deployable hosted-agent packaging path for Azure
 
-Deliverables:
-- MCP client abstraction and tool registry
-- Tool wrappers for reasoning, planning, and action tasks
-- Contract normalization for tool responses
+Follow-on work:
+- Continue tightening the standards-compliant MCP boundary and runtime discovery path
+- Add more explicit failure handling and contract versioning across the tool boundary
 
-Exit criteria:
-- The orchestrator can invoke at least one Foundry-backed agent tool end to end
-- Tool failures and timeouts are surfaced as structured errors
-
-## Phase 4 — Safety, audit, and observability
+## Phase 4 — Safety, audit, and observability (Completed)
 Objective: make the workflow production-minded and reviewable.
 
-Deliverables:
+Delivered:
 - Approval enforcement for sensitive actions
-- Structured logging, telemetry, and trace emission
+- Structured logging, telemetry, and correlation support for workflow runs
 - ProblemDetails-based error responses and input validation
 
-Exit criteria:
-- Sensitive actions require explicit approval and produce an auditable trail
-- Logs and traces can be correlated to a workflow run
+## Phase 5 — Azure deployment and infrastructure (Completed)
+Objective: make the solution deployable to Azure with Terraform and Container Apps.
 
-## Phase 5 — Azure deployment and infrastructure
-Objective: make the solution deployable to Azure with Terraform.
+Delivered:
+- Terraform assets for Container Apps, managed identity, PostgreSQL, and supporting resources
+- A deployable app image path through Azure Container Registry
+- Verified deployment and migration flow for the sample environment
 
-Deliverables:
-- Terraform modules for Azure Container Apps, managed identity, and supporting resources
-- HorizonDB placeholder deployment via AzAPI if needed
-- Environment-specific configuration for dev/test/prod
+## Phase 6 — Education, platform hardening, and adoption (In progress)
+Objective: turn the sample into a reusable lab and operational reference for Azure platform engineers.
 
-Exit criteria:
-- A team member can provision the baseline infrastructure with Terraform
-- Containerized services can be deployed into Azure Container Apps
+Planned deliverables:
+- A hosted-agents lab tailored to Azure platform engineering concerns
+- Platform-focused documentation for identity, RBAC, networking, and observability
+- Additional hardening for environment separation, policy, and operations readiness
 
-## Phase 6 — CI/CD and demo hardening
-Objective: make the project repeatable and showcase-ready.
-
-Deliverables:
-- GitHub Actions workflow for build validation and deployment
-- Demo data and a simple end-to-end scenario
-- Security and reliability review
-
-Exit criteria:
-- CI passes for trunk builds and the demo flow works end to end
-- The repo is ready for the next implementation sprint
+Next steps:
+- Add more platform-specific exercises around private networking and role boundaries
+- Expand the lab to cover multi-environment deployment and operational runbooks
+- Continue refining the MCP and hosted-agent contract for broader reuse
