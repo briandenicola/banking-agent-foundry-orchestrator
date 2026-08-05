@@ -201,6 +201,9 @@ public sealed class FoundryMcpClient : IMcpClient
         var workflowId = parameters.TryGetValue("workflow_id", out var workflowIdValue)
             ? workflowIdValue?.ToString()
             : null;
+        var correlationId = parameters.TryGetValue("correlation_id", out var correlationIdValue)
+            ? correlationIdValue?.ToString()
+            : null;
         var context = parameters.TryGetValue("context", out var contextValue) &&
             contextValue is not null
                 ? contextValue
@@ -214,12 +217,14 @@ public sealed class FoundryMcpClient : IMcpClient
             input = parameters,
             trace_id = traceId,
             workflow_id = workflowId,
+            correlation_id = correlationId,
             message = parameters.TryGetValue("user_message", out var userMessage) ? userMessage?.ToString() : null,
             metadata = new
             {
                 tool_name = toolName,
                 trace_id = traceId,
                 workflow_id = workflowId,
+                correlation_id = correlationId,
                 mcp_protocol = "jsonrpc-2.0",
                 mcp_method = mcpCallRequest.TryGetValue("method", out var methodValue) ? methodValue?.ToString() : null,
                 mcp_tool_name = toolName
@@ -248,12 +253,12 @@ public sealed class FoundryMcpClient : IMcpClient
                 }
 
                 request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                if (parameters.TryGetValue("correlation_id", out var correlationId) &&
-                    correlationId is not null)
+                if (parameters.TryGetValue("correlation_id", out var correlationIdHeaderValue) &&
+                    correlationIdHeaderValue is not null)
                 {
                     request.Headers.TryAddWithoutValidation(
                         "x-correlation-id",
-                        correlationId.ToString());
+                        correlationIdHeaderValue.ToString());
                 }
 
                 using var response = await _httpClient.SendAsync(
@@ -576,6 +581,11 @@ public sealed class FoundryMcpClient : IMcpClient
             {
                 ["type"] = "object",
                 ["description"] = "Context passed from the orchestrator to the specialist."
+            },
+            ["correlation_id"] = new Dictionary<string, object?>
+            {
+                ["type"] = "string",
+                ["description"] = "Workflow correlation identifier used for tracing and observability."
             },
             ["workflow_status"] = new Dictionary<string, object?>
             {

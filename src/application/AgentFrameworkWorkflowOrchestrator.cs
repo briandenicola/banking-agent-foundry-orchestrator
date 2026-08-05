@@ -236,6 +236,7 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             ["workflow_id"] = context.WorkflowId.ToString(),
             ["workflow_status"] = "specialist_processing",
             ["intent"] = context.PlannerDecision.Intent,
+            ["correlation_id"] = WorkflowTelemetry.GetCorrelationId(),
             ["context"] = new Dictionary<string, object?>
             {
                 ["planner_summary"] = context.PlannerDecision.Summary,

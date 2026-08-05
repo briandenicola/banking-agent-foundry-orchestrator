@@ -108,6 +108,7 @@ public sealed class FoundryMcpClientReliabilityTests
             ["workflow_id"] = "11111111-1111-1111-1111-111111111111",
             ["workflow_status"] = "specialist_processing",
             ["intent"] = "dispute",
+            ["correlation_id"] = "corr-123",
             ["context"] = new Dictionary<string, object?>
             {
                 ["planner_summary"] = "The planner selected dispute handling.",
@@ -156,16 +157,21 @@ public sealed class FoundryMcpClientReliabilityTests
             Response(HttpStatusCode.OK, """{"status":"ok"}"""));
         var client = CreateClient(handler, maxAttempts: 1);
 
-        await client.InvokeAsync("workflow.plan", Parameters());
+        var parameters = Parameters();
+        parameters["correlation_id"] = "corr-123";
+        await client.InvokeAsync("workflow.plan", parameters);
 
         var request = JsonNode.Parse(Assert.IsType<string>(handler.RequestBody));
         var metadata = Assert.IsType<JsonObject>(request!["metadata"]);
         Assert.Equal("jsonrpc-2.0", metadata["mcp_protocol"]?.GetValue<string>());
         Assert.Equal("tools/call", metadata["mcp_method"]?.GetValue<string>());
         Assert.Equal("workflow.plan", metadata["mcp_tool_name"]?.GetValue<string>());
+        Assert.Equal("corr-123", metadata["correlation_id"]?.GetValue<string>());
+        Assert.Equal("corr-123", request["correlation_id"]?.GetValue<string>());
         var mcp = Assert.IsType<JsonObject>(request["mcp"]);
         Assert.Equal("tools/call", mcp["method"]?.GetValue<string>());
         Assert.Equal("workflow.plan", mcp["params"]?["name"]?.GetValue<string>());
+        Assert.Equal("corr-123", mcp["params"]?["arguments"]?["correlation_id"]?.GetValue<string>());
     }
 
     [Fact]
