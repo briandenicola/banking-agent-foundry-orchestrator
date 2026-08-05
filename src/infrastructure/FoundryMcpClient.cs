@@ -193,8 +193,8 @@ public sealed class FoundryMcpClient : IMcpClient
         var endpoint = ResolveEndpoint(toolName);
         if (string.IsNullOrWhiteSpace(endpoint))
         {
-            _logger.LogWarning("No Foundry endpoint configured for {ToolName}; returning a local fallback response", toolName);
-            return CreateFallbackResult(toolName, parameters, endpoint);
+            _logger.LogWarning("No Foundry endpoint configured for {ToolName}; returning a configuration error result", toolName);
+            return CreateMissingEndpointErrorResult(toolName, parameters, endpoint);
         }
 
         var traceId = parameters.TryGetValue("trace_id", out var traceIdValue) ? traceIdValue?.ToString() : null;
@@ -796,7 +796,11 @@ public sealed class FoundryMcpClient : IMcpClient
     private static bool IsTransient(int statusCode) =>
         IsTransient((HttpStatusCode)statusCode);
 
-    private static McpToolResult CreateFallbackResult(string toolName, IDictionary<string, object?> parameters, string? endpoint)
+    // Despite returning a "result", this is an error path: no endpoint is
+    // configured for the tool, so nothing was invoked. It is named for the
+    // condition rather than as a "fallback" so it cannot be mistaken for a
+    // successful degraded response.
+    private static McpToolResult CreateMissingEndpointErrorResult(string toolName, IDictionary<string, object?> parameters, string? endpoint)
     {
         return new McpToolResult(
             toolName,
