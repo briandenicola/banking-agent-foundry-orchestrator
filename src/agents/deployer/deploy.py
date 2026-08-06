@@ -20,7 +20,8 @@ PENDING_STATUSES = {"creating", "starting", "updating"}
 PROJECT_ENDPOINT_ENV_VAR = "BANKING_AGENT_PROJECT_ENDPOINT"
 # Per-invocation timeout for a hosted agent. The dispute-planning graph runs up
 # to four sequential model calls, so the previous 30s default left no headroom.
-AGENT_INVOKE_TIMEOUT_SECONDS = os.environ.get("AGENT_INVOKE_TIMEOUT_SECONDS", "90")
+INVOKE_TIMEOUT_ENV_VAR = "BANKING_AGENT_INVOKE_TIMEOUT_SECONDS"
+INVOKE_TIMEOUT_SECONDS = os.environ.get(INVOKE_TIMEOUT_ENV_VAR, "90")
 LEGACY_PROJECT_ENDPOINT_ENV_VAR = "FOUNDRY_PROJECT_ENDPOINT"
 
 
@@ -82,8 +83,9 @@ class FoundryClient:
                 "ALLOW_FALLBACK": "false",
                 # Multi-node graphs issue one model call per node, so the
                 # per-invocation budget must cover the longest path, not a
-                # single call.
-                "AGENT_INVOKE_TIMEOUT_SECONDS": AGENT_INVOKE_TIMEOUT_SECONDS,
+                # single call. Foundry rejects AGENT_* and FOUNDRY_* names as
+                # reserved, hence the BANKING_ prefix.
+                INVOKE_TIMEOUT_ENV_VAR: INVOKE_TIMEOUT_SECONDS,
             },
         }
 
@@ -152,8 +154,7 @@ class FoundryClient:
                 and environment.get("AZURE_AI_MODEL_DEPLOYMENT_NAME") == model_deployment
                 and runtime_project_endpoint == project_endpoint
                 and environment.get("ALLOW_FALLBACK") == "false"
-                and environment.get("AGENT_INVOKE_TIMEOUT_SECONDS")
-                == AGENT_INVOKE_TIMEOUT_SECONDS
+                and environment.get(INVOKE_TIMEOUT_ENV_VAR) == INVOKE_TIMEOUT_SECONDS
             ):
                 return str(version.get("version")), status
 

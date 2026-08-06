@@ -4,7 +4,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from deploy import (
-    AGENT_INVOKE_TIMEOUT_SECONDS,
+    INVOKE_TIMEOUT_ENV_VAR,
+    INVOKE_TIMEOUT_SECONDS,
     AgentDefinition,
     FoundryClient,
     _definitions,
@@ -56,7 +57,7 @@ class DeployerContractTests(unittest.TestCase):
         endpoint,
         fallback="false",
         status="creating",
-        timeout=AGENT_INVOKE_TIMEOUT_SECONDS,
+        timeout=INVOKE_TIMEOUT_SECONDS,
     ):
         return {
             "value": [
@@ -70,7 +71,7 @@ class DeployerContractTests(unittest.TestCase):
                             "AZURE_AI_MODEL_DEPLOYMENT_NAME": model,
                             "BANKING_AGENT_PROJECT_ENDPOINT": endpoint,
                             "ALLOW_FALLBACK": fallback,
-                            "AGENT_INVOKE_TIMEOUT_SECONDS": timeout,
+                            INVOKE_TIMEOUT_ENV_VAR: timeout,
                         },
                     },
                 }
@@ -167,7 +168,29 @@ class DeployerContractTests(unittest.TestCase):
         env = definition["environment_variables"]
         self.assertEqual(_ENDPOINT, env["BANKING_AGENT_PROJECT_ENDPOINT"])
         self.assertEqual("false", env["ALLOW_FALLBACK"])
-        self.assertEqual(AGENT_INVOKE_TIMEOUT_SECONDS, env["AGENT_INVOKE_TIMEOUT_SECONDS"])
+        self.assertEqual(INVOKE_TIMEOUT_SECONDS, env[INVOKE_TIMEOUT_ENV_VAR])
+
+    def test_no_environment_variable_uses_a_foundry_reserved_prefix(self):
+        """Foundry rejects AGENT_* and FOUNDRY_* names as reserved for platform use.
+
+        This is a deploy-time 400 that no amount of local testing catches, so
+        the naming rule is asserted here instead.
+        """
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
+        client._find_matching_version = Mock(return_value=None)
+        client._agent_exists = Mock(return_value=False)
+        client._request = Mock(return_value={"version": "5", "status": "active"})
+
+        client.deploy(_AGENT, _IMAGE, _MODEL, _ENDPOINT)
+
+        env = client._request.call_args.args[2]["definition"]["environment_variables"]
+        reserved = [
+            name
+            for name in env
+            if name.startswith("AGENT_") or name.startswith("FOUNDRY_")
+        ]
+        self.assertEqual([], reserved)
 
     def test_deploy_definition_includes_required_env_vars(self):
         """Every runtime-affecting env var must be present in the deployed definition."""

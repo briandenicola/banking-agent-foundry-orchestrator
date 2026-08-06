@@ -185,7 +185,7 @@ a missing model endpoint raises `ModelUnavailableError` instead.
 ### Invocation cost
 
 A multi-node graph issues **one model call per node it visits**: up to four for
-`dispute-planning` and three for `suspicious-activity`. `AGENT_INVOKE_TIMEOUT_SECONDS`
+`dispute-planning` and three for `suspicious-activity`. `BANKING_AGENT_INVOKE_TIMEOUT_SECONDS`
 is therefore deployed at 90s, and the orchestrator's
 `FOUNDRY_ATTEMPT_TIMEOUT_SECONDS` at 100s so the agent's own timeout surfaces
 first.
@@ -307,7 +307,7 @@ separate hosted-agent registrations from the same image with a different
 2. validates it as `AgentRequest`;
 3. invokes the selected graph with
    `{"request": payload, "result": None}`;
-4. enforces `AGENT_INVOKE_TIMEOUT_SECONDS` (30 seconds by default);
+4. enforces `BANKING_AGENT_INVOKE_TIMEOUT_SECONDS` (90 seconds by default);
 5. serializes the resulting `AgentResult`; and
 6. returns JSON.
 
