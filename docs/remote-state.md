@@ -7,6 +7,26 @@ this demo workflow. Remote Azure Blob state remains documented for future
 production-style environments, but it is no longer required for local deployment
 or simple developer testing.
 
+### When remote state is required
+
+Local state is acceptable **only** for a single-operator environment that nobody
+else deploys to. Use Azure Blob remote state whenever any of the following is
+true:
+
+- More than one person, machine, or CI runner can run `terraform apply` against
+  the environment. Local state has no shared lock, so two concurrent applies will
+  silently diverge and can destroy or orphan live resources.
+- The environment is deployed by GitHub Actions. The `deploy-production.yml`
+  workflow assumes remote state; a local-state environment cannot be handed off
+  to CI without migrating first.
+- The environment holds data you cannot afford to recreate. Local state lives on
+  one disk, is gitignored, and is not backed up — losing it means losing the
+  ability to manage or cleanly destroy the resources it tracks.
+
+`scripts/guard-local-terraform-state.sh` blocks the remote-state tasks while
+local state is still present. See [Migrating existing local state](#migrating-existing-local-state)
+before switching a live environment.
+
 Azure Blob automatically provides state locking via blob leases. No additional lock table is required.
 
 ## Storage layout
@@ -160,7 +180,9 @@ The SP also requires:
 - `Contributor` on the target subscription (or narrower scopes per resource group)
 - `Role Based Access Control Administrator` where Terraform creates role assignments
 - `Storage Blob Data Contributor` on the Terraform state storage account
-- Appropriate Microsoft Graph application permissions if `enable_service_auth` is enabled
+- Appropriate Microsoft Graph application permissions to create the orchestrator
+  API application and app-role assignment, because `enable_service_auth` defaults
+  to `true` for deployed environments
 
 Create the Entra application and service principal without a password or client secret, then add a federated credential with `az ad app federated-credential create` or the Entra portal. The credential must use:
 
@@ -172,7 +194,7 @@ Never use `az ad sp create-for-rbac --sdk-auth`, create a client secret, or stor
 
 The GitHub `production` environment must define required reviewers. The deployment workflow is triggered only after the `CI` workflow succeeds for a push to `main`, or by an explicitly approved manual dispatch.
 
-If orchestrator service authentication is enabled, grant the deployment identity the `Workflow.Invoke` application role so the post-deployment smoke test can obtain a valid orchestrator token.
+Grant the deployment identity the `Workflow.Invoke` application role so the post-deployment smoke test can obtain a valid orchestrator token.
 
 ## Locking behaviour
 

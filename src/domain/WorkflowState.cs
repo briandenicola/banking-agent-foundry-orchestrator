@@ -23,7 +23,10 @@ public sealed record WorkflowState(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     IReadOnlyList<WorkflowEvent> Events,
-    long Version = 0);
+    long Version = 0,
+    int RecoveryAttemptCount = 0,
+    DateTimeOffset? NextAttemptAt = null,
+    string? LastErrorCode = null);
 
 public sealed record WorkflowEvent(
     string Type,

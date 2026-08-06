@@ -12,7 +12,10 @@ namespace BankingAgent.Infrastructure.Tests;
 public sealed class WorkflowRestartRecoveryTests : IAsyncLifetime
 {
     private readonly string _databasePath =
-        Path.Combine(Path.GetTempPath(), $"banking-agent-restart-{Guid.NewGuid():N}.db");
+        Path.Combine(
+            Directory.GetCurrentDirectory(),
+            ".testdata",
+            $"banking-agent-restart-{Guid.NewGuid():N}.db");
 
     [Fact]
     public async Task WorkflowAndApprovedAction_SurviveContextRestartWithoutDuplicates()
@@ -151,6 +154,7 @@ public sealed class WorkflowRestartRecoveryTests : IAsyncLifetime
 
     private BankingAgentDbContext CreateContext()
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = _databasePath,
@@ -298,6 +302,115 @@ public sealed class WorkflowRestartRecoveryTests : IAsyncLifetime
 
         Assert.NotNull(claimed);
         Assert.Contains(claimed.Events, e => e.Type == "workflow.recovery_claimed");
+    }
+
+    [Fact]
+    public async Task ClaimNextAsync_StaleDraft_IncrementsRecoveryAttemptCountAndSetsBackoff()
+    {
+        var workflow = BuildDraftWorkflow(DateTimeOffset.UtcNow.AddMinutes(-5));
+        await using (var seedCtx = CreateContext())
+        {
+            await seedCtx.Database.EnsureCreatedAsync();
+            await new EfWorkflowRepository(seedCtx).AddAsync(workflow);
+        }
+
+        var claimedAt = DateTimeOffset.UtcNow;
+        await using (var claimCtx = CreateContext())
+        {
+            var claimed = await new EfWorkflowRepository(claimCtx)
+                .ClaimNextAsync(
+                    DateTimeOffset.UtcNow.AddMinutes(-2),
+                    claimedAt,
+                    maxRecoveryAttempts: 5,
+                    recoveryBackoffBaseSeconds: 7,
+                    recoveryBackoffMaxSeconds: 60);
+
+            Assert.NotNull(claimed);
+            Assert.Equal(1, claimed.RecoveryAttemptCount);
+            Assert.Equal(claimedAt.AddSeconds(7), claimed.NextAttemptAt);
+        }
+
+        await using var verifyCtx = CreateContext();
+        var persisted = await new EfWorkflowRepository(verifyCtx).GetAsync(workflow.Id);
+        Assert.NotNull(persisted);
+        Assert.Equal(1, persisted.RecoveryAttemptCount);
+        Assert.Equal(claimedAt.AddSeconds(7), persisted.NextAttemptAt);
+    }
+
+    [Fact]
+    public async Task ClaimNextAsync_BackoffWindowOpen_DoesNotImmediatelyReclaimRecoveringWorkflow()
+    {
+        var workflow = BuildDraftWorkflow(DateTimeOffset.UtcNow.AddMinutes(-5));
+        await using (var seedCtx = CreateContext())
+        {
+            await seedCtx.Database.EnsureCreatedAsync();
+            await new EfWorkflowRepository(seedCtx).AddAsync(workflow);
+        }
+
+        var claimedAt = DateTimeOffset.UtcNow;
+        await using (var firstClaimCtx = CreateContext())
+        {
+            var claimed = await new EfWorkflowRepository(firstClaimCtx)
+                .ClaimNextAsync(DateTimeOffset.UtcNow.AddMinutes(-2), claimedAt, 5);
+            Assert.NotNull(claimed);
+        }
+
+        await using var secondClaimCtx = CreateContext();
+        var reclaimed = await new EfWorkflowRepository(secondClaimCtx)
+            .ClaimNextAsync(claimedAt.AddDays(1), claimedAt.AddSeconds(1), 5);
+
+        Assert.Null(reclaimed);
+    }
+
+    [Fact]
+    public async Task ClaimNextAsync_RecoveryAttemptsExhausted_MarksWorkflowFailedAndDoesNotClaim()
+    {
+        var workflow = BuildDraftWorkflow(DateTimeOffset.UtcNow.AddMinutes(-5));
+        await using (var seedCtx = CreateContext())
+        {
+            await seedCtx.Database.EnsureCreatedAsync();
+            await new EfWorkflowRepository(seedCtx).AddAsync(workflow);
+        }
+
+        var claimedAt = DateTimeOffset.UtcNow;
+        for (var attempt = 1; attempt <= 5; attempt++)
+        {
+            await using var claimCtx = CreateContext();
+            var claimed = await new EfWorkflowRepository(claimCtx)
+                .ClaimNextAsync(
+                    staleBefore: claimedAt.AddSeconds(1),
+                    claimedAt: claimedAt,
+                    maxRecoveryAttempts: 5,
+                    recoveryBackoffBaseSeconds: 1,
+                    recoveryBackoffMaxSeconds: 4);
+
+            Assert.NotNull(claimed);
+            Assert.Equal(attempt, claimed.RecoveryAttemptCount);
+            claimedAt = claimed.NextAttemptAt!.Value;
+        }
+
+        await using (var abandonedCtx = CreateContext())
+        {
+            var abandoned = await new EfWorkflowRepository(abandonedCtx)
+                .ClaimNextAsync(
+                    staleBefore: claimedAt.AddSeconds(1),
+                    claimedAt: claimedAt,
+                    maxRecoveryAttempts: 5,
+                    recoveryBackoffBaseSeconds: 1,
+                    recoveryBackoffMaxSeconds: 4);
+
+            Assert.Null(abandoned);
+        }
+
+        await using var verifyCtx = CreateContext();
+        var persisted = await new EfWorkflowRepository(verifyCtx).GetAsync(workflow.Id);
+        Assert.NotNull(persisted);
+        Assert.Equal(WorkflowStatus.Failed, persisted.Status);
+        Assert.Equal(5, persisted.RecoveryAttemptCount);
+        Assert.Equal("workflow_recovery_attempts_exhausted", persisted.LastErrorCode);
+        Assert.Contains(
+            persisted.Events,
+            workflowEvent => workflowEvent.Type == "workflow.abandoned");
     }
 
     [Fact]

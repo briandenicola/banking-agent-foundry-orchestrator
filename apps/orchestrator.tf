@@ -103,6 +103,21 @@ resource "azurerm_container_app" "orchestrator" {
       }
 
       env {
+        name  = "WORKFLOW_RECOVERY_MAX_ATTEMPTS"
+        value = "5"
+      }
+
+      env {
+        name  = "WORKFLOW_RECOVERY_BACKOFF_BASE_SECONDS"
+        value = "30"
+      }
+
+      env {
+        name  = "WORKFLOW_RECOVERY_BACKOFF_MAX_SECONDS"
+        value = "900"
+      }
+
+      env {
         name  = "AZURE_TENANT_ID"
         value = var.enable_service_auth ? data.azurerm_client_config.current.tenant_id : ""
       }
@@ -145,21 +160,6 @@ resource "azurerm_container_app" "orchestrator" {
       env {
         name  = "FOUNDRY_RETRY_BASE_DELAY_MILLISECONDS"
         value = "250"
-      }
-
-      env {
-        name  = "WORKFLOW_RECOVERY_SCAN_INTERVAL_SECONDS"
-        value = "30"
-      }
-
-      env {
-        name  = "WORKFLOW_RECOVERY_STALE_AFTER_SECONDS"
-        value = "120"
-      }
-
-      env {
-        name  = "WORKFLOW_RECOVERY_BATCH_SIZE"
-        value = "10"
       }
 
       env {

@@ -9,6 +9,9 @@ public sealed class WorkflowRecoveryOptions
     public int ScanIntervalSeconds { get; set; } = 30;
     public int StaleAfterSeconds { get; set; } = 120;
     public int BatchSize { get; set; } = 10;
+    public int MaxAttempts { get; set; } = 5;
+    public int BackoffBaseSeconds { get; set; } = 30;
+    public int BackoffMaxSeconds { get; set; } = 900;
 }
 
 public sealed class WorkflowRecoveryWorker(
@@ -54,6 +57,9 @@ public sealed class WorkflowRecoveryWorker(
             var claimed = await recoveryRepository.ClaimNextAsync(
                 DateTimeOffset.UtcNow.AddSeconds(-_options.StaleAfterSeconds),
                 DateTimeOffset.UtcNow,
+                _options.MaxAttempts,
+                _options.BackoffBaseSeconds,
+                _options.BackoffMaxSeconds,
                 cancellationToken);
             if (claimed is null)
             {
@@ -66,10 +72,11 @@ public sealed class WorkflowRecoveryWorker(
                     claimed.Id,
                     cancellationToken);
                 logger.LogInformation(
-                    "Recovered workflow {WorkflowId} from version {ClaimedVersion} to status {Status}",
+                    "Recovered workflow {WorkflowId} from version {ClaimedVersion} to status {Status} on recovery attempt {RecoveryAttemptCount}",
                     claimed.Id,
                     claimed.Version,
-                    recovered.Status);
+                    recovered.Status,
+                    claimed.RecoveryAttemptCount);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -93,6 +100,12 @@ public sealed class WorkflowRecoveryWorker(
         ArgumentOutOfRangeException.ThrowIfGreaterThan(options.StaleAfterSeconds, 3600);
         ArgumentOutOfRangeException.ThrowIfLessThan(options.BatchSize, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(options.BatchSize, 100);
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.MaxAttempts, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.MaxAttempts, 100);
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.BackoffBaseSeconds, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.BackoffBaseSeconds, 3600);
+        ArgumentOutOfRangeException.ThrowIfLessThan(options.BackoffMaxSeconds, options.BackoffBaseSeconds);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.BackoffMaxSeconds, 86400);
         return options;
     }
 }

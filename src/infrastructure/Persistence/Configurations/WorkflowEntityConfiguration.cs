@@ -37,6 +37,13 @@ public sealed class WorkflowEntityConfiguration
             .HasColumnName("approval_reason");
         builder.Property(workflow => workflow.CreatedAt).HasColumnName("created_at");
         builder.Property(workflow => workflow.UpdatedAt).HasColumnName("updated_at");
+        builder.Property(workflow => workflow.RecoveryAttemptCount)
+            .HasColumnName("recovery_attempt_count");
+        builder.Property(workflow => workflow.NextAttemptAt)
+            .HasColumnName("next_attempt_at");
+        builder.Property(workflow => workflow.LastErrorCode)
+            .HasColumnName("last_error_code")
+            .HasMaxLength(128);
         builder.Property(workflow => workflow.Version)
             .HasColumnName("version")
             .IsConcurrencyToken();

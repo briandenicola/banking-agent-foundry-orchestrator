@@ -43,6 +43,9 @@ public interface IWorkflowRecoveryRepository
     Task<WorkflowState?> ClaimNextAsync(
         DateTimeOffset staleBefore,
         DateTimeOffset claimedAt,
+        int maxRecoveryAttempts = 5,
+        int recoveryBackoffBaseSeconds = 30,
+        int recoveryBackoffMaxSeconds = 900,
         CancellationToken cancellationToken = default);
 }
 
