@@ -95,6 +95,58 @@ tasks:
       REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
 
 
+  variables:
+    desc: Show the resolved Terraform outputs for both stacks
+    silent: true
+    cmds:
+      - |
+        set -e
+
+        emit() {
+          stack_dir="$1"
+          stack_label="$2"
+
+          echo ""
+          echo "=== $stack_label ($stack_dir) ==="
+
+          if [ ! -d "./$stack_dir/.terraform" ]; then
+            echo "  not initialised - run 'task cloud:apply' or 'task app:init' first"
+            return 0
+          fi
+
+          # terraform output exits non-zero when a stack has no state at all;
+          # that is an expected condition here, not a failure of this task.
+          if ! output_json=$(terraform -chdir="./$stack_dir" output -json 2>/dev/null); then
+            echo "  no state found - stack has not been applied"
+            return 0
+          fi
+
+          if [ "$output_json" = "{}" ]; then
+            echo "  no outputs in state - stack has not been applied"
+            return 0
+          fi
+
+          # Sensitive values stay masked unless the caller opts in, so this task
+          # is safe to run with someone watching the screen.
+          echo "$output_json" | jq -r --arg reveal "{{.REVEAL}}" '
+            to_entries
+            | sort_by(.key)
+            | .[]
+            | "  \(.key)=" + (
+                if (.value.sensitive and $reveal != "true")
+                then "<sensitive - re-run with REVEAL=true to show>"
+                else (.value.value | if type == "string" then . else tojson end)
+                end
+              )
+          '
+        }
+
+        emit "{{.INFRA_DIR}}" "infrastructure"
+        emit "apps" "application"
+        echo ""
+    vars:
+      REVEAL: '{{default "false" .REVEAL}}'
+
   _init:
     internal: true
     cmds:
