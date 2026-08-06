@@ -5,6 +5,85 @@ using Npgsql;
 
 namespace BankingAgent.Orchestrator;
 
+/// <summary>
+/// Caches the outcome of live MCP tool validation so readiness probes never
+/// perform network I/O inline.
+/// </summary>
+/// <remarks>
+/// A live validation round trip against a Foundry Hosted Agent costs several
+/// seconds, while the readiness probe allows five and repeats every ten. Doing
+/// the call inline meant the probe could never pass, and that every probe cycle
+/// issued another pair of requests to the agent for as long as the app ran.
+/// Refresh therefore happens in the background on an independent timeout, and
+/// probes read the last known verdict.
+/// </remarks>
+public sealed class McpToolValidationCache(
+    IMcpClient mcpClient,
+    ILogger<McpToolValidationCache> logger)
+{
+    private static readonly TimeSpan SuccessTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan FailureTtl = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ValidationTimeout = TimeSpan.FromSeconds(60);
+
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private Verdict? _verdict;
+
+    public sealed record Verdict(bool IsHealthy, string? Error, DateTimeOffset ExpiresAt);
+
+    /// <summary>
+    /// Returns the cached verdict, starting a background refresh when it is
+    /// missing or stale. Never blocks on the network.
+    /// </summary>
+    public Verdict? GetVerdictAndRefreshIfStale(IReadOnlyCollection<McpRequiredTool> requiredTools)
+    {
+        var current = Volatile.Read(ref _verdict);
+
+        if (current is null || current.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            _ = RefreshAsync(requiredTools);
+        }
+
+        return current;
+    }
+
+    private async Task RefreshAsync(IReadOnlyCollection<McpRequiredTool> requiredTools)
+    {
+        // A single refresh at a time; concurrent probes must not multiply load
+        // on the agent.
+        if (!await _refreshGate.WaitAsync(TimeSpan.Zero))
+        {
+            return;
+        }
+
+        try
+        {
+            // Deliberately not the probe's token: the probe is cancelled after
+            // five seconds, which is shorter than a healthy round trip.
+            using var cancellation = new CancellationTokenSource(ValidationTimeout);
+
+            await mcpClient.ValidateRequiredToolsAsync(requiredTools, cancellation.Token);
+
+            Volatile.Write(
+                ref _verdict,
+                new Verdict(true, null, DateTimeOffset.UtcNow.Add(SuccessTtl)));
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "MCP tool validation failed; readiness will report unhealthy until it succeeds.");
+
+            Volatile.Write(
+                ref _verdict,
+                new Verdict(false, exception.Message, DateTimeOffset.UtcNow.Add(FailureTtl)));
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
+    }
+}
+
 public sealed class ServiceAuthReadinessCheck(bool serviceAuthEnabled) : IHealthCheck
 {
     public Task<HealthCheckResult> CheckHealthAsync(
@@ -44,7 +123,7 @@ public sealed class PostgreSqlReadinessCheck(NpgsqlDataSource dataSource) : IHea
 
 public sealed class FoundryConfigurationReadinessCheck(
     IConfiguration configuration,
-    IMcpClient mcpClient) : IHealthCheck
+    McpToolValidationCache mcpValidationCache) : IHealthCheck
 {
     private static readonly string[] RequiredTools =
     [
@@ -93,7 +172,19 @@ public sealed class FoundryConfigurationReadinessCheck(
                 .ToArray();
             if (enabledRequiredMcpTools.Length > 0)
             {
-                await mcpClient.ValidateRequiredToolsAsync(enabledRequiredMcpTools, cancellationToken);
+                var verdict = mcpValidationCache.GetVerdictAndRefreshIfStale(enabledRequiredMcpTools);
+
+                if (verdict is null)
+                {
+                    return HealthCheckResult.Unhealthy(
+                        "MCP tool validation has not completed yet.");
+                }
+
+                if (!verdict.IsHealthy)
+                {
+                    return HealthCheckResult.Unhealthy(
+                        $"Foundry MCP readiness validation failed: {verdict.Error}");
+                }
             }
 
             return HealthCheckResult.Healthy();

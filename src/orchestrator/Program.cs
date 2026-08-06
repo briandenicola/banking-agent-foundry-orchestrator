@@ -184,6 +184,7 @@ builder.Services.Configure<WorkflowRecoveryOptions>(options =>
 });
 builder.Services.AddHostedService<WorkflowRecoveryWorker>();
 builder.Services.AddSingleton<IWorkflowExecutionTrigger, WorkflowExecutionTrigger>();
+builder.Services.AddSingleton<McpToolValidationCache>();
 builder.Services.AddHealthChecks()
     .AddCheck(
         "service_auth",
