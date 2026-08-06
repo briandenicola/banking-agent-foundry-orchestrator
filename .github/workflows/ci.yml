@@ -1,12 +1,14 @@
-# Continuous integration: validates every pull request and every push to main.
-# Does NOT deploy or push images; publishing happens only in deploy-production.yml.
+# Continuous integration: validates every pull request and every push to main or beta.
+# Does NOT deploy or push images; publishing happens only in deploy-production.yml,
+# which runs only for CI runs whose head_branch is main. Pushes to beta are therefore
+# tested but never deployed.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
-    branches: [main]
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:
