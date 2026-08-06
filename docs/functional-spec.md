@@ -12,14 +12,13 @@ This spec describes the target design. The following parts are **not yet** imple
 
 | Spec statement | Actual behaviour on `main` | Tracked |
 |---|---|---|
-| "MCP-based loading of Foundry-hosted agents as tools" | Partially implemented. `transaction.explain` (`transaction-explanation`) now uses real MCP JSON-RPC 2.0 with `initialize`, `tools/list`, and `tools/call`, selected by `FOUNDRY_MCP_TOOL_ENDPOINTS` and validated at readiness. `workflow.plan`, `suspicious.assess`, and `dispute.plan` still use the versioned typed Foundry hosted-agent envelope. | [#23](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/23) |
 | LangGraph agents as multi-step graphs | Each agent is a single-node graph (`START → analyze → END`) with no conditional edges, cycles, or checkpointer. | [#22](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/22) |
 
 
 ## Primary user journey
 1. A user submits a request such as "Explain this pending transaction" or "Dispute this charge".
 2. The C# orchestrator agent classifies the request and decides which specialized tool to call.
-3. The orchestrator loads `transaction-explanation` as an MCP tool and invokes the other hosted LangGraph agents through the typed envelope.
+3. The orchestrator loads every hosted LangGraph agent as an MCP tool. The typed Foundry hosted-agent envelope remains as a fallback for any tool absent from `FOUNDRY_MCP_TOOL_ENDPOINTS`.
 4. If sensitive, the orchestrator pauses and requires explicit approval.
 5. After approval, the orchestrator executes the action and records a complete audit trail.
 

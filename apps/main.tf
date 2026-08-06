@@ -29,7 +29,10 @@ locals {
   })
 
   foundry_mcp_tool_endpoints = jsonencode({
+    "workflow.plan"       = "${local.foundry_project_endpoint}/agents/workflow-planning/endpoint/protocols/invocations?api-version=v1"
     "transaction.explain" = "${local.foundry_project_endpoint}/agents/transaction-explanation/endpoint/protocols/invocations?api-version=v1"
+    "suspicious.assess"   = "${local.foundry_project_endpoint}/agents/suspicious-activity/endpoint/protocols/invocations?api-version=v1"
+    "dispute.plan"        = "${local.foundry_project_endpoint}/agents/dispute-planning/endpoint/protocols/invocations?api-version=v1"
   })
 
   hosted_agent_definitions = [

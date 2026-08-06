@@ -16,8 +16,33 @@ logger = logging.getLogger(__name__)
 
 JSONRPC_VERSION = "2.0"
 MCP_PROTOCOL_VERSION = "2024-11-05"
-TRANSACTION_TOOL_NAME = "transaction.explain"
-TRANSACTION_AGENT = AgentName.TRANSACTION_EXPLANATION
+
+# Every hosted agent exposes exactly one tool over MCP. The tool name must match
+# the key the orchestrator uses in FOUNDRY_MCP_TOOL_ENDPOINTS (see apps/main.tf)
+# and in ReadinessChecks.RequiredMcpTools.
+_AGENT_TOOLS: dict[AgentName, tuple[str, str]] = {
+    AgentName.WORKFLOW_PLANNING: (
+        "workflow.plan",
+        "Classify a customer's banking request, select exactly one specialist "
+        "agent, assess risk, and decide whether human approval is required. "
+        "Never executes an action.",
+    ),
+    AgentName.TRANSACTION_EXPLANATION: (
+        "transaction.explain",
+        "Explain a banking transaction without taking sensitive action.",
+    ),
+    AgentName.SUSPICIOUS_ACTIVITY: (
+        "suspicious.assess",
+        "Assess suspicious or unrecognized account activity, separate observed "
+        "facts from hypotheses, and recommend protective next steps. Any request "
+        "to freeze, block, or close an account requires approval.",
+    ),
+    AgentName.DISPUTE_PLANNING: (
+        "dispute.plan",
+        "Prepare a bounded transaction-dispute plan covering missing information, "
+        "eligibility, and evidence requirements. Never submits a dispute.",
+    ),
+}
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -28,10 +53,27 @@ INTERNAL_ERROR = -32603
 GraphInvoker = Callable[[AgentRequest], Awaitable[dict[str, Any]]]
 
 
-def transaction_explanation_tool() -> dict[str, Any]:
+def tool_name_for(agent_name: AgentName) -> str:
+    """The MCP tool name this agent hosts."""
+    return _AGENT_TOOLS[agent_name][0]
+
+
+def tool_definition(agent_name: AgentName) -> dict[str, Any]:
+    """The MCP tool descriptor advertised by this agent via tools/list."""
+    name, description = _AGENT_TOOLS[agent_name]
+
+    output_properties: dict[str, Any] = {
+        "agent": {"type": "string"},
+        "status": {"type": "string"},
+        "summary": {"type": "string"},
+        "requires_approval": {"type": "boolean"},
+    }
+    if agent_name == AgentName.WORKFLOW_PLANNING:
+        output_properties["selected_agent"] = {"type": "string"}
+
     return {
-        "name": TRANSACTION_TOOL_NAME,
-        "description": "Explain a banking transaction without taking sensitive action.",
+        "name": name,
+        "description": description,
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -48,15 +90,11 @@ def transaction_explanation_tool() -> dict[str, Any]:
         },
         "outputSchema": {
             "type": "object",
-            "properties": {
-                "agent": {"type": "string"},
-                "status": {"type": "string"},
-                "summary": {"type": "string"},
-                "requires_approval": {"type": "boolean"},
-            },
+            "properties": output_properties,
             "additionalProperties": True,
         },
     }
+
 
 
 def _error(code: int, message: str, request_id: Any = None) -> JSONResponse:
@@ -113,24 +151,26 @@ async def handle_mcp_request(
             {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "banking-transaction-explanation-agent", "version": "1.0"},
+                "serverInfo": {"name": f"banking-{agent_name.value}-agent", "version": "1.0"},
             },
             request_id,
         )
 
     if method == "tools/list":
-        tools = [transaction_explanation_tool()] if agent_name == TRANSACTION_AGENT else []
-        return _result({"tools": tools}, request_id)
+        return _result({"tools": [tool_definition(agent_name)]}, request_id)
 
     if method != "tools/call":
         return _error(METHOD_NOT_FOUND, f"Unknown method: {method}", request_id)
 
+    hosted_tool_name = tool_name_for(agent_name)
     tool_name = params.get("name")
     arguments = params.get("arguments", {})
-    if tool_name != TRANSACTION_TOOL_NAME:
-        return _error(INVALID_PARAMS, f"Unknown tool: {tool_name}", request_id)
-    if agent_name != TRANSACTION_AGENT:
-        return _error(INVALID_PARAMS, f"Tool {TRANSACTION_TOOL_NAME} is not hosted by {agent_name}.", request_id)
+    if tool_name != hosted_tool_name:
+        return _error(
+            INVALID_PARAMS,
+            f"Unknown tool: {tool_name}. This agent hosts {hosted_tool_name}.",
+            request_id,
+        )
     if not isinstance(arguments, dict):
         return _error(INVALID_PARAMS, "arguments must be an object.", request_id)
 
@@ -139,14 +179,18 @@ async def handle_mcp_request(
             message=str(arguments.get("user_message") or arguments.get("message") or ""),
             trace_id=str(arguments.get("trace_id") or "unknown"),
             workflow_id=arguments.get("workflow_id"),
-            tool_name=TRANSACTION_TOOL_NAME,
-            agent_name=TRANSACTION_AGENT.value,
+            tool_name=hosted_tool_name,
+            agent_name=agent_name.value,
             input=arguments,
             metadata={"transport": "mcp-jsonrpc-2.0"},
             context=arguments.get("context") if isinstance(arguments.get("context"), dict) else {},
         )
     except ValidationError:
-        return _error(INVALID_PARAMS, "arguments do not satisfy the transaction explanation schema.", request_id)
+        return _error(
+            INVALID_PARAMS,
+            f"arguments do not satisfy the {hosted_tool_name} schema.",
+            request_id,
+        )
 
     try:
         state = await asyncio.wait_for(invoke_graph(agent_request), timeout=invoke_timeout)

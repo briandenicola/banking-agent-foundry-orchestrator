@@ -160,11 +160,14 @@ jobs:
           python-version: '3.12'
 
       - name: Install agent dependencies
-        run: python -m pip install -r src/agents/python/requirements.txt pytest
+        run: |
+          python -m pip install -r src/agents/python/requirements.txt \
+            -r src/agents/python/requirements-dev.txt
 
       - name: Run agent tests
+        # Runs the whole suite so new test modules are covered without editing CI.
         working-directory: src/agents/python
-        run: python -m pytest tests/test_agents.py -v
+        run: python -m pytest tests -v
 
   # ── Python hosted-agent contract tests ────────────────────────────────────
   python-hosted-tests:
@@ -178,7 +181,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install agent dependencies
-        run: python -m pip install -r src/agents/python/requirements.txt pytest
+        run: |
+          python -m pip install -r src/agents/python/requirements.txt \
+            -r src/agents/python/requirements-dev.txt
 
       - name: Run hosted-agent tests
         # Working directory is required: app imports are relative to src/agents/python.

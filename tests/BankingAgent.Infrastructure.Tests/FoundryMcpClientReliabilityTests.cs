@@ -429,6 +429,136 @@ public sealed class FoundryMcpClientReliabilityTests
         }
     }
 
+    [Fact]
+    public async Task DiscoverToolsAsync_EveryAgentEndpoint_ContributesItsOwnTool()
+    {
+        var handler = new PerEndpointMcpHandler(new Dictionary<string, string?>
+        {
+            ["https://example.test/plan"] = "workflow.plan",
+            ["https://example.test/explain"] = "transaction.explain",
+            ["https://example.test/assess"] = "suspicious.assess",
+            ["https://example.test/dispute"] = "dispute.plan"
+        });
+        var client = CreateClient(handler, maxAttempts: 1, mcpToolEndpointsJson: AllFourEndpointsJson);
+
+        var tools = await client.DiscoverToolsAsync();
+
+        Assert.Equal(
+            ["dispute.plan", "suspicious.assess", "transaction.explain", "workflow.plan"],
+            tools.Select(tool => tool.Name).OrderBy(name => name, StringComparer.Ordinal));
+        Assert.All(tools, tool => Assert.Equal("mcp", tool.DiscoverySource));
+        Assert.Equal(4, handler.InitializeCount);
+    }
+
+    [Fact]
+    public async Task ValidateRequiredToolsAsync_AllFourAgentsHealthy_Succeeds()
+    {
+        var handler = new PerEndpointMcpHandler(new Dictionary<string, string?>
+        {
+            ["https://example.test/plan"] = "workflow.plan",
+            ["https://example.test/explain"] = "transaction.explain",
+            ["https://example.test/assess"] = "suspicious.assess",
+            ["https://example.test/dispute"] = "dispute.plan"
+        });
+        var client = CreateClient(handler, maxAttempts: 1, mcpToolEndpointsJson: AllFourEndpointsJson);
+
+        await client.ValidateRequiredToolsAsync(AllFourRequiredTools);
+    }
+
+    [Fact]
+    public async Task ValidateRequiredToolsAsync_OneAgentMissingItsTool_Fails()
+    {
+        // A renamed or unmigrated agent must be caught at readiness rather than
+        // when a workflow first routes to it.
+        var handler = new PerEndpointMcpHandler(new Dictionary<string, string?>
+        {
+            ["https://example.test/plan"] = "workflow.plan",
+            ["https://example.test/explain"] = "transaction.explain",
+            ["https://example.test/assess"] = null,
+            ["https://example.test/dispute"] = "dispute.plan"
+        });
+        var client = CreateClient(handler, maxAttempts: 1, mcpToolEndpointsJson: AllFourEndpointsJson);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.ValidateRequiredToolsAsync(AllFourRequiredTools));
+
+        Assert.Contains("suspicious.assess: missing", exception.Message, StringComparison.Ordinal);
+    }
+
+    private const string AllFourEndpointsJson =
+        """
+        {
+          "workflow.plan": "https://example.test/plan",
+          "transaction.explain": "https://example.test/explain",
+          "suspicious.assess": "https://example.test/assess",
+          "dispute.plan": "https://example.test/dispute"
+        }
+        """;
+
+    private static readonly McpRequiredTool[] AllFourRequiredTools =
+    [
+        new("workflow.plan", ["user_message", "trace_id", "workflow_id"]),
+        new("transaction.explain", ["user_message", "trace_id", "workflow_id"]),
+        new("suspicious.assess", ["user_message", "trace_id", "workflow_id"]),
+        new("dispute.plan", ["user_message", "trace_id", "workflow_id"])
+    ];
+
+    /// <summary>
+    /// Responds per endpoint rather than per call sequence, so multiple agents
+    /// can be probed concurrently without the assertions depending on ordering.
+    /// </summary>
+    private sealed class PerEndpointMcpHandler(IReadOnlyDictionary<string, string?> toolByEndpoint)
+        : HttpMessageHandler
+    {
+        private int _initializeCount;
+
+        public int InitializeCount => Volatile.Read(ref _initializeCount);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var requestBody = request.Content is null
+                ? "{}"
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            var requestJson = JsonNode.Parse(requestBody)!.AsObject();
+            var method = requestJson["method"]?.GetValue<string>() ?? "";
+            var id = requestJson["id"]?.GetValue<string>() ?? "1";
+
+            if (method == "initialize")
+            {
+                Interlocked.Increment(ref _initializeCount);
+                return Json(
+                    """{"jsonrpc":"2.0","id":"__ID__","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}""",
+                    id);
+            }
+
+            if (method != "tools/list")
+            {
+                return Json("""{"jsonrpc":"2.0","id":"__ID__","error":{"code":-32601,"message":"no"}}""", id);
+            }
+
+            var endpoint = request.RequestUri!.GetLeftPart(UriPartial.Path);
+            var toolName = toolByEndpoint.TryGetValue(endpoint, out var name) ? name : null;
+            var tools = toolName is null
+                ? "[]"
+                : """
+                    [{"name":"__TOOL__","description":"d","inputSchema":{"type":"object","properties":{"user_message":{"type":"string"},"trace_id":{"type":"string"},"workflow_id":{"type":"string"}},"required":["user_message","trace_id","workflow_id"]},"outputSchema":{"type":"object"}}]
+                    """.Replace("__TOOL__", toolName, StringComparison.Ordinal);
+
+            return Json(
+                """{"jsonrpc":"2.0","id":"__ID__","result":{"tools":__TOOLS__}}"""
+                    .Replace("__TOOLS__", tools, StringComparison.Ordinal),
+                id);
+        }
+
+        private static HttpResponseMessage Json(string body, string id) =>
+            new(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body.Replace("__ID__", id, StringComparison.Ordinal))
+            };
+    }
+
     private sealed class CapturingSequenceHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
     {
         private int _attempts;

@@ -133,10 +133,15 @@ public sealed class FoundryConfigurationReadinessCheck(
         "dispute.plan"
     ];
 
-    private static readonly McpRequiredTool[] RequiredMcpTools =
+    private static readonly string[] RequiredToolInputProperties =
     [
-        new("transaction.explain", ["user_message", "trace_id", "workflow_id"])
+        "user_message",
+        "trace_id",
+        "workflow_id"
     ];
+
+    private static readonly McpRequiredTool[] RequiredMcpTools =
+        [.. RequiredTools.Select(tool => new McpRequiredTool(tool, RequiredToolInputProperties))];
 
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
