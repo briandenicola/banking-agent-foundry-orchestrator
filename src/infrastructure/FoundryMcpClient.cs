@@ -1087,10 +1087,18 @@ public sealed class FoundryMcpClient : IMcpClient
         int attempt)
     {
         var resultElement = response.GetProperty("result");
-        var resultJson = resultElement.GetRawText();
-        var resultObject = JsonSerializer.Deserialize<object>(resultJson);
+        var envelopeJson = resultElement.GetRawText();
         var isError = resultElement.TryGetProperty("isError", out var isErrorElement) &&
             isErrorElement.ValueKind is JsonValueKind.True;
+
+        // Callers deserialise response_body straight into an agent result, so the
+        // MCP envelope has to be unwrapped here. Leaving the envelope in place
+        // makes every agent field deserialise to null and the result is rejected
+        // as invalid. Keeping this in the transport adapter is what allows the
+        // application layer to stay unaware of which transport was used.
+        var agentPayloadJson = ExtractMcpAgentPayload(resultElement) ?? envelopeJson;
+        var agentPayloadObject = JsonSerializer.Deserialize<object>(agentPayloadJson);
+
         return new McpToolResult(
             toolName,
             isError ? "error" : "ok",
@@ -1098,13 +1106,54 @@ public sealed class FoundryMcpClient : IMcpClient
             new Dictionary<string, object?>
             {
                 ["endpoint"] = endpoint,
-                ["response_json"] = resultObject,
-                ["response_body"] = resultJson,
+                ["response_json"] = agentPayloadObject,
+                ["response_body"] = agentPayloadJson,
+                ["mcp_envelope_body"] = envelopeJson,
                 ["attempts"] = attempt,
                 ["transport"] = "mcp-jsonrpc-2.0",
                 ["mcp_method"] = "tools/call",
                 ["mcp_tool_name"] = toolName
             });
+    }
+
+    /// <summary>
+    /// Pulls the agent payload out of an MCP tools/call result, preferring
+    /// structuredContent and falling back to the first text content block.
+    /// </summary>
+    private static string? ExtractMcpAgentPayload(JsonElement resultElement)
+    {
+        if (resultElement.TryGetProperty("structuredContent", out var structured) &&
+            structured.ValueKind is JsonValueKind.Object)
+        {
+            return structured.GetRawText();
+        }
+
+        if (!resultElement.TryGetProperty("content", out var content) ||
+            content.ValueKind is not JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var block in content.EnumerateArray())
+        {
+            if (block.ValueKind is not JsonValueKind.Object ||
+                !block.TryGetProperty("type", out var type) ||
+                type.ValueKind is not JsonValueKind.String ||
+                !string.Equals(type.GetString(), "text", StringComparison.Ordinal) ||
+                !block.TryGetProperty("text", out var text) ||
+                text.ValueKind is not JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var candidate = text.GetString();
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private async Task DelayBeforeRetryAsync(

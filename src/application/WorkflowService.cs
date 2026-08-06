@@ -528,11 +528,12 @@ public sealed class WorkflowService : IWorkflowService
         Activity.Current?.SetStatus(ActivityStatusCode.Error);
 
         _logger.LogError(
-            "Workflow {WorkflowId} failed for trace {TraceId} with error code {ErrorCode} after {DurationMs} ms",
+            "Workflow {WorkflowId} failed for trace {TraceId} with error code {ErrorCode} after {DurationMs} ms: {Error}",
             current.Id,
             current.TraceId,
             "workflow_execution_failed",
-            (now - current.CreatedAt).TotalMilliseconds);
+            (now - current.CreatedAt).TotalMilliseconds,
+            error);
 
         return failedState;
     }

@@ -248,6 +248,55 @@ public sealed class FoundryMcpClientReliabilityTests
     }
 
     [Fact]
+    public async Task InvokeAsync_McpToolCall_UnwrapsStructuredContentIntoResponseBody()
+    {
+        // Callers deserialise response_body directly into an agent result, so the
+        // MCP envelope must not leak through. Returning the envelope makes every
+        // agent field null and the workflow fails with "invalid agent result".
+        var handler = new CapturingSequenceHandler(
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"init","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}"""),
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"call","result":{"content":[{"type":"text","text":"{\"agent\":\"transaction-explanation\",\"status\":\"ok\"}"}],"structuredContent":{"agent":"transaction-explanation","status":"ok","summary":"Explained."}}}"""));
+        var client = CreateClient(
+            handler,
+            maxAttempts: 1,
+            mcpToolEndpointsJson: """{"transaction.explain":"https://example.test/mcp"}""");
+
+        var result = await client.InvokeAsync("transaction.explain", Parameters());
+
+        Assert.Equal("ok", result.Status);
+
+        var responseBody = Assert.IsType<string>(result.Data["response_body"]);
+        var parsed = JsonNode.Parse(responseBody)!.AsObject();
+
+        Assert.Equal("transaction-explanation", parsed["agent"]!.GetValue<string>());
+        Assert.Equal("Explained.", parsed["summary"]!.GetValue<string>());
+        Assert.False(parsed.ContainsKey("structuredContent"));
+        Assert.False(parsed.ContainsKey("content"));
+
+        // The raw envelope stays available for diagnostics.
+        Assert.Contains("structuredContent", Assert.IsType<string>(result.Data["mcp_envelope_body"]));
+    }
+
+    [Fact]
+    public async Task InvokeAsync_McpToolCall_FallsBackToTextContentWhenNoStructuredContent()
+    {
+        var handler = new CapturingSequenceHandler(
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"init","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}"""),
+            Response(HttpStatusCode.OK, """{"jsonrpc":"2.0","id":"call","result":{"content":[{"type":"text","text":"{\"agent\":\"transaction-explanation\",\"status\":\"ok\",\"summary\":\"From text block.\"}"}]}}"""));
+        var client = CreateClient(
+            handler,
+            maxAttempts: 1,
+            mcpToolEndpointsJson: """{"transaction.explain":"https://example.test/mcp"}""");
+
+        var result = await client.InvokeAsync("transaction.explain", Parameters());
+
+        var responseBody = Assert.IsType<string>(result.Data["response_body"]);
+        var parsed = JsonNode.Parse(responseBody)!.AsObject();
+
+        Assert.Equal("From text block.", parsed["summary"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task ValidateRequiredToolsAsync_McpSchemaMismatch_Throws()
     {
         var handler = new CapturingSequenceHandler(
