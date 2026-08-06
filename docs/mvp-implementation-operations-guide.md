@@ -511,9 +511,11 @@ Identity and role definitions are in
 ### Orchestrator API authentication
 
 Orchestrator API authentication is enabled by default. Keep
-`enable_service_auth=true` for every deployed environment; setting it to `false`
-is only supported for local Development and the orchestrator refuses to start
-with that value in Production.
+`enable_service_auth=true` for every deployed environment where the tenant permits
+it. Setting it to `false` requires `allow_insecure_service_auth=true` as an
+explicit acknowledgement, and is intended only for local Development or for demo
+environments in tenants that cannot provision the required Entra objects. See
+[When the tenant forbids these objects](#when-the-tenant-forbids-these-objects).
 
 With service auth enabled,
 [`apps/entra.tf`](../apps/entra.tf) then:
@@ -536,8 +538,42 @@ Tenant prerequisites:
 - a deployment identity authorized for the AzureAD Terraform provider;
 - no client secrets or certificate credentials.
 
-If these directory permissions are unavailable, leave service authentication disabled
-and protect public ingress through the environment's approved access controls.
+#### When the tenant forbids these objects
+
+Some tenants allow creating an application registration but refuse to create its
+service principal or set its `api://` identifier URI. Terraform fails with:
+
+```
+403 Authorization_RequestDenied: Insufficient privileges to complete the operation
+```
+
+This leaves the deployment half-applied, and the orphaned application registration
+usually cannot be deleted by the same identity either, so it must be removed from
+Terraform state and cleaned up by a directory administrator.
+
+For demo and lab environments in such a tenant, disable service authentication by
+setting **both** values in `.env`:
+
+```bash
+ENABLE_SERVICE_AUTH=false
+ALLOW_INSECURE_SERVICE_AUTH=true
+```
+
+`.env` is gitignored, so this stays a property of your environment rather than a
+change to the repository's secure defaults, and it applies to every `task` command
+without needing flags on each invocation.
+
+The two variables are deliberately separate. `ENABLE_SERVICE_AUTH=false` alone
+fails the Terraform plan through a precondition on the orchestrator container app,
+and the orchestrator refuses to start. Turning authentication off and acknowledging
+what that means are two distinct acts.
+
+With authentication disabled, **anyone who can reach the orchestrator ingress can
+start and approve workflows**. Never use this for real or regulated data. The
+system reports the state honestly rather than hiding it: readiness returns
+`service_auth: Degraded`, and the orchestrator logs a startup warning.
+
+Prefer restricting ingress as well, so the exposure is not public.
 
 ## 8. Telemetry and correlation
 
