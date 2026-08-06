@@ -39,6 +39,87 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(AgentName.DISPUTE_PLANNING, result.selected_agent)
         self.assertTrue(result.requires_approval)
 
+    # ------------------------------------------------------------------
+    # Planner routing criteria (regression guard for #39)
+    #
+    # The deployed mis-routing happened on the *model* path, not the
+    # deterministic fallback: the fallback below already routes this
+    # message correctly, which is why the fallback tests stayed green
+    # while production sent informational messages to dispute-planning.
+    # The instructions the planner sends to the model are therefore the
+    # artifact under test.
+    # ------------------------------------------------------------------
+
+    async def _planner_system_prompt(self) -> str:
+        """Invoke the real planner graph against a mocked model and return
+        the system prompt it sent, whitespace-normalised so assertions do
+        not depend on how the instructions happen to be line-wrapped."""
+        structured_model = Mock()
+        structured_model.ainvoke = AsyncMock(
+            return_value=AgentResult(
+                agent=AgentName.WORKFLOW_PLANNING,
+                trace_id="test-trace",
+                intent="suspicious_activity",
+                summary="Classified the request.",
+                risk_level="high",
+                requires_approval=False,
+                recommended_action="Invoke the selected specialist agent.",
+                next_step="invoke_specialist",
+                selected_agent=AgentName.SUSPICIOUS_ACTIVITY,
+            )
+        )
+        model_instance = Mock()
+        model_instance.with_structured_output.return_value = structured_model
+
+        with patch("app.model._model", return_value=model_instance):
+            await self.invoke(
+                AgentName.WORKFLOW_PLANNING,
+                "This transaction is not mine. Explain what I should review.",
+            )
+
+        messages = structured_model.ainvoke.await_args.args[0]
+        system_prompt = next(content for role, content in messages if role == "system")
+        return " ".join(system_prompt.split())
+
+    async def test_planner_prompt_restricts_dispute_to_explicit_requests(self):
+        """A customer saying a charge is not theirs must not be read as a
+        dispute request. Reverting to instructions that merely list the
+        three agents fails this."""
+        prompt = await self._planner_system_prompt()
+        self.assertIn("ONLY when the customer explicitly asks to dispute", prompt)
+        self.assertIn(
+            "unrecognized activity alone is suspicious-activity",
+            prompt,
+        )
+
+    async def test_planner_prompt_separates_risk_from_approval(self):
+        """High risk must not by itself force approval; only a requested
+        account-changing action may."""
+        prompt = await self._planner_system_prompt()
+        self.assertIn(
+            "Requests for explanation, guidance, or next steps never require approval",
+            prompt,
+        )
+
+    async def test_planner_routes_informational_unrecognized_charge_without_approval(self):
+        """The exact phrasing asserted by scripts/smoke-mvp.py."""
+        os.environ["ALLOW_FALLBACK"] = "true"
+        result = await self.invoke(
+            AgentName.WORKFLOW_PLANNING,
+            "This transaction is not mine. Explain what I should review.",
+        )
+        self.assertEqual(AgentName.SUSPICIOUS_ACTIVITY, result.selected_agent)
+        self.assertFalse(result.requires_approval)
+
+    async def test_planner_escalates_unrecognized_charge_when_action_requested(self):
+        os.environ["ALLOW_FALLBACK"] = "true"
+        result = await self.invoke(
+            AgentName.WORKFLOW_PLANNING,
+            "Freeze my card; this transaction is not mine.",
+        )
+        self.assertEqual(AgentName.SUSPICIOUS_ACTIVITY, result.selected_agent)
+        self.assertTrue(result.requires_approval)
+
     async def test_suspicious_activity_only_requires_approval_for_action(self):
         os.environ["ALLOW_FALLBACK"] = "true"
         informational = await self.invoke(AgentName.SUSPICIOUS_ACTIVITY, "This transaction is not mine")
