@@ -11,6 +11,11 @@ public interface IMcpClient
         string? agentName = null,
         CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<McpToolDefinition>>([]);
+
+    Task ValidateRequiredToolsAsync(
+        IReadOnlyCollection<McpRequiredTool> requiredTools,
+        CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }
 
 public sealed record McpToolResult(
@@ -28,3 +33,7 @@ public sealed record McpToolDefinition(
     string DiscoverySource,
     bool IsDefault = false,
     IReadOnlyDictionary<string, object?>? OutputSchema = null);
+
+public sealed record McpRequiredTool(
+    string Name,
+    IReadOnlyCollection<string> RequiredInputProperties);

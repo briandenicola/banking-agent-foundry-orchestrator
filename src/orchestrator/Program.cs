@@ -148,6 +148,7 @@ builder.Services.Configure<FoundryMcpClientOptions>(options =>
     options.AgentName = builder.Configuration["FOUNDRY_AGENT_NAME"];
     options.Scope = builder.Configuration["FOUNDRY_SCOPE"] ?? "https://ai.azure.com/.default";
     options.ToolEndpointsJson = builder.Configuration["FOUNDRY_TOOL_ENDPOINTS"];
+    options.McpToolEndpointsJson = builder.Configuration["FOUNDRY_MCP_TOOL_ENDPOINTS"];
     options.MaxAttempts = builder.Configuration.GetValue("FOUNDRY_MAX_ATTEMPTS", 3);
     options.AttemptTimeoutSeconds =
         builder.Configuration.GetValue("FOUNDRY_ATTEMPT_TIMEOUT_SECONDS", 30);

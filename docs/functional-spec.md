@@ -12,8 +12,7 @@ This spec describes the target design. The following parts are **not yet** imple
 
 | Spec statement | Actual behaviour on `main` | Tracked |
 |---|---|---|
-| "The orchestrator agent classifies the request and decides which specialized tool to call" | The planner runs and returns `selected_agent`, but routing is decided by `WorkflowRoutingPolicy`, a deterministic keyword matcher. The planner's routing choice is a recommendation only and is discarded. | [#21](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/21) |
-| "MCP-based loading of Foundry-hosted agents as tools" | The transport is an MCP-*shaped* REST envelope, not the MCP protocol. There is no JSON-RPC transport, no `initialize` handshake, and no MCP server. Tool discovery is a static map from Terraform unless `FOUNDRY_MCP_DISCOVERY_ENDPOINT` is set, which no deployed configuration sets. | [#23](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/23) |
+| "MCP-based loading of Foundry-hosted agents as tools" | Partially implemented. `transaction.explain` (`transaction-explanation`) now uses real MCP JSON-RPC 2.0 with `initialize`, `tools/list`, and `tools/call`, selected by `FOUNDRY_MCP_TOOL_ENDPOINTS` and validated at readiness. `workflow.plan`, `suspicious.assess`, and `dispute.plan` still use the versioned typed Foundry hosted-agent envelope. | [#23](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/23) |
 | LangGraph agents as multi-step graphs | Each agent is a single-node graph (`START → analyze → END`) with no conditional edges, cycles, or checkpointer. | [#22](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/22) |
 | "Model access through a LiteLLM gateway" | LiteLLM is deployed but has zero callers. The Python agents call Foundry directly. | [#24](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/24) |
 
@@ -21,7 +20,7 @@ This spec describes the target design. The following parts are **not yet** imple
 ## Primary user journey
 1. A user submits a request such as "Explain this pending transaction" or "Dispute this charge".
 2. The C# orchestrator agent classifies the request and decides which specialized tool to call.
-3. The orchestrator loads Microsoft Foundry-hosted LangGraph agents as MCP-style tools and invokes them for reasoning or planning.
+3. The orchestrator loads `transaction-explanation` as an MCP tool and invokes the other hosted LangGraph agents through the typed envelope.
 4. If sensitive, the orchestrator pauses and requires explicit approval.
 5. After approval, the orchestrator executes the action and records a complete audit trail.
 

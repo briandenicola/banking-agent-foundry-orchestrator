@@ -202,10 +202,21 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
         _logger.LogDebug(
             "Agent Framework routing step starting for workflow {WorkflowId}.",
             context.WorkflowId);
-        var route = WorkflowRoutingPolicy.Decide(context.UserMessage);
+        var policyRoute = WorkflowRoutingPolicy.Decide(context.UserMessage);
+        var plannerSelectedAgent = context.PlannerDecision?.SelectedAgent;
+        var normalizedPlannerAgent = NormalizeSpecialistAgent(plannerSelectedAgent);
+        var routeFallbackReason = ResolveRouteFallbackReason(plannerSelectedAgent, normalizedPlannerAgent);
+        var route = routeFallbackReason is null
+            ? new WorkflowRoute(
+                normalizedPlannerAgent!,
+                context.RequiresApproval || policyRoute.RequiresApproval)
+            : policyRoute;
+
         return Task.FromResult(context with
         {
             Route = route,
+            PolicyRoute = policyRoute,
+            RouteFallbackReason = routeFallbackReason,
             RequiresApproval = route.RequiresApproval
         });
     }
@@ -391,6 +402,27 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
         _ => null
     };
 
+    private static string? NormalizeSpecialistAgent(string? agentName) =>
+        agentName?.Trim().ToLowerInvariant() switch
+        {
+            "transaction-explanation" => "transaction-explanation",
+            "suspicious-activity" => "suspicious-activity",
+            "dispute-planning" => "dispute-planning",
+            _ => null
+        };
+
+    private static string? ResolveRouteFallbackReason(string? plannerSelectedAgent, string? normalizedPlannerAgent)
+    {
+        if (string.IsNullOrWhiteSpace(plannerSelectedAgent))
+        {
+            return "missing_selected_agent";
+        }
+
+        return normalizedPlannerAgent is null
+            ? "unknown_selected_agent"
+            : null;
+    }
+
     private static bool TryReadAgentResult(
         McpToolResult result,
         string expectedAgent,
@@ -497,6 +529,8 @@ internal sealed record WorkflowExecutionContext(
     AgentDecision? PlannerDecision = null,
     AgentDecision? SpecialistDecision = null,
     WorkflowRoute? Route = null,
+    WorkflowRoute? PolicyRoute = null,
+    string? RouteFallbackReason = null,
     bool Failed = false,
     string? ErrorMessage = null,
     string? Intent = null,

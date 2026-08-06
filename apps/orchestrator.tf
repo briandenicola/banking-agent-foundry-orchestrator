@@ -148,6 +148,11 @@ resource "azurerm_container_app" "orchestrator" {
       }
 
       env {
+        name  = "FOUNDRY_MCP_TOOL_ENDPOINTS"
+        value = local.foundry_mcp_tool_endpoints
+      }
+
+      env {
         name  = "FOUNDRY_MAX_ATTEMPTS"
         value = "3"
       }
