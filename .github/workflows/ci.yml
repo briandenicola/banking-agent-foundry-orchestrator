@@ -276,9 +276,6 @@ jobs:
           - name: database-migrator
             dockerfile: src/database-migrator/Dockerfile
             tag: banking-agent-database-migrator:ci
-          - name: litellm
-            dockerfile: src/litellm/Dockerfile
-            tag: banking-agent-litellm:ci
     steps:
       - uses: actions/checkout@v4
 

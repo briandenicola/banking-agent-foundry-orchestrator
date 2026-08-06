@@ -1,5 +1,7 @@
 # Project Constitution
 
+**Version 1.1** — see [Amendment history](#amendment-history).
+
 ## Purpose
 Create a banking-focused agentic reference application in which a C# orchestrator agent built with Microsoft Agent Framework coordinates a workflow of LangGraph-hosted agents in Microsoft Foundry through MCP tools.
 
@@ -8,7 +10,6 @@ Create a banking-focused agentic reference application in which a C# orchestrato
 - Use MCP to load Microsoft Foundry-hosted LangGraph agents as tools for specialized reasoning and action workflows.
 - Deploy containerized services to Azure Container Apps with Entra ID-based authentication.
 - Use Azure HorizonDB as the operational data store for workflow state and audit history.
-- Use LiteLLM as the AI gateway for provider abstraction, retries, and routing where direct model access is needed.
 - Provision infrastructure with Terraform and automate builds and deployments with GitHub Actions.
 - Never use keys for authentication; always use Microsoft Entra ID.
 - Make sensitive actions require explicit approval and produce detailed traces.
@@ -26,7 +27,7 @@ Create a banking-focused agentic reference application in which a C# orchestrato
 - C# is the primary application language for orchestration, policy enforcement, and API integration.
 - The C# orchestrator agent uses Microsoft Agent Framework and loads Microsoft Foundry-hosted LangGraph agents as MCP tools.
 - Communication between the orchestrator and remote agents should use MCP or versioned HTTP contracts where a non-MCP gateway is required.
-- LiteLLM should sit in front of model providers to provide a unified gateway for direct model access or fallback paths.
+- Model access is made directly against Microsoft Foundry by the hosted agents. There is no AI gateway in the current architecture; see [ADR 0001](decisions/0001-remove-litellm-gateway.md) for why LiteLLM was removed and the conditions under which a gateway would be reintroduced.
 - The orchestrator must enforce approval gates before any sensitive banking action.
 - Every workflow step must emit traceable, structured audit data.
 - The system must be deployable as Azure Container Apps with managed identity and secretless access where possible.
@@ -41,6 +42,7 @@ Create a banking-focused agentic reference application in which a C# orchestrato
 - This constitution is the highest authority for this repository. Lower-level documents, plans, and implementation tasks must align with it.
 - The expected decision order is: constitution → active spec → implementation plan → tasks → backlog → local judgment.
 - Any change to this constitution requires a documented amendment and version bump.
+- Architecture decision records live in `docs/decisions/` and are numbered sequentially.
 - Before declaring work complete, run the local quality gate: build, tests, formatting, and targeted validation for changed services.
 - Any deviation from Entra ID-only authentication, no-key policy, or agent framework guidance requires an architecture decision record before merge.
 
@@ -70,3 +72,10 @@ Prefer partial closure over optimistic closure: close what genuinely shipped, an
 - The workflow pauses for approval before executing any sensitive action.
 - Infrastructure can be provisioned by Terraform from a clean environment.
 - Logs and traces identify the request, agent decision, approval event, and final action state.
+
+## Amendment history
+
+| Version | Date | Change | Record |
+|---|---|---|---|
+| 1.1 | 2026-08-06 | Removed the requirement to use LiteLLM as the AI gateway. Hosted agents call Microsoft Foundry directly; there is no gateway in the current architecture. | [ADR 0001](decisions/0001-remove-litellm-gateway.md) |
+| 1.0 | 2026-07-29 | Initial constitution. | — |

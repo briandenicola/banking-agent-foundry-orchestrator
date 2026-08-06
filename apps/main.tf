@@ -9,20 +9,17 @@ locals {
 
   orchestrator_app_name = "${var.app_name}-orchestrator"
   webui_app_name        = "${var.app_name}-webui"
-  litellm_app_name      = "${var.app_name}-litellm"
 
   orchestrator_image      = "${data.azurerm_container_registry.this.login_server}/orchestrator:${var.image_tag}"
   webui_image             = "${data.azurerm_container_registry.this.login_server}/webui:${var.image_tag}"
   hosted_agents_image     = "${data.azurerm_container_registry.this.login_server}/hosted-agents:${var.image_tag}"
   agent_deployer_image    = "${data.azurerm_container_registry.this.login_server}/agent-deployer:${var.image_tag}"
   database_migrator_image = "${data.azurerm_container_registry.this.login_server}/database-migrator:${var.image_tag}"
-  litellm_image           = "${data.azurerm_container_registry.this.login_server}/litellm:${var.image_tag}"
 
   foundry_project_endpoint = "https://${local.foundry_name}.services.ai.azure.com/api/projects/${local.foundry_project}"
   foundry_openai_endpoint  = "https://${local.foundry_name}.openai.azure.com"
   postgresql_host          = "${var.app_name}-db.postgres.database.azure.com"
   postgresql_database      = "banking_agent"
-  litellm_internal_url     = "https://${azurerm_container_app.litellm.ingress[0].fqdn}"
 
   foundry_tool_endpoints = jsonencode({
     "workflow.plan"       = "${local.foundry_project_endpoint}/agents/workflow-planning/endpoint/protocols/invocations?api-version=v1"

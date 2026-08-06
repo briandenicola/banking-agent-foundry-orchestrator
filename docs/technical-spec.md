@@ -1,7 +1,7 @@
 # Technical Specification
 
 ## Solution shape
-The reference implementation is now a C# workflow orchestrator that uses an Agent Framework-backed workflow path to call Microsoft Foundry-hosted LangGraph agents. The `transaction-explanation` slice speaks genuine MCP JSON-RPC 2.0 over the authenticated Foundry hosted-agent HTTP endpoint: the orchestrator performs `initialize`, discovers with `tools/list`, and invokes with `tools/call`. The planner, suspicious-activity, and dispute-planning agents remain on the versioned typed HTTP envelope. The orchestration layer remains responsible for durable workflow state, approvals, correlation IDs, and API behavior, while the hosted agents remain specialized reasoning services. LiteLLM is provisioned for a future direct-model path but is not yet the active execution path. The implementation follows a layered structure: Domain → Application → Infrastructure → API/Web.
+The reference implementation is now a C# workflow orchestrator that uses an Agent Framework-backed workflow path to call Microsoft Foundry-hosted LangGraph agents. The `transaction-explanation` slice speaks genuine MCP JSON-RPC 2.0 over the authenticated Foundry hosted-agent HTTP endpoint: the orchestrator performs `initialize`, discovers with `tools/list`, and invokes with `tools/call`. The planner, suspicious-activity, and dispute-planning agents remain on the versioned typed HTTP envelope. The orchestration layer remains responsible for durable workflow state, approvals, correlation IDs, and API behavior, while the hosted agents remain specialized reasoning services. The hosted agents call Microsoft Foundry models directly; LiteLLM was removed in [ADR 0001](decisions/0001-remove-litellm-gateway.md). The implementation follows a layered structure: Domain → Application → Infrastructure → API/Web.
 
 ## Components
 - C# orchestrator agent
@@ -14,9 +14,7 @@ The reference implementation is now a C# workflow orchestrator that uses an Agen
   - Fails readiness when an MCP-enabled required tool is absent or its input schema is incompatible.
 - Foundry-hosted LangGraph agents
   - Provide reasoning, planning, and specialized action capabilities as remote workflow services.
-- LiteLLM gateway
-  - Centralizes model access for direct model calls or fallback paths.
-  - Supports provider abstraction and future model fallback.
+  - Call Microsoft Foundry models directly. There is no AI gateway; see [ADR 0001](decisions/0001-remove-litellm-gateway.md).
 - Azure Container Apps
   - Hosts the orchestrator and any supporting gateway services as independently deployable services.
 - Azure Database for PostgreSQL Flexible Server
@@ -37,7 +35,7 @@ The reference implementation is now a C# workflow orchestrator that uses an Agen
 7. Planner/policy disagreements persist `workflow.route_disagreement` events with both agents, both approval decisions, and the winner. Missing or unrecognized planner routes fall back to the policy and persist `workflow.route_fallback` events with the reason and winning route.
 8. If sensitive, the orchestrator sets `WaitingForApproval` and persists. The UI polls until this state is observed, then shows the approval form.
 9. After approval, the orchestrator executes the bounded action, creates a support case (if applicable), and persists the audit trail.
-10. No direct model calls currently use LiteLLM; route any future direct-model path through it.
+10. All model calls are made by the hosted agents directly against Microsoft Foundry. There is no gateway in the request path.
 11. The UI polls `GET /api/v1/workflows/{id}` with exponential backoff until a terminal status (`Completed`, `Failed`, `Rejected`, `WaitingForApproval`) is observed.
 
 ### Recovery and failure behavior

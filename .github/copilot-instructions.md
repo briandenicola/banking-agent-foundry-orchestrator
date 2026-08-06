@@ -1,7 +1,7 @@
 # Copilot Instructions for the Banking Agent Prototype
 
 ## Project overview
-This repository contains a reference banking agent application built around a .NET orchestrator, Python LangGraph/LangChain agents, LiteLLM as the AI gateway, Azure Container Apps deployment, and Terraform-based infrastructure. The implementation should reflect the principles in `docs/project-constitution.md` and the active specification in `docs/functional-spec.md`.
+This repository contains a reference banking agent application built around a .NET orchestrator, Python LangGraph/LangChain agents, Azure Container Apps deployment, and Terraform-based infrastructure. The implementation should reflect the principles in `docs/project-constitution.md` and the active specification in `docs/functional-spec.md`.
 
 ## Architecture
 - Follow a layered structure: Domain → Application → Infrastructure → API/Web.
@@ -22,7 +22,7 @@ This repository contains a reference banking agent application built around a .N
 - Do not introduce Semantic Kernel for new work in this repository.
 - Implement the primary orchestrator as a C# Agent Framework agent.
 - Use Microsoft Foundry-hosted LangGraph agents as MCP-backed tools rather than embedding their logic directly in the orchestrator.
-- Route direct model calls through LiteLLM when needed.
+- Hosted agents call Microsoft Foundry models directly. Do not add an AI gateway without an ADR; see `docs/decisions/0001-remove-litellm-gateway.md`.
 - Keep workflows multi-step, approval-controlled, and traceable.
 
 ## Security and identity

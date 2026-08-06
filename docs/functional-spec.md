@@ -14,7 +14,6 @@ This spec describes the target design. The following parts are **not yet** imple
 |---|---|---|
 | "MCP-based loading of Foundry-hosted agents as tools" | Partially implemented. `transaction.explain` (`transaction-explanation`) now uses real MCP JSON-RPC 2.0 with `initialize`, `tools/list`, and `tools/call`, selected by `FOUNDRY_MCP_TOOL_ENDPOINTS` and validated at readiness. `workflow.plan`, `suspicious.assess`, and `dispute.plan` still use the versioned typed Foundry hosted-agent envelope. | [#23](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/23) |
 | LangGraph agents as multi-step graphs | Each agent is a single-node graph (`START → analyze → END`) with no conditional edges, cycles, or checkpointer. | [#22](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/22) |
-| "Model access through a LiteLLM gateway" | LiteLLM is deployed but has zero callers. The Python agents call Foundry directly. | [#24](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/24) |
 
 
 ## Primary user journey
@@ -30,7 +29,7 @@ This spec describes the target design. The following parts are **not yet** imple
 - A minimal web UI for entering requests, viewing workflow status, and approving sensitive actions.
 - Approval-required workflow for sensitive actions.
 - Structured logs and traces for every workflow step.
-- Model access through a LiteLLM gateway for routing and provider abstraction where direct model access is needed.
+- Model access made directly against Microsoft Foundry by the hosted agents. There is no AI gateway; see [ADR 0001](decisions/0001-remove-litellm-gateway.md).
 - Support for informational responses and bounded actions.
 - Versioned REST APIs and structured error responses.
 

@@ -200,8 +200,8 @@ durable workflow failures.
 > Foundry's hosted-agent invocation protocol, not MCP JSON-RPC. There is no
 > `tools/list`, `tools/call`, streamable HTTP, SSE, or runtime tool discovery.
 > Microsoft Agent Framework is referenced by the orchestrator project but procedural
-> `WorkflowService` code currently performs orchestration. LiteLLM is deployed for a
-> future direct-model path but no active C# or Python request path calls it.
+> `WorkflowService` code currently performs orchestration. All model calls are made by
+> the hosted agents directly against Foundry; there is no AI gateway.
 
 ### Agent data and evidence
 
@@ -883,7 +883,6 @@ These limitations are intentional documentation callouts, not hidden behavior:
   ([#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18)).
 - Hosted agents do not call one another or access PostgreSQL.
 - Uploaded evidence is not supplied to agents.
-- LiteLLM has no active caller.
 - Recovery replays planning and specialist phases rather than resuming a checkpoint.
 - `x-correlation-id` is best-effort across worker execution; workflow and trace IDs
   are authoritative.

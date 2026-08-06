@@ -4,7 +4,7 @@ This repository contains a banking-focused agentic application built around:
 
 - C# durable workflow orchestration; the Agent Framework migration is tracked in issue #17
 - Microsoft Foundry-hosted LangGraph agents invoked through the Foundry hosted-agent protocol; standards-compliant MCP is tracked in issue #18
-- LiteLLM deployed for a future direct-model path; the current workflow has no direct-model caller
+- LiteLLM was removed in [ADR 0001](docs/decisions/0001-remove-litellm-gateway.md); hosted agents call Microsoft Foundry directly and there is no AI gateway
 - Azure Container Apps deployment
 - Terraform-based infrastructure
 
@@ -99,7 +99,7 @@ Build and push all deployable images to the provisioned Azure Container Registry
 task app:build
 ```
 
-The images are tagged with the first eight characters of the current Git commit and with `latest`. This builds the orchestrator, web UI, LiteLLM gateway, Hosted Agent runtime, and Hosted Agent deployer.
+The images are tagged with the first eight characters of the current Git commit and with `latest`. This builds the orchestrator, web UI, Hosted Agent runtime, Hosted Agent deployer, and database migrator.
 
 ## 3. Deploy the applications
 
@@ -110,7 +110,7 @@ task app:init
 task app:apply -- swedencentral
 ```
 
-This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, and the manual database migration and Hosted Agent deployment jobs. For the MVP, the web UI runs one replica and keeps ASP.NET Data Protection keys in local container storage because subscription policy disables public Storage access. Any web UI restart, redeployment, revision replacement, or replica replacement invalidates existing antiforgery cookies; users must refresh the page before resubmitting a form.
+This deploys the orchestrator, web UI, managed identities, application RBAC, and the manual database migration and Hosted Agent deployment jobs. For the MVP, the web UI runs one replica and keeps ASP.NET Data Protection keys in local container storage because subscription policy disables public Storage access. Any web UI restart, redeployment, revision replacement, or replica replacement invalidates existing antiforgery cookies; users must refresh the page before resubmitting a form.
 
 Service-to-service API authentication is enabled by default. The `apps/` stack creates an Entra application role (`Workflow.Invoke`) for the orchestrator API and assigns it to the Web UI managed identity, so workflow creation, approval, detail, and evidence endpoints require managed-identity bearer tokens. Setting `TF_VAR_enable_service_auth=false` is only supported for local development; the orchestrator refuses to start with that value outside the Development environment and reports the insecure mode on `/health/ready`.
 
@@ -206,7 +206,7 @@ A deployment is ready only when all of the following are true:
 
 1. Both Terraform stacks validate and the intended application plan has been applied.
 2. All application images exist in ACR with the current eight-character Git commit tag.
-3. The orchestrator, web UI, and LiteLLM Container Apps have healthy running revisions.
+3. The orchestrator and web UI Container Apps have healthy running revisions.
 4. The Hosted Agent deployer job has completed successfully.
 5. All four Hosted Agents exist in the Foundry project with an active version.
 6. A workflow can be submitted from the web UI and displays a workflow result.
