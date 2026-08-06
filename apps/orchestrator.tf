@@ -83,6 +83,11 @@ resource "azurerm_container_app" "orchestrator" {
       }
 
       env {
+        name  = "ALLOW_INSECURE_SERVICE_AUTH"
+        value = tostring(var.allow_insecure_service_auth)
+      }
+
+      env {
         name  = "DEMO_SCENARIOS_ENABLED"
         value = "true"
       }
@@ -186,6 +191,13 @@ resource "azurerm_container_app" "orchestrator" {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         value = data.azurerm_application_insights.this.connection_string
       }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.enable_service_auth || var.allow_insecure_service_auth
+      error_message = "enable_service_auth=false requires allow_insecure_service_auth=true. Disabling service authentication leaves workflow endpoints open to any caller that can reach the ingress, so it must be acknowledged explicitly. The orchestrator enforces the same rule at startup and will refuse to boot otherwise."
     }
   }
 

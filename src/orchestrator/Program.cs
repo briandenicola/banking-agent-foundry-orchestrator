@@ -24,10 +24,20 @@ var managedIdentityClientId = builder.Configuration["AZURE_CLIENT_ID"];
 var configuredServiceAuthEnabled = builder.Configuration.GetValue<bool?>("SERVICE_AUTH_ENABLED");
 var serviceAuthEnabled = configuredServiceAuthEnabled ?? true;
 
-if (!serviceAuthEnabled && !builder.Environment.IsDevelopment())
+// Some tenants forbid creating the service principal and api:// identifier URI
+// that service authentication depends on, which makes the secure configuration
+// impossible to provision rather than merely inconvenient. Those environments
+// must opt out by name so the choice is visible in configuration and in logs,
+// rather than by masquerading as Development and silently changing unrelated
+// behaviour such as detailed error pages.
+var allowInsecureServiceAuth = builder.Configuration.GetValue<bool?>("ALLOW_INSECURE_SERVICE_AUTH") ?? false;
+
+if (!serviceAuthEnabled && !builder.Environment.IsDevelopment() && !allowInsecureServiceAuth)
 {
     throw new InvalidOperationException(
-        "SERVICE_AUTH_ENABLED=false is only permitted in Development. Deployed environments must use Entra ID service authentication.");
+        "SERVICE_AUTH_ENABLED=false is only permitted in Development, or in an environment that has "
+        + "explicitly set ALLOW_INSECURE_SERVICE_AUTH=true to acknowledge that workflow endpoints "
+        + "will accept unauthenticated callers. Deployed environments should use Entra ID service authentication.");
 }
 
 // -----------------------------------------------------------------------
@@ -213,12 +223,17 @@ var app = builder.Build();
 
 if (!serviceAuthEnabled)
 {
+    var reason = allowInsecureServiceAuth && !app.Environment.IsDevelopment()
+        ? "ALLOW_INSECURE_SERVICE_AUTH=true was set for a deployed environment"
+        : "running in Development";
+
     app.Logger.LogWarning(
         "************************************************************************************************************************");
     app.Logger.LogWarning(
-        "INSECURE LOCAL DEVELOPMENT CONFIGURATION: SERVICE_AUTH_ENABLED=false. Workflow endpoints accept unauthenticated callers.");
+        "INSECURE CONFIGURATION: SERVICE_AUTH_ENABLED=false ({Reason}). Workflow endpoints accept unauthenticated callers.",
+        reason);
     app.Logger.LogWarning(
-        "This setting is blocked outside Development and must never be used in deployed environments.");
+        "Anyone who can reach this ingress can start and approve workflows. Do not use for real or regulated data.");
     app.Logger.LogWarning(
         "************************************************************************************************************************");
 }
