@@ -152,8 +152,13 @@ registration:
 - `dispute-planning`
 
 [`registry.py`](../src/agents/python/app/agents/registry.py) maps names to compiled
-graphs. [`build_agent_graph`](../src/agents/python/app/agents/base.py) builds the
-current LangGraph topology: `START -> analyze -> END`.
+graphs. Topology differs by agent:
+[`build_agent_graph`](../src/agents/python/app/agents/base.py) compiles
+`START -> analyze -> END` for the two single-step agents, while
+[`dispute.py`](../src/agents/python/app/agents/dispute.py) and
+[`suspicious_activity.py`](../src/agents/python/app/agents/suspicious_activity.py)
+are multi-node graphs with a conditional edge. See
+[agent-implementation.md](agent-implementation.md) for the diagrams.
 [`hosted.py`](../src/agents/python/app/hosted.py) exposes the Foundry
 `InvocationAgentServerHost` entry point, while
 [`model.py`](../src/agents/python/app/model.py) invokes the configured Foundry model

@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from deploy import (
+    AGENT_INVOKE_TIMEOUT_SECONDS,
     AgentDefinition,
     FoundryClient,
     _definitions,
@@ -47,7 +48,16 @@ class DeployerContractTests(unittest.TestCase):
         self.assertEqual(expected, _items({"value": expected}))
         self.assertEqual(expected, _items({"data": expected}))
 
-    def _make_version_response(self, image, kind, model, endpoint, fallback="false", status="creating"):
+    def _make_version_response(
+        self,
+        image,
+        kind,
+        model,
+        endpoint,
+        fallback="false",
+        status="creating",
+        timeout=AGENT_INVOKE_TIMEOUT_SECONDS,
+    ):
         return {
             "value": [
                 {
@@ -60,6 +70,7 @@ class DeployerContractTests(unittest.TestCase):
                             "AZURE_AI_MODEL_DEPLOYMENT_NAME": model,
                             "BANKING_AGENT_PROJECT_ENDPOINT": endpoint,
                             "ALLOW_FALLBACK": fallback,
+                            "AGENT_INVOKE_TIMEOUT_SECONDS": timeout,
                         },
                     },
                 }
@@ -120,6 +131,26 @@ class DeployerContractTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_matching_version_misses_when_invoke_timeout_differs(self):
+        """A version deployed with a different invocation timeout must not match.
+
+        Multi-node graphs made this budget behaviour-affecting, so a change to
+        it has to force a new agent version rather than silently reuse an old
+        one still running the previous timeout.
+        """
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
+        client._agent_exists = Mock(return_value=True)
+        client._request = Mock(
+            return_value=self._make_version_response(
+                _IMAGE, "workflow-planning", _MODEL, _ENDPOINT, timeout="30"
+            )
+        )
+
+        result = client._find_matching_version(_AGENT, _IMAGE, _MODEL, _ENDPOINT)
+
+        self.assertIsNone(result)
+
     def test_deploy_discovers_version_when_create_response_omits_it(self):
         client = FoundryClient.__new__(FoundryClient)
         client._endpoint = "https://example.test/project"
@@ -136,6 +167,7 @@ class DeployerContractTests(unittest.TestCase):
         env = definition["environment_variables"]
         self.assertEqual(_ENDPOINT, env["BANKING_AGENT_PROJECT_ENDPOINT"])
         self.assertEqual("false", env["ALLOW_FALLBACK"])
+        self.assertEqual(AGENT_INVOKE_TIMEOUT_SECONDS, env["AGENT_INVOKE_TIMEOUT_SECONDS"])
 
     def test_deploy_definition_includes_required_env_vars(self):
         """Every runtime-affecting env var must be present in the deployed definition."""

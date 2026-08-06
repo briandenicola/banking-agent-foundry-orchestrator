@@ -12,7 +12,7 @@ This spec describes the target design. The following parts are **not yet** imple
 
 | Spec statement | Actual behaviour on `main` | Tracked |
 |---|---|---|
-| LangGraph agents as multi-step graphs | Each agent is a single-node graph (`START → analyze → END`) with no conditional edges, cycles, or checkpointer. | [#22](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/22) |
+| LangGraph agents resume mid-graph after failure | `dispute-planning` and `suspicious-activity` are multi-node graphs with conditional edges, but no agent uses a LangGraph checkpointer, so a failed invocation restarts from the first node rather than resuming. | [#41](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/41) |
 
 
 ## Primary user journey

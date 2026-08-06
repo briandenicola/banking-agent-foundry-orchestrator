@@ -162,9 +162,12 @@ resource "azurerm_container_app" "orchestrator" {
         value = "3"
       }
 
+      # Must exceed the hosted agent's own AGENT_INVOKE_TIMEOUT_SECONDS (90) so a
+      # slow multi-node graph surfaces the agent's 504 rather than a client-side
+      # cancellation, which would be retried as if it were transient.
       env {
         name  = "FOUNDRY_ATTEMPT_TIMEOUT_SECONDS"
-        value = "30"
+        value = "100"
       }
 
       env {

@@ -18,6 +18,9 @@ TOKEN_SCOPE = "https://ai.azure.com/.default"
 READY_STATUSES = {"active", "running"}
 PENDING_STATUSES = {"creating", "starting", "updating"}
 PROJECT_ENDPOINT_ENV_VAR = "BANKING_AGENT_PROJECT_ENDPOINT"
+# Per-invocation timeout for a hosted agent. The dispute-planning graph runs up
+# to four sequential model calls, so the previous 30s default left no headroom.
+AGENT_INVOKE_TIMEOUT_SECONDS = os.environ.get("AGENT_INVOKE_TIMEOUT_SECONDS", "90")
 LEGACY_PROJECT_ENDPOINT_ENV_VAR = "FOUNDRY_PROJECT_ENDPOINT"
 
 
@@ -77,6 +80,10 @@ class FoundryClient:
                 # that a config change always creates or updates a version.
                 PROJECT_ENDPOINT_ENV_VAR: project_endpoint,
                 "ALLOW_FALLBACK": "false",
+                # Multi-node graphs issue one model call per node, so the
+                # per-invocation budget must cover the longest path, not a
+                # single call.
+                "AGENT_INVOKE_TIMEOUT_SECONDS": AGENT_INVOKE_TIMEOUT_SECONDS,
             },
         }
 
@@ -145,6 +152,8 @@ class FoundryClient:
                 and environment.get("AZURE_AI_MODEL_DEPLOYMENT_NAME") == model_deployment
                 and runtime_project_endpoint == project_endpoint
                 and environment.get("ALLOW_FALLBACK") == "false"
+                and environment.get("AGENT_INVOKE_TIMEOUT_SECONDS")
+                == AGENT_INVOKE_TIMEOUT_SECONDS
             ):
                 return str(version.get("version")), status
 
