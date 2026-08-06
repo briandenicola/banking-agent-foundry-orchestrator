@@ -31,6 +31,10 @@ locals {
     "dispute.plan"        = "${local.foundry_project_endpoint}/agents/dispute-planning/endpoint/protocols/invocations?api-version=v1"
   })
 
+  foundry_mcp_tool_endpoints = jsonencode({
+    "transaction.explain" = "${local.foundry_project_endpoint}/agents/transaction-explanation/endpoint/protocols/invocations?api-version=v1"
+  })
+
   hosted_agent_definitions = [
     {
       name = "workflow-planning"

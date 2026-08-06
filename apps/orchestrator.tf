@@ -83,6 +83,11 @@ resource "azurerm_container_app" "orchestrator" {
       }
 
       env {
+        name  = "ALLOW_INSECURE_SERVICE_AUTH"
+        value = tostring(var.allow_insecure_service_auth)
+      }
+
+      env {
         name  = "DEMO_SCENARIOS_ENABLED"
         value = "true"
       }
@@ -100,6 +105,21 @@ resource "azurerm_container_app" "orchestrator" {
       env {
         name  = "WORKFLOW_RECOVERY_BATCH_SIZE"
         value = "10"
+      }
+
+      env {
+        name  = "WORKFLOW_RECOVERY_MAX_ATTEMPTS"
+        value = "5"
+      }
+
+      env {
+        name  = "WORKFLOW_RECOVERY_BACKOFF_BASE_SECONDS"
+        value = "30"
+      }
+
+      env {
+        name  = "WORKFLOW_RECOVERY_BACKOFF_MAX_SECONDS"
+        value = "900"
       }
 
       env {
@@ -133,6 +153,11 @@ resource "azurerm_container_app" "orchestrator" {
       }
 
       env {
+        name  = "FOUNDRY_MCP_TOOL_ENDPOINTS"
+        value = local.foundry_mcp_tool_endpoints
+      }
+
+      env {
         name  = "FOUNDRY_MAX_ATTEMPTS"
         value = "3"
       }
@@ -145,21 +170,6 @@ resource "azurerm_container_app" "orchestrator" {
       env {
         name  = "FOUNDRY_RETRY_BASE_DELAY_MILLISECONDS"
         value = "250"
-      }
-
-      env {
-        name  = "WORKFLOW_RECOVERY_SCAN_INTERVAL_SECONDS"
-        value = "30"
-      }
-
-      env {
-        name  = "WORKFLOW_RECOVERY_STALE_AFTER_SECONDS"
-        value = "120"
-      }
-
-      env {
-        name  = "WORKFLOW_RECOVERY_BATCH_SIZE"
-        value = "10"
       }
 
       env {
@@ -181,6 +191,13 @@ resource "azurerm_container_app" "orchestrator" {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         value = data.azurerm_application_insights.this.connection_string
       }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.enable_service_auth || var.allow_insecure_service_auth
+      error_message = "enable_service_auth=false requires allow_insecure_service_auth=true. Disabling service authentication leaves workflow endpoints open to any caller that can reach the ingress, so it must be acknowledged explicitly. The orchestrator enforces the same rule at startup and will refuse to boot otherwise."
     }
   }
 

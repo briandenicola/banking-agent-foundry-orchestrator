@@ -36,7 +36,32 @@ var options = new DbContextOptionsBuilder<BankingAgentDbContext>()
 
 await using (var context = new BankingAgentDbContext(options))
 {
+    // Report what is about to change and what was already present. MigrateAsync
+    // succeeds identically whether it applied migrations or found none pending,
+    // so without this the job log cannot answer "did my migration land?".
+    var pending = (await context.Database.GetPendingMigrationsAsync()).ToList();
+
+    if (pending.Count == 0)
+    {
+        Console.WriteLine("No pending migrations; database schema is already current.");
+    }
+    else
+    {
+        Console.WriteLine($"Applying {pending.Count} pending migration(s):");
+        foreach (var migration in pending)
+        {
+            Console.WriteLine($"  pending: {migration}");
+        }
+    }
+
     await context.Database.MigrateAsync();
+
+    var applied = (await context.Database.GetAppliedMigrationsAsync()).ToList();
+    Console.WriteLine($"Applied migration history now contains {applied.Count} migration(s):");
+    foreach (var migration in applied)
+    {
+        Console.WriteLine($"  applied: {migration}");
+    }
 }
 
 await GrantRuntimePrivilegesAsync(

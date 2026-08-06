@@ -6,10 +6,21 @@ Build a banking support agent prototype that can assist with transaction questio
 ## Current implementation status
 The repository now contains a working reference implementation for this pattern: a C# workflow orchestration layer, an Agent Framework-driven workflow path, a typed Foundry-hosted agent boundary, durable workflow persistence, and Azure deployment assets for hosted agents. The lab guide in [Hosted Agents lab](hosted-agents-lab.md) uses this implementation as the teaching baseline.
 
+### Known gaps between this spec and `main`
+
+This spec describes the target design. The following parts are **not yet** implemented as written, and are tracked as open issues. Read this list before treating any statement below as a description of current behaviour.
+
+| Spec statement | Actual behaviour on `main` | Tracked |
+|---|---|---|
+| "MCP-based loading of Foundry-hosted agents as tools" | Partially implemented. `transaction.explain` (`transaction-explanation`) now uses real MCP JSON-RPC 2.0 with `initialize`, `tools/list`, and `tools/call`, selected by `FOUNDRY_MCP_TOOL_ENDPOINTS` and validated at readiness. `workflow.plan`, `suspicious.assess`, and `dispute.plan` still use the versioned typed Foundry hosted-agent envelope. | [#23](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/23) |
+| LangGraph agents as multi-step graphs | Each agent is a single-node graph (`START → analyze → END`) with no conditional edges, cycles, or checkpointer. | [#22](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/22) |
+| "Model access through a LiteLLM gateway" | LiteLLM is deployed but has zero callers. The Python agents call Foundry directly. | [#24](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/24) |
+
+
 ## Primary user journey
 1. A user submits a request such as "Explain this pending transaction" or "Dispute this charge".
 2. The C# orchestrator agent classifies the request and decides which specialized tool to call.
-3. The orchestrator loads Microsoft Foundry-hosted LangGraph agents as MCP-style tools and invokes them for reasoning or planning.
+3. The orchestrator loads `transaction-explanation` as an MCP tool and invokes the other hosted LangGraph agents through the typed envelope.
 4. If sensitive, the orchestrator pauses and requires explicit approval.
 5. After approval, the orchestrator executes the action and records a complete audit trail.
 

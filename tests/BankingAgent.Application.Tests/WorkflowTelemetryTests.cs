@@ -133,6 +133,11 @@ public sealed class WorkflowTelemetryTests
                 activity.GetTagItem("workflow.id")?.ToString() == started.Id.ToString())
             .ToList();
         Assert.Contains(spans, activity => activity.OperationName == "workflow.lifecycle");
+        Assert.Contains(
+            spans,
+            activity =>
+                activity.OperationName == "workflow.recovery" &&
+                activity.GetTagItem("workflow.recovery.attempt_count")?.ToString() == "0");
         Assert.Equal(2, spans.Count(activity => activity.OperationName == "hosted_agent.invoke"));
         Assert.All(
             spans.Where(activity => activity.OperationName == "hosted_agent.invoke"),

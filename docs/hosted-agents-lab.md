@@ -129,6 +129,26 @@ During deployment, participants should inspect:
 - the PostgreSQL-backed workflow state and the migration job;
 - the Application Insights and telemetry configuration.
 
+Security posture for the default lab deployment:
+
+- Orchestrator workflow endpoints require Entra-issued tokens with the
+  `Workflow.Invoke` app role. The Web UI obtains these tokens with managed
+  identity; direct anonymous calls to workflow creation, approval, detail, and
+  evidence endpoints are rejected.
+- Health and readiness paths remain anonymous so Container Apps probes can call
+  `/health/live` and `/health/ready`.
+- The default PostgreSQL path is demo-grade: Entra-only database authentication
+  is still required, but the broad Azure `AllowAzureServices` firewall rule
+  admits resources from any Azure tenant at the network layer. Do not use that
+  default path for regulated workloads.
+
+Migration job troubleshooting:
+
+- If the `database-migrator` Container Apps Job times out connecting to
+  PostgreSQL on port 5432, first check whether the Flexible Server is stopped.
+  A stopped server presents as a connection timeout from the job. Start it with
+  `az postgres flexible-server start --resource-group <resource-group> --name <server-name>`.
+
 ### Expected outcome
 
 Participants should be able to explain how the deployed services are connected and
@@ -169,7 +189,10 @@ where the platform controls are applied.
 - add a new specialist for account-change requests;
 - add a policy-driven approval step for sensitive actions;
 - move more platform controls into Terraform or environment-specific policy;
-- add private networking, stricter RBAC boundaries, or an additional environment.
+- set `TF_VAR_enable_private_networking=true` to add private Container
+  Apps/PostgreSQL networking and remove the broad Azure-services PostgreSQL
+  firewall rule;
+- add stricter RBAC boundaries or an additional environment.
 
 ### Expected outcome
 

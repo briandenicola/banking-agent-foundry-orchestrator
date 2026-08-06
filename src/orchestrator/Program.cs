@@ -14,13 +14,31 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using OpenTelemetry.Trace;
+using System.Text.Json;
 
 const string PostgreSqlScope = "https://ossrdbms-aad.database.windows.net/.default";
 
 var builder = WebApplication.CreateBuilder(args);
 var applicationInsightsConnectionString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
 var managedIdentityClientId = builder.Configuration["AZURE_CLIENT_ID"];
-var serviceAuthEnabled = builder.Configuration.GetValue<bool>("SERVICE_AUTH_ENABLED");
+var configuredServiceAuthEnabled = builder.Configuration.GetValue<bool?>("SERVICE_AUTH_ENABLED");
+var serviceAuthEnabled = configuredServiceAuthEnabled ?? true;
+
+// Some tenants forbid creating the service principal and api:// identifier URI
+// that service authentication depends on, which makes the secure configuration
+// impossible to provision rather than merely inconvenient. Those environments
+// must opt out by name so the choice is visible in configuration and in logs,
+// rather than by masquerading as Development and silently changing unrelated
+// behaviour such as detailed error pages.
+var allowInsecureServiceAuth = builder.Configuration.GetValue<bool?>("ALLOW_INSECURE_SERVICE_AUTH") ?? false;
+
+if (!serviceAuthEnabled && !builder.Environment.IsDevelopment() && !allowInsecureServiceAuth)
+{
+    throw new InvalidOperationException(
+        "SERVICE_AUTH_ENABLED=false is only permitted in Development, or in an environment that has "
+        + "explicitly set ALLOW_INSECURE_SERVICE_AUTH=true to acknowledge that workflow endpoints "
+        + "will accept unauthenticated callers. Deployed environments should use Entra ID service authentication.");
+}
 
 // -----------------------------------------------------------------------
 // PostgreSQL / EF Core
@@ -87,20 +105,25 @@ if (serviceAuthEnabled)
         ?? throw new InvalidOperationException("AZURE_TENANT_ID is required when service authentication is enabled.");
     var orchestratorAppId = builder.Configuration["ORCHESTRATOR_APP_ID"]
         ?? throw new InvalidOperationException("ORCHESTRATOR_APP_ID is required when service authentication is enabled.");
+    var v2Issuer = $"https://login.microsoftonline.com/{tenantId}/v2.0";
+    var managedIdentityIssuer = $"https://sts.windows.net/{tenantId}/";
+    var orchestratorAudience = $"api://{orchestratorAppId}";
 
     builder.Services
         .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(options =>
         {
-            options.Authority = $"https://login.microsoftonline.com/{tenantId}/v2.0";
-            options.Audience = $"api://{orchestratorAppId}";
+            options.Authority = v2Issuer;
+            options.Audience = orchestratorAudience;
+            options.MapInboundClaims = false;
             options.TokenValidationParameters = new TokenValidationParameters
             {
                 ValidateIssuer = true,
-                ValidIssuer = $"https://login.microsoftonline.com/{tenantId}/v2.0",
+                ValidIssuers = [v2Issuer, managedIdentityIssuer],
                 ValidateAudience = true,
-                ValidAudience = $"api://{orchestratorAppId}",
+                ValidAudience = orchestratorAudience,
                 ValidateLifetime = true,
+                RoleClaimType = "roles",
                 ClockSkew = TimeSpan.FromMinutes(1)
             };
         });
@@ -135,6 +158,7 @@ builder.Services.Configure<FoundryMcpClientOptions>(options =>
     options.AgentName = builder.Configuration["FOUNDRY_AGENT_NAME"];
     options.Scope = builder.Configuration["FOUNDRY_SCOPE"] ?? "https://ai.azure.com/.default";
     options.ToolEndpointsJson = builder.Configuration["FOUNDRY_TOOL_ENDPOINTS"];
+    options.McpToolEndpointsJson = builder.Configuration["FOUNDRY_MCP_TOOL_ENDPOINTS"];
     options.MaxAttempts = builder.Configuration.GetValue("FOUNDRY_MAX_ATTEMPTS", 3);
     options.AttemptTimeoutSeconds =
         builder.Configuration.GetValue("FOUNDRY_ATTEMPT_TIMEOUT_SECONDS", 30);
@@ -151,10 +175,21 @@ builder.Services.Configure<WorkflowRecoveryOptions>(options =>
         builder.Configuration.GetValue("WORKFLOW_RECOVERY_STALE_AFTER_SECONDS", 120);
     options.BatchSize =
         builder.Configuration.GetValue("WORKFLOW_RECOVERY_BATCH_SIZE", 10);
+    options.MaxAttempts =
+        builder.Configuration.GetValue("WORKFLOW_RECOVERY_MAX_ATTEMPTS", 5);
+    options.BackoffBaseSeconds =
+        builder.Configuration.GetValue("WORKFLOW_RECOVERY_BACKOFF_BASE_SECONDS", 30);
+    options.BackoffMaxSeconds =
+        builder.Configuration.GetValue("WORKFLOW_RECOVERY_BACKOFF_MAX_SECONDS", 900);
 });
 builder.Services.AddHostedService<WorkflowRecoveryWorker>();
 builder.Services.AddSingleton<IWorkflowExecutionTrigger, WorkflowExecutionTrigger>();
+builder.Services.AddSingleton<McpToolValidationCache>();
 builder.Services.AddHealthChecks()
+    .AddCheck(
+        "service_auth",
+        new ServiceAuthReadinessCheck(serviceAuthEnabled),
+        tags: ["ready"])
     .AddCheck<PostgreSqlReadinessCheck>(
         "postgresql",
         tags: ["ready"])
@@ -187,6 +222,23 @@ builder.Logging.AddSimpleConsole(options =>
 // -----------------------------------------------------------------------
 var app = builder.Build();
 
+if (!serviceAuthEnabled)
+{
+    var reason = allowInsecureServiceAuth && !app.Environment.IsDevelopment()
+        ? "ALLOW_INSECURE_SERVICE_AUTH=true was set for a deployed environment"
+        : "running in Development";
+
+    app.Logger.LogWarning(
+        "************************************************************************************************************************");
+    app.Logger.LogWarning(
+        "INSECURE CONFIGURATION: SERVICE_AUTH_ENABLED=false ({Reason}). Workflow endpoints accept unauthenticated callers.",
+        reason);
+    app.Logger.LogWarning(
+        "Anyone who can reach this ingress can start and approve workflows. Do not use for real or regulated data.");
+    app.Logger.LogWarning(
+        "************************************************************************************************************************");
+}
+
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseBankingAgentProblemDetails();
 if (serviceAuthEnabled)
@@ -208,8 +260,25 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
-    Predicate = registration => registration.Tags.Contains("ready")
+    Predicate = registration => registration.Tags.Contains("ready"),
+    ResponseWriter = WriteReadyHealthResponse
 });
 app.MapWorkflowEndpoints();
 
 app.Run();
+
+static Task WriteReadyHealthResponse(HttpContext context, HealthReport report)
+{
+    context.Response.ContentType = "application/json";
+    return context.Response.WriteAsync(JsonSerializer.Serialize(new
+    {
+        status = report.Status.ToString(),
+        checks = report.Entries.ToDictionary(
+            entry => entry.Key,
+            entry => new
+            {
+                status = entry.Value.Status.ToString(),
+                description = entry.Value.Description,
+            })
+    }));
+}

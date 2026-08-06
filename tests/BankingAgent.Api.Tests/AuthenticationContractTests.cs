@@ -89,6 +89,34 @@ public sealed class AuthenticationContractTests : IDisposable
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    [Fact]
+    public async Task PostEvidence_Anonymous_Returns401()
+    {
+        _client.DefaultRequestHeaders.Authorization = null;
+        var fakeId = Guid.NewGuid();
+
+        using var content = new MultipartFormDataContent();
+        using var evidence = new ByteArrayContent([1, 2, 3]);
+        content.Add(evidence, "files", "receipt.png");
+
+        var response = await _client.PostAsync(
+            $"/api/v1/workflows/{fakeId}/evidence",
+            content);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetEvidence_Anonymous_Returns401()
+    {
+        _client.DefaultRequestHeaders.Authorization = null;
+
+        var response = await _client.GetAsync(
+            $"/api/v1/workflows/{Guid.NewGuid()}/evidence/{Guid.NewGuid()}");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Wrong role — must return 403 Forbidden
     // ──────────────────────────────────────────────────────────────────

@@ -112,7 +112,9 @@ task app:apply -- swedencentral
 
 This deploys the orchestrator, web UI, LiteLLM, managed identities, application RBAC, and the manual database migration and Hosted Agent deployment jobs. For the MVP, the web UI runs one replica and keeps ASP.NET Data Protection keys in local container storage because subscription policy disables public Storage access. Any web UI restart, redeployment, revision replacement, or replica replacement invalidates existing antiforgery cookies; users must refresh the page before resubmitting a form.
 
-Service-to-service API authentication is disabled by default so deployment does not require Entra directory administration. To enable it in a tenant where the deployer has suitable directory permissions, set `TF_VAR_enable_service_auth=true` before planning and applying the `apps/` stack.
+Service-to-service API authentication is enabled by default. The `apps/` stack creates an Entra application role (`Workflow.Invoke`) for the orchestrator API and assigns it to the Web UI managed identity, so workflow creation, approval, detail, and evidence endpoints require managed-identity bearer tokens. Setting `TF_VAR_enable_service_auth=false` is only supported for local development; the orchestrator refuses to start with that value outside the Development environment and reports the insecure mode on `/health/ready`.
+
+The default PostgreSQL network path is demo-grade: it preserves the low-friction lab deployment but creates the broad Azure `AllowAzureServices` firewall rule, which admits resources from any Azure tenant at the network layer. Entra-only database authentication remains required, but regulated or shared environments should set `TF_VAR_enable_private_networking=true` to deploy Container Apps and PostgreSQL Flexible Server on private VNet paths and suppress that firewall rule.
 
 Run the Entra-authenticated database migration job before sending application traffic:
 

@@ -44,7 +44,8 @@ public sealed class WorkflowService : IWorkflowService
         ILogger<WorkflowService> logger,
         IWorkflowRepository workflowRepository,
         IWorkflowActionRepository workflowActionRepository,
-        IDemoScenarioPolicy? demoScenarioPolicy = null)
+        IDemoScenarioPolicy? demoScenarioPolicy = null,
+        ILoggerFactory? loggerFactory = null)
     {
         _mcpClient = mcpClient;
         _logger = logger;
@@ -53,7 +54,8 @@ public sealed class WorkflowService : IWorkflowService
         _demoScenarioPolicy = demoScenarioPolicy ?? DemoScenarioPolicy.Disabled;
         _agentFrameworkWorkflowOrchestrator = new AgentFrameworkWorkflowOrchestrator(
             mcpClient,
-            NullLogger<AgentFrameworkWorkflowOrchestrator>.Instance,
+            loggerFactory?.CreateLogger<AgentFrameworkWorkflowOrchestrator>()
+                ?? NullLogger<AgentFrameworkWorkflowOrchestrator>.Instance,
             (toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken) =>
                 InvokeAgentAsync(toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken));
     }
@@ -177,6 +179,12 @@ public sealed class WorkflowService : IWorkflowService
             current.TraceId);
         recoveryActivity?.SetTag("workflow.operation", "recover");
         recoveryActivity?.SetTag("demo.scenario", demoScenario?.Id);
+        recoveryActivity?.SetTag("workflow.recovery.attempt_count", current.RecoveryAttemptCount);
+        if (current.NextAttemptAt is not null)
+        {
+            recoveryActivity?.SetTag("workflow.recovery.next_attempt_at", current.NextAttemptAt.Value.ToString("O"));
+        }
+
         try
         {
             var recovered = await ExecuteRoutingAsync(
@@ -247,7 +255,8 @@ public sealed class WorkflowService : IWorkflowService
 
         current = await AdvanceAndPersistAsync(current, [plannerEvent], cancellationToken);
 
-        var route = execution.Context.Route ?? WorkflowRoutingPolicy.Decide(current.UserMessage);
+        var policyRoute = execution.Context.PolicyRoute ?? WorkflowRoutingPolicy.Decide(current.UserMessage);
+        var route = execution.Context.Route ?? policyRoute;
         if (!SpecialistTools.TryGetValue(route.Agent, out _))
         {
             return await PersistFailedAsync(
@@ -257,19 +266,11 @@ public sealed class WorkflowService : IWorkflowService
                 cancellationToken);
         }
 
-        if ((plannerDecision.SelectedAgent is not null &&
-            !string.Equals(plannerDecision.SelectedAgent, route.Agent, StringComparison.OrdinalIgnoreCase)) ||
-            plannerDecision.RequiresApproval != route.RequiresApproval)
-        {
-            _logger.LogWarning(
-                "Workflow {WorkflowId} routing policy overrode planner route {PlannerAgent}/{PlannerApproval} with {PolicyAgent}/{PolicyApproval}",
-                workflowId,
-                plannerDecision.SelectedAgent,
-                plannerDecision.RequiresApproval,
-                route.Agent,
-                route.RequiresApproval);
-        }
-
+        var routeAuditEvents = CreateRouteAuditEvents(
+            plannerDecision,
+            policyRoute,
+            route,
+            execution.Context.RouteFallbackReason);
         var routeEvent = new WorkflowEvent(
             "workflow.route_selected",
             $"Selected specialist {route.Agent}",
@@ -277,7 +278,7 @@ public sealed class WorkflowService : IWorkflowService
             "system",
             $"Approval required: {route.RequiresApproval}");
 
-        current = await AdvanceAndPersistAsync(current, [routeEvent], cancellationToken);
+        current = await AdvanceAndPersistAsync(current, [.. routeAuditEvents, routeEvent], cancellationToken);
 
         var specialistResult = execution.Context.SpecialistResult;
         if (specialistResult is null)
@@ -527,11 +528,12 @@ public sealed class WorkflowService : IWorkflowService
         Activity.Current?.SetStatus(ActivityStatusCode.Error);
 
         _logger.LogError(
-            "Workflow {WorkflowId} failed for trace {TraceId} with error code {ErrorCode} after {DurationMs} ms",
+            "Workflow {WorkflowId} failed for trace {TraceId} with error code {ErrorCode} after {DurationMs} ms: {Error}",
             current.Id,
             current.TraceId,
             "workflow_execution_failed",
-            (now - current.CreatedAt).TotalMilliseconds);
+            (now - current.CreatedAt).TotalMilliseconds,
+            error);
 
         return failedState;
     }
@@ -739,6 +741,78 @@ public sealed class WorkflowService : IWorkflowService
             DateTimeOffset.UtcNow,
             "system",
             CreateInvocationEventDetails(result));
+
+    private static WorkflowEvent[] CreateRouteAuditEvents(
+        AgentDecision plannerDecision,
+        WorkflowRoute policyRoute,
+        WorkflowRoute winningRoute,
+        string? fallbackReason)
+    {
+        if (fallbackReason is not null)
+        {
+            return
+            [
+                new WorkflowEvent(
+                    "workflow.route_fallback",
+                    CreateRouteFallbackMessage(fallbackReason),
+                    DateTimeOffset.UtcNow,
+                    "system",
+                    JsonSerializer.Serialize(new
+                    {
+                        reason_code = fallbackReason,
+                        planner_agent = plannerDecision.SelectedAgent,
+                        planner_requires_approval = plannerDecision.RequiresApproval,
+                        policy_agent = policyRoute.Agent,
+                        policy_requires_approval = policyRoute.RequiresApproval,
+                        winning_agent = winningRoute.Agent,
+                        winning_requires_approval = winningRoute.RequiresApproval,
+                        winner = "policy",
+                        agent_winner = "policy",
+                        approval_winner = "policy"
+                    }))
+            ];
+        }
+
+        if (string.Equals(plannerDecision.SelectedAgent, policyRoute.Agent, StringComparison.OrdinalIgnoreCase) &&
+            plannerDecision.RequiresApproval == policyRoute.RequiresApproval)
+        {
+            return [];
+        }
+
+        return
+        [
+            new WorkflowEvent(
+                "workflow.route_disagreement",
+                "Planner route and routing policy disagreed; planner agent selection won and policy approval guardrail was applied.",
+                DateTimeOffset.UtcNow,
+                "system",
+                JsonSerializer.Serialize(new
+                {
+                    planner_agent = plannerDecision.SelectedAgent,
+                    planner_requires_approval = plannerDecision.RequiresApproval,
+                    policy_agent = policyRoute.Agent,
+                    policy_requires_approval = policyRoute.RequiresApproval,
+                    winning_agent = winningRoute.Agent,
+                    winning_requires_approval = winningRoute.RequiresApproval,
+                    winner = string.Equals(winningRoute.Agent, plannerDecision.SelectedAgent, StringComparison.OrdinalIgnoreCase)
+                        ? "planner"
+                        : "policy",
+                    agent_winner = string.Equals(winningRoute.Agent, plannerDecision.SelectedAgent, StringComparison.OrdinalIgnoreCase)
+                        ? "planner"
+                        : "policy",
+                    approval_winner = winningRoute.RequiresApproval == plannerDecision.RequiresApproval
+                        ? "planner"
+                        : "policy"
+                }))
+        ];
+    }
+
+    private static string CreateRouteFallbackMessage(string fallbackReason) => fallbackReason switch
+    {
+        "missing_selected_agent" => "Planner returned no selected_agent; keyword policy selected the specialist.",
+        "unknown_selected_agent" => "Planner returned an unrecognized selected_agent; keyword policy selected the specialist.",
+        _ => "Planner route was unusable; keyword policy selected the specialist."
+    };
 
     private static string CreateInvocationEventDetails(McpToolResult result)
     {

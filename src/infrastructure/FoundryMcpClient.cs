@@ -21,6 +21,7 @@ public sealed class FoundryMcpClientOptions
     public string? DiscoveryEndpoint { get; set; }
     public string Scope { get; set; } = "https://ai.azure.com/.default";
     public string? ToolEndpointsJson { get; set; }
+    public string? McpToolEndpointsJson { get; set; }
     public int MaxAttempts { get; set; } = 3;
     public int AttemptTimeoutSeconds { get; set; } = 30;
     public int BaseDelayMilliseconds { get; set; } = 250;
@@ -43,6 +44,7 @@ public sealed class FoundryMcpClient : IMcpClient
     private readonly string? _discoveryEndpoint;
     private readonly string _scope;
     private readonly IReadOnlyDictionary<string, string> _toolEndpoints;
+    private readonly IReadOnlyDictionary<string, string> _mcpToolEndpoints;
     private readonly Dictionary<string, McpToolDefinition> _discoveredTools;
     private readonly FoundryMcpClientOptions _options;
     private static readonly IReadOnlyDictionary<string, object?> EmptySchema = new Dictionary<string, object?>
@@ -71,6 +73,8 @@ public sealed class FoundryMcpClient : IMcpClient
             : _options.Scope;
         _toolEndpoints = ReadToolEndpointMap(
             _options.ToolEndpointsJson ?? ReadSetting("FOUNDRY_TOOL_ENDPOINTS"));
+        _mcpToolEndpoints = ReadToolEndpointMap(
+            _options.McpToolEndpointsJson ?? ReadSetting("FOUNDRY_MCP_TOOL_ENDPOINTS"));
         _discoveredTools = new Dictionary<string, McpToolDefinition>(StringComparer.OrdinalIgnoreCase);
         foreach (var toolEndpoint in _toolEndpoints)
         {
@@ -103,6 +107,18 @@ public sealed class FoundryMcpClient : IMcpClient
         string? agentName = null,
         CancellationToken cancellationToken = default)
     {
+        if (_mcpToolEndpoints.Count > 0)
+        {
+            foreach (var (toolName, endpoint) in _mcpToolEndpoints)
+            {
+                var discovered = await DiscoverMcpToolsAsync(toolName, endpoint, cancellationToken);
+                foreach (var tool in discovered)
+                {
+                    _discoveredTools[tool.Name] = tool;
+                }
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(_discoveryEndpoint))
         {
             try
@@ -181,20 +197,57 @@ public sealed class FoundryMcpClient : IMcpClient
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Unable to discover Foundry MCP tools from {DiscoveryEndpoint}", _discoveryEndpoint);
+                _logger.LogWarning(ex, "Unable to discover legacy Foundry adapter tools from {DiscoveryEndpoint}", _discoveryEndpoint);
             }
         }
 
         return _discoveredTools.Values.OrderBy(tool => tool.Name).ToList();
     }
 
+    public async Task ValidateRequiredToolsAsync(
+        IReadOnlyCollection<McpRequiredTool> requiredTools,
+        CancellationToken cancellationToken = default)
+    {
+        var discoveredTools = await DiscoverToolsAsync(cancellationToken: cancellationToken);
+        var discoveredByName = discoveredTools.ToDictionary(tool => tool.Name, StringComparer.OrdinalIgnoreCase);
+        var failures = new List<string>();
+
+        foreach (var requiredTool in requiredTools)
+        {
+            if (!discoveredByName.TryGetValue(requiredTool.Name, out var tool))
+            {
+                failures.Add($"{requiredTool.Name}: missing");
+                continue;
+            }
+
+            var missingProperties = FindMissingRequiredInputProperties(
+                tool.InputSchema,
+                requiredTool.RequiredInputProperties);
+            if (missingProperties.Count > 0)
+            {
+                failures.Add($"{requiredTool.Name}: schema missing {string.Join(", ", missingProperties)}");
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Required MCP tool validation failed: {string.Join("; ", failures)}.");
+        }
+    }
+
     public async Task<McpToolResult> InvokeAsync(string toolName, IDictionary<string, object?> parameters, CancellationToken cancellationToken = default)
     {
+        if (_mcpToolEndpoints.TryGetValue(toolName, out var mcpEndpoint))
+        {
+            return await InvokeMcpToolAsync(toolName, mcpEndpoint, parameters, cancellationToken);
+        }
+
         var endpoint = ResolveEndpoint(toolName);
         if (string.IsNullOrWhiteSpace(endpoint))
         {
-            _logger.LogWarning("No Foundry endpoint configured for {ToolName}; returning a local fallback response", toolName);
-            return CreateFallbackResult(toolName, parameters, endpoint);
+            _logger.LogWarning("No Foundry endpoint configured for {ToolName}; returning a configuration error result", toolName);
+            return CreateMissingEndpointErrorResult(toolName, parameters, endpoint);
         }
 
         var traceId = parameters.TryGetValue("trace_id", out var traceIdValue) ? traceIdValue?.ToString() : null;
@@ -208,7 +261,6 @@ public sealed class FoundryMcpClient : IMcpClient
             contextValue is not null
                 ? contextValue
                 : new Dictionary<string, object?>();
-        var mcpCallRequest = BuildToolsCallRequest(toolName, parameters);
         var payload = new
         {
             contract_version = ContractVersion,
@@ -225,12 +277,9 @@ public sealed class FoundryMcpClient : IMcpClient
                 trace_id = traceId,
                 workflow_id = workflowId,
                 correlation_id = correlationId,
-                mcp_protocol = "jsonrpc-2.0",
-                mcp_method = mcpCallRequest.TryGetValue("method", out var methodValue) ? methodValue?.ToString() : null,
-                mcp_tool_name = toolName
+                transport = "typed-envelope-v1"
             },
-            context,
-            mcp = mcpCallRequest
+            context
         };
 
         for (var attempt = 1; attempt <= _options.MaxAttempts; attempt++)
@@ -351,6 +400,177 @@ public sealed class FoundryMcpClient : IMcpClient
         }
 
         throw new UnreachableException();
+    }
+
+    private async Task<IReadOnlyList<McpToolDefinition>> DiscoverMcpToolsAsync(
+        string expectedToolName,
+        string endpoint,
+        CancellationToken cancellationToken)
+    {
+        await SendJsonRpcAsync(
+            endpoint,
+            BuildInitializeRequest(expectedToolName),
+            cancellationToken);
+
+        var response = await SendJsonRpcAsync(
+            endpoint,
+            BuildToolsListRequest(expectedToolName),
+            cancellationToken);
+
+        if (!response.TryGetProperty("result", out var result) ||
+            !result.TryGetProperty("tools", out var tools) ||
+            tools.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException(
+                $"MCP tools/list response from {endpoint} did not include a tools array.");
+        }
+
+        return tools.EnumerateArray()
+            .Select(tool => ReadMcpToolDefinition(tool, endpoint))
+            .Where(tool => tool is not null)
+            .Select(tool => tool!)
+            .ToList();
+    }
+
+    private async Task<McpToolResult> InvokeMcpToolAsync(
+        string toolName,
+        string endpoint,
+        IDictionary<string, object?> parameters,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; attempt <= _options.MaxAttempts; attempt++)
+        {
+            using var attemptCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            attemptCancellation.CancelAfter(TimeSpan.FromSeconds(_options.AttemptTimeoutSeconds));
+            try
+            {
+                await SendJsonRpcAsync(
+                    endpoint,
+                    BuildInitializeRequest(toolName),
+                    attemptCancellation.Token);
+                var response = await SendJsonRpcAsync(
+                    endpoint,
+                    BuildToolsCallRequest(toolName, parameters),
+                    attemptCancellation.Token);
+                return CreateMcpResponseResult(toolName, endpoint, response, attempt);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException ex)
+            {
+                if (attempt < _options.MaxAttempts)
+                {
+                    await DelayBeforeRetryAsync(toolName, attempt, "MCP attempt timeout", cancellationToken);
+                    continue;
+                }
+
+                return CreateInvocationErrorResult(toolName, endpoint, ex, "timeout", attempt);
+            }
+            catch (HttpRequestException ex)
+            {
+                if (attempt < _options.MaxAttempts)
+                {
+                    await DelayBeforeRetryAsync(toolName, attempt, ex.GetType().Name, cancellationToken);
+                    continue;
+                }
+
+                return CreateInvocationErrorResult(toolName, endpoint, ex, "transport_error", attempt);
+            }
+            catch (McpProtocolException ex)
+            {
+                return new McpToolResult(toolName, "error", "MCP tool invocation failed.", new Dictionary<string, object?>
+                {
+                    ["endpoint"] = endpoint,
+                    ["error_code"] = ex.Code.ToString(),
+                    ["error_message"] = ex.Message,
+                    ["attempts"] = attempt,
+                    ["transport"] = "mcp-jsonrpc-2.0"
+                });
+            }
+        }
+
+        throw new UnreachableException();
+    }
+
+    private async Task<JsonElement> SendJsonRpcAsync(
+        string endpoint,
+        Dictionary<string, object?> payload,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = JsonContent.Create(payload)
+        };
+
+        if (RequiresFoundryToken(endpoint))
+        {
+            var token = await _credential.GetTokenAsync(
+                new TokenRequestContext([_scope]),
+                cancellationToken);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+        }
+
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"MCP endpoint returned HTTP {(int)response.StatusCode}.",
+                null,
+                response.StatusCode);
+        }
+
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("jsonrpc", out var jsonRpc) ||
+            jsonRpc.GetString() != "2.0")
+        {
+            throw new McpProtocolException(-32600, "MCP response is not a JSON-RPC 2.0 object.");
+        }
+
+        if (payload.TryGetValue("id", out var requestId) &&
+            requestId is not null &&
+            !root.TryGetProperty("id", out _))
+        {
+            throw new McpProtocolException(-32600, "MCP response did not include the request id.");
+        }
+
+        if (payload.TryGetValue("id", out requestId) &&
+            requestId is not null &&
+            root.TryGetProperty("id", out var responseId) &&
+            responseId.ToString() != requestId.ToString())
+        {
+            throw new McpProtocolException(-32600, "MCP response id does not match the request id.");
+        }
+
+        if (root.TryGetProperty("error", out var error) &&
+            error.ValueKind == JsonValueKind.Object)
+        {
+            var code = error.TryGetProperty("code", out var codeElement) &&
+                codeElement.ValueKind == JsonValueKind.Number &&
+                codeElement.TryGetInt32(out var numericCode)
+                    ? numericCode
+                    : -32603;
+            var message = error.TryGetProperty("message", out var messageElement) &&
+                messageElement.ValueKind == JsonValueKind.String
+                    ? messageElement.GetString() ?? "MCP error."
+                    : "MCP error.";
+            throw new McpProtocolException(code, message);
+        }
+
+        if (!root.TryGetProperty("result", out _))
+        {
+            throw new McpProtocolException(-32600, "MCP response did not include result or error.");
+        }
+
+        return root.Clone();
     }
 
     private string ResolveEndpoint(string toolName)
@@ -528,6 +748,31 @@ public sealed class FoundryMcpClient : IMcpClient
         }
     };
 
+    private static Dictionary<string, object?> BuildInitializeRequest(string toolName) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = CreateRequestId("initialize", toolName),
+        ["method"] = "initialize",
+        ["params"] = new Dictionary<string, object?>
+        {
+            ["protocolVersion"] = "2024-11-05",
+            ["capabilities"] = new Dictionary<string, object?>(),
+            ["clientInfo"] = new Dictionary<string, object?>
+            {
+                ["name"] = "banking-agent-orchestrator",
+                ["version"] = ContractVersion
+            }
+        }
+    };
+
+    private static Dictionary<string, object?> BuildToolsListRequest(string toolName) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = CreateRequestId("tools/list", toolName),
+        ["method"] = "tools/list",
+        ["params"] = new Dictionary<string, object?>()
+    };
+
     private static Dictionary<string, object?> BuildToolsCallRequest(string toolName, IDictionary<string, object?> parameters) => new()
     {
         ["jsonrpc"] = "2.0",
@@ -638,7 +883,8 @@ public sealed class FoundryMcpClient : IMcpClient
         if (tool.TryGetProperty("inputSchema", out var inputSchemaElement) &&
             inputSchemaElement.ValueKind == JsonValueKind.Object)
         {
-            return ReadSchemaProperties(inputSchemaElement);
+            return JsonSerializer.Deserialize<Dictionary<string, object?>>(inputSchemaElement.GetRawText())
+                ?? EmptySchema;
         }
 
         return CreateToolInputSchema(tool.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String
@@ -651,12 +897,81 @@ public sealed class FoundryMcpClient : IMcpClient
         if (tool.TryGetProperty("outputSchema", out var outputSchemaElement) &&
             outputSchemaElement.ValueKind == JsonValueKind.Object)
         {
-            return ReadSchemaProperties(outputSchemaElement);
+            return JsonSerializer.Deserialize<Dictionary<string, object?>>(outputSchemaElement.GetRawText())
+                ?? EmptySchema;
         }
 
         return CreateToolOutputSchema(tool.TryGetProperty("name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String
             ? nameElement.GetString() ?? "tool"
             : "tool");
+    }
+
+    private static McpToolDefinition? ReadMcpToolDefinition(JsonElement tool, string endpoint)
+    {
+        if (tool.ValueKind != JsonValueKind.Object ||
+            !tool.TryGetProperty("name", out var nameElement) ||
+            nameElement.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var name = nameElement.GetString();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        var description = tool.TryGetProperty("description", out var descriptionElement) &&
+            descriptionElement.ValueKind == JsonValueKind.String
+                ? descriptionElement.GetString() ?? "Discovered MCP tool"
+                : "Discovered MCP tool";
+
+        return new McpToolDefinition(
+            name,
+            description,
+            name,
+            endpoint,
+            ReadToolInputSchema(tool),
+            "mcp",
+            IsDefault: false,
+            OutputSchema: ReadToolOutputSchema(tool));
+    }
+
+    private static IReadOnlyList<string> FindMissingRequiredInputProperties(
+        IReadOnlyDictionary<string, object?> schema,
+        IReadOnlyCollection<string> requiredProperties)
+    {
+        var propertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (schema.TryGetValue("properties", out var properties))
+        {
+            switch (properties)
+            {
+                case JsonElement propertiesElement when propertiesElement.ValueKind == JsonValueKind.Object:
+                    foreach (var property in propertiesElement.EnumerateObject())
+                    {
+                        propertyNames.Add(property.Name);
+                    }
+                    break;
+                case IDictionary<string, object?> propertiesDictionary:
+                    foreach (var property in propertiesDictionary.Keys)
+                    {
+                        propertyNames.Add(property);
+                    }
+                    break;
+            }
+        }
+
+        if (propertyNames.Count == 0)
+        {
+            foreach (var key in schema.Keys)
+            {
+                propertyNames.Add(key);
+            }
+        }
+
+        return requiredProperties
+            .Where(required => !propertyNames.Contains(required))
+            .ToList();
     }
 
     private static IReadOnlyDictionary<string, object?> ReadSchemaProperties(JsonElement schema)
@@ -740,9 +1055,7 @@ public sealed class FoundryMcpClient : IMcpClient
             ["agent_invocation_id"] = agentInvocationId,
             ["agent_session_id"] = agentSessionId,
             ["attempts"] = attempt,
-            ["mcp_protocol"] = "jsonrpc-2.0",
-            ["mcp_method"] = "tools/call",
-            ["mcp_tool_name"] = toolName
+            ["transport"] = "typed-envelope-v1"
         };
 
         var message = response.IsSuccessStatusCode
@@ -765,6 +1078,82 @@ public sealed class FoundryMcpClient : IMcpClient
         return response.IsSuccessStatusCode
             ? new McpToolResult(toolName, "ok", message, data)
             : new McpToolResult(toolName, "error", message, data);
+    }
+
+    private static McpToolResult CreateMcpResponseResult(
+        string toolName,
+        string endpoint,
+        JsonElement response,
+        int attempt)
+    {
+        var resultElement = response.GetProperty("result");
+        var envelopeJson = resultElement.GetRawText();
+        var isError = resultElement.TryGetProperty("isError", out var isErrorElement) &&
+            isErrorElement.ValueKind is JsonValueKind.True;
+
+        // Callers deserialise response_body straight into an agent result, so the
+        // MCP envelope has to be unwrapped here. Leaving the envelope in place
+        // makes every agent field deserialise to null and the result is rejected
+        // as invalid. Keeping this in the transport adapter is what allows the
+        // application layer to stay unaware of which transport was used.
+        var agentPayloadJson = ExtractMcpAgentPayload(resultElement) ?? envelopeJson;
+        var agentPayloadObject = JsonSerializer.Deserialize<object>(agentPayloadJson);
+
+        return new McpToolResult(
+            toolName,
+            isError ? "error" : "ok",
+            isError ? "MCP tool returned an error result." : "MCP tool invocation completed successfully.",
+            new Dictionary<string, object?>
+            {
+                ["endpoint"] = endpoint,
+                ["response_json"] = agentPayloadObject,
+                ["response_body"] = agentPayloadJson,
+                ["mcp_envelope_body"] = envelopeJson,
+                ["attempts"] = attempt,
+                ["transport"] = "mcp-jsonrpc-2.0",
+                ["mcp_method"] = "tools/call",
+                ["mcp_tool_name"] = toolName
+            });
+    }
+
+    /// <summary>
+    /// Pulls the agent payload out of an MCP tools/call result, preferring
+    /// structuredContent and falling back to the first text content block.
+    /// </summary>
+    private static string? ExtractMcpAgentPayload(JsonElement resultElement)
+    {
+        if (resultElement.TryGetProperty("structuredContent", out var structured) &&
+            structured.ValueKind is JsonValueKind.Object)
+        {
+            return structured.GetRawText();
+        }
+
+        if (!resultElement.TryGetProperty("content", out var content) ||
+            content.ValueKind is not JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var block in content.EnumerateArray())
+        {
+            if (block.ValueKind is not JsonValueKind.Object ||
+                !block.TryGetProperty("type", out var type) ||
+                type.ValueKind is not JsonValueKind.String ||
+                !string.Equals(type.GetString(), "text", StringComparison.Ordinal) ||
+                !block.TryGetProperty("text", out var text) ||
+                text.ValueKind is not JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var candidate = text.GetString();
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private async Task DelayBeforeRetryAsync(
@@ -796,7 +1185,11 @@ public sealed class FoundryMcpClient : IMcpClient
     private static bool IsTransient(int statusCode) =>
         IsTransient((HttpStatusCode)statusCode);
 
-    private static McpToolResult CreateFallbackResult(string toolName, IDictionary<string, object?> parameters, string? endpoint)
+    // Despite returning a "result", this is an error path: no endpoint is
+    // configured for the tool, so nothing was invoked. It is named for the
+    // condition rather than as a "fallback" so it cannot be mistaken for a
+    // successful degraded response.
+    private static McpToolResult CreateMissingEndpointErrorResult(string toolName, IDictionary<string, object?> parameters, string? endpoint)
     {
         return new McpToolResult(
             toolName,
@@ -831,5 +1224,10 @@ public sealed class FoundryMcpClient : IMcpClient
             ["error_type"] = exception.GetType().Name,
             ["attempts"] = attempts
         });
+    }
+
+    private sealed class McpProtocolException(int code, string message) : Exception(message)
+    {
+        public int Code { get; } = code;
     }
 }

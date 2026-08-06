@@ -9,9 +9,11 @@ from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from app.agents import get_agent_graph
 from app.contracts import AgentName, AgentRequest
+from app.mcp_server import handle_mcp_request
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +21,35 @@ _INVOKE_TIMEOUT: float = float(os.environ.get("AGENT_INVOKE_TIMEOUT_SECONDS", "3
 
 agent_name = AgentName(os.environ.get("BANKING_AGENT_KIND", AgentName.WORKFLOW_PLANNING))
 graph = get_agent_graph(agent_name)
-app = InvocationAgentServerHost()
+
+
+async def _invoke_graph(payload: AgentRequest):
+    return await graph.ainvoke({"request": payload, "result": None})
+
+
+async def handle_mcp(request: Request):
+    return await handle_mcp_request(
+        request,
+        agent_name=agent_name,
+        invoke_graph=_invoke_graph,
+        invoke_timeout=_INVOKE_TIMEOUT,
+    )
+
+
+app = InvocationAgentServerHost(routes=[Route("/mcp", handle_mcp, methods=["POST"])])
 
 
 @app.invoke_handler
 async def handle_invoke(request: Request):
     try:
-        payload = AgentRequest.model_validate(await request.json())
+        body = await request.json()
+        if isinstance(body, dict) and body.get("jsonrpc") == "2.0":
+            async def replay_json():
+                return body
+
+            request.json = replay_json  # type: ignore[method-assign]
+            return await handle_mcp(request)
+        payload = AgentRequest.model_validate(body)
     except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
         logger.warning("Invalid request payload with error type %s", type(exc).__name__)
         return JSONResponse(
@@ -35,7 +59,7 @@ async def handle_invoke(request: Request):
 
     try:
         state = await asyncio.wait_for(
-            graph.ainvoke({"request": payload, "result": None}),
+            _invoke_graph(payload),
             timeout=_INVOKE_TIMEOUT,
         )
         response_body = state["result"].model_dump(mode="json")

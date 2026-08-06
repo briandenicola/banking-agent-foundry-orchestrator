@@ -162,11 +162,15 @@ tasks:
         terraform -chdir=./apps apply -compact-warnings \
           -var "app_name={{.APP_NAME}}" \
           -var "region={{.REGION}}" \
+          -var "enable_service_auth={{.ENABLE_SERVICE_AUTH}}" \
+          -var "allow_insecure_service_auth={{.ALLOW_INSECURE_SERVICE_AUTH}}" \
           -var "image_tag={{.COMMIT_VERSION}}"
     vars:
       APP_NAME:
         sh: terraform -chdir=./infrastructure output -raw APP_NAME
       REGION: '{{default "swedencentral" .CLI_ARGS}}'
+      ENABLE_SERVICE_AUTH: '{{default "true" .ENABLE_SERVICE_AUTH}}'
+      ALLOW_INSECURE_SERVICE_AUTH: '{{default "false" .ALLOW_INSECURE_SERVICE_AUTH}}'
 
   deploy:
     desc: Deploy the application stack and register Foundry Hosted Agents

@@ -143,7 +143,9 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             ["correlation_id"] = WorkflowTelemetry.GetCorrelationId()
         };
 
-        Console.Error.WriteLine($"[AF-step] planner workflowId={context.WorkflowId}");
+        _logger.LogDebug(
+            "Agent Framework planner step starting for workflow {WorkflowId}.",
+            context.WorkflowId);
         try
         {
             var plannerResult = await _invokeAgentAsync(
@@ -197,11 +199,24 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             return Task.FromResult(context);
         }
 
-        Console.Error.WriteLine($"[AF-step] routing workflowId={context.WorkflowId}");
-        var route = WorkflowRoutingPolicy.Decide(context.UserMessage);
+        _logger.LogDebug(
+            "Agent Framework routing step starting for workflow {WorkflowId}.",
+            context.WorkflowId);
+        var policyRoute = WorkflowRoutingPolicy.Decide(context.UserMessage);
+        var plannerSelectedAgent = context.PlannerDecision?.SelectedAgent;
+        var normalizedPlannerAgent = NormalizeSpecialistAgent(plannerSelectedAgent);
+        var routeFallbackReason = ResolveRouteFallbackReason(plannerSelectedAgent, normalizedPlannerAgent);
+        var route = routeFallbackReason is null
+            ? new WorkflowRoute(
+                normalizedPlannerAgent!,
+                context.RequiresApproval || policyRoute.RequiresApproval)
+            : policyRoute;
+
         return Task.FromResult(context with
         {
             Route = route,
+            PolicyRoute = policyRoute,
+            RouteFallbackReason = routeFallbackReason,
             RequiresApproval = route.RequiresApproval
         });
     }
@@ -218,7 +233,10 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             return context;
         }
 
-        Console.Error.WriteLine($"[AF-step] specialist workflowId={context.WorkflowId} agent={context.Route.Agent}");
+        _logger.LogDebug(
+            "Agent Framework specialist step starting for workflow {WorkflowId} with agent {AgentName}.",
+            context.WorkflowId,
+            context.Route.Agent);
         var specialistTool = ResolveSpecialistToolName(context.Route.Agent);
         if (string.IsNullOrWhiteSpace(specialistTool))
         {
@@ -292,7 +310,9 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Console.Error.WriteLine($"[AF-step] terminal workflowId={context.WorkflowId}");
+        _logger.LogDebug(
+            "Agent Framework terminal step starting for workflow {WorkflowId}.",
+            context.WorkflowId);
 
         var finalContext = context.Failed
             ? context
@@ -381,6 +401,27 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
         "dispute-planning" => "dispute.plan",
         _ => null
     };
+
+    private static string? NormalizeSpecialistAgent(string? agentName) =>
+        agentName?.Trim().ToLowerInvariant() switch
+        {
+            "transaction-explanation" => "transaction-explanation",
+            "suspicious-activity" => "suspicious-activity",
+            "dispute-planning" => "dispute-planning",
+            _ => null
+        };
+
+    private static string? ResolveRouteFallbackReason(string? plannerSelectedAgent, string? normalizedPlannerAgent)
+    {
+        if (string.IsNullOrWhiteSpace(plannerSelectedAgent))
+        {
+            return "missing_selected_agent";
+        }
+
+        return normalizedPlannerAgent is null
+            ? "unknown_selected_agent"
+            : null;
+    }
 
     private static bool TryReadAgentResult(
         McpToolResult result,
@@ -488,6 +529,8 @@ internal sealed record WorkflowExecutionContext(
     AgentDecision? PlannerDecision = null,
     AgentDecision? SpecialistDecision = null,
     WorkflowRoute? Route = null,
+    WorkflowRoute? PolicyRoute = null,
+    string? RouteFallbackReason = null,
     bool Failed = false,
     string? ErrorMessage = null,
     string? Intent = null,
