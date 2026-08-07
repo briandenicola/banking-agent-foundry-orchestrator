@@ -2,8 +2,8 @@
 
 This repository contains a banking-focused agentic application built around:
 
-- C# durable workflow orchestration; the Agent Framework migration is tracked in issue #17
-- Microsoft Foundry-hosted LangGraph agents invoked through the Foundry hosted-agent protocol; standards-compliant MCP is tracked in issue #18
+- C# durable workflow orchestration driven by Microsoft Agent Framework
+- Microsoft Foundry-hosted LangGraph agents invoked through standards-compliant MCP JSON-RPC 2.0
 - LiteLLM was removed in [ADR 0001](docs/decisions/0001-remove-litellm-gateway.md); hosted agents call Microsoft Foundry directly and there is no AI gateway
 - Azure Container Apps deployment
 - Terraform-based infrastructure

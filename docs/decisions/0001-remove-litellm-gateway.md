@@ -34,8 +34,8 @@ So the only possible consumers could not reach the gateway, and the only compone
 
 Making it reachable would require one of:
 
-1. **Public ingress on LiteLLM.** Rejected. It directly contradicts [#30](../../issues/30) and [#40](../../issues/40), and the tenant cannot provision the service principal needed to authenticate it.
-2. **Foundry BYO VNet with agent runtime injection.** Foundry supports this: with a capability host and a delegated subnet, hosted-agent egress follows the customer VNet and can reach private endpoints. But VNet injection is a **create-time** property of the Foundry project — it cannot be enabled on an existing project, so adopting it means recreating the Foundry account and project. Our Foundry resources have no capability host and no VNet injection today; `enable_private_networking` covers only Container Apps and PostgreSQL ([#27](../../issues/27)), not Foundry.
+1. **Public ingress on LiteLLM.** Rejected. It directly contradicts [#30](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/30) and [#40](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/40), and the tenant cannot provision the service principal needed to authenticate it.
+2. **Foundry BYO VNet with agent runtime injection.** Foundry supports this: with a capability host and a delegated subnet, hosted-agent egress follows the customer VNet and can reach private endpoints. But VNet injection is a **create-time** property of the Foundry project — it cannot be enabled on an existing project, so adopting it means recreating the Foundry account and project. Our Foundry resources have no capability host and no VNet injection today; `enable_private_networking` covers only Container Apps and PostgreSQL ([#27](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/27)), not Foundry.
 
 Option 2 is legitimate but is a far larger change than #24, and it belongs with the private-networking work rather than with a gateway cleanup.
 
@@ -56,8 +56,8 @@ Amend the constitution so it no longer mandates a component the architecture can
 
 **Lost, and worth stating plainly**
 
-- The natural home for token accounting, per-agent model routing, and centralised rate limiting is gone. That makes [#33](../../issues/33) harder, not easier: those controls now have to be implemented inside the agents or at the Foundry layer.
-- This matters more once [#22](../../issues/22) lands, because multi-node agent graphs issue one model call per node rather than one per invocation, multiplying spend on a system that currently has no cost ceiling.
+- The natural home for token accounting, per-agent model routing, and centralised rate limiting is gone. That makes [#33](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/33) harder, not easier: those controls now have to be implemented inside the agents or at the Foundry layer.
+- This matters more once [#22](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/22) lands, because multi-node agent graphs issue one model call per node rather than one per invocation, multiplying spend on a system that currently has no cost ceiling.
 
 Removing an unused service is still the right call — an unreachable gateway provides no cost control either. But the gap it leaves is real and is tracked in #33.
 

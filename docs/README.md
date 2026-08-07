@@ -38,6 +38,13 @@ This index organizes the banking-agent documentation by audience and task.
 | [Terraform remote state](remote-state.md) | Covers Azure Blob state, OIDC authentication, environment separation, bootstrap, and migration. |
 | [Demo scenarios](demo-scenarios.md) | Documents synthetic non-PII scenarios and their expected workflow outcomes. |
 
+## Architecture decisions
+
+| Document | Purpose |
+| --- | --- |
+| [ADR 0001 — Remove the LiteLLM gateway](decisions/0001-remove-litellm-gateway.md) | Records why the AI gateway was removed and the conditions under which one would be reintroduced. |
+| [ADR 0002 — Hand-written MCP server](decisions/0002-mcp-sdk-vs-hand-written.md) | Records why the hosted-agent MCP implementation is hand-written rather than built on the official SDK. |
+
 ## Planning and backlog
 
 | Document | Purpose |
@@ -50,6 +57,7 @@ This index organizes the banking-agent documentation by audience and task.
 
 - **Trace a request through the code:** [Workflow lifecycle](mvp-implementation-operations-guide.md#2-workflow-lifecycle)
 - **Understand agent communication and shared state:** [Agent implementation and Foundry runtime](agent-implementation.md)
+- **Understand the MCP boundary and agent graphs:** [Hosted Agents lab, Module 4](hosted-agents-lab.md#module-4-inspect-the-mcp-tool-boundary-and-the-agent-graphs)
 - **Understand PostgreSQL durability:** [PostgreSQL state, audit, and recovery](mvp-implementation-operations-guide.md#4-postgresql-state-audit-and-recovery)
 - **Configure authentication:** [Authentication and tenant prerequisites](mvp-implementation-operations-guide.md#7-authentication-and-tenant-prerequisites)
 - **Deploy to Azure:** [Deployment](mvp-implementation-operations-guide.md#10-deployment)
