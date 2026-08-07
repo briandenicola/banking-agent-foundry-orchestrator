@@ -17,7 +17,11 @@ from app.mcp_server import handle_mcp_request
 
 logger = logging.getLogger(__name__)
 
-_INVOKE_TIMEOUT: float = float(os.environ.get("AGENT_INVOKE_TIMEOUT_SECONDS", "30"))
+# Foundry reserves every AGENT_* and FOUNDRY_* environment variable for platform
+# use, so this budget must carry the BANKING_ prefix like BANKING_AGENT_KIND.
+_INVOKE_TIMEOUT: float = float(
+    os.environ.get("BANKING_AGENT_INVOKE_TIMEOUT_SECONDS", "90")
+)
 
 agent_name = AgentName(os.environ.get("BANKING_AGENT_KIND", AgentName.WORKFLOW_PLANNING))
 graph = get_agent_graph(agent_name)

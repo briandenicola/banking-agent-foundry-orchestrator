@@ -56,14 +56,14 @@ tasks:
     desc: Run Python hosted-agent HTTP boundary tests
     dir: src/agents/python
     cmds:
-      - python -m pip install -r requirements.txt pytest -q
+      - python -m pip install -r requirements.txt -r requirements-dev.txt -q
       - python -m pytest tests/test_hosted.py -v
 
   python-agents:
     desc: Run Python agent unit tests
     cmds:
-      - python -m pip install -r src/agents/python/requirements.txt pytest -q
-      - cd src/agents/python && python -m pytest tests/test_agents.py -v
+      - python -m pip install -r src/agents/python/requirements.txt -r src/agents/python/requirements-dev.txt -q
+      - cd src/agents/python && python -m pytest tests -v
 
   python-deployer:
     desc: Run Python deployer unit tests

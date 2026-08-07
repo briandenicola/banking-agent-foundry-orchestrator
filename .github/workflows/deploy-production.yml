@@ -205,14 +205,6 @@ jobs:
             --image database-migrator:latest \
             --file src/database-migrator/Dockerfile .
 
-      - name: Build & push – litellm
-        run: |
-          az acr build \
-            --registry ${{ steps.acr.outputs.name }} \
-            --image litellm:${{ steps.tag.outputs.short_sha }} \
-            --image litellm:latest \
-            --file src/litellm/Dockerfile .
-
   # ── 3. Application Container Apps apply ───────────────────────────────────
   deploy_apps:
     name: Deploy application Container Apps

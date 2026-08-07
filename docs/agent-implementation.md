@@ -66,10 +66,34 @@ the current architecture.
 
 ## 1. LangGraph code
 
-### Shared state
+### Two graph shapes
 
-All four agents use the same two-field LangGraph state declared in
-[`AgentState`](../src/agents/python/app/agents/base.py#L11-L14):
+The four agents do **not** share one topology. Two are genuinely single-step and
+use a single-node wrapper; two make a branching decision and are real multi-node
+graphs.
+
+| Agent | Shape | Why |
+| --- | --- | --- |
+| `workflow-planning` | Single node | Classification is one structured decision. There is nothing to branch on before the answer exists. |
+| `transaction-explanation` | Single node | Explaining a transaction is one informational step. |
+| `suspicious-activity` | Multi-node, 1 conditional edge | Whether the customer asked us to *change* the account changes what the agent may do. |
+| `dispute-planning` | Multi-node, 1 conditional edge | A claim missing required facts cannot be assessed for evidence. |
+
+**A single node is the correct shape for a genuinely single-step agent.** Adding
+nodes to `workflow-planning` or `transaction-explanation` would add latency and
+cost without adding a decision. The multi-node graphs exist where there is a real
+branch, not to demonstrate LangGraph for its own sake.
+
+### Single-node agents
+
+[`build_agent_graph`](../src/agents/python/app/agents/base.py#L16-L25) compiles
+this graph for the two single-step agents:
+
+```text
+START -> analyze -> END
+```
+
+using the two-field [`AgentState`](../src/agents/python/app/agents/base.py#L11-L14):
 
 ```python
 class AgentState(TypedDict):
@@ -77,40 +101,97 @@ class AgentState(TypedDict):
     result: AgentResult | None
 ```
 
-`request` is immutable input for one invocation. The sole graph node writes `result`.
-There is no checkpointer, thread ID, persistence adapter, message history, or
-cross-agent state in the Python graph.
-
-### Graph topology
-
-[`build_agent_graph`](../src/agents/python/app/agents/base.py#L16-L25) builds and
-compiles this graph for every agent:
-
-```text
-START -> analyze -> END
-```
-
-The `analyze` node calls:
-
-```python
-result = await reason(agent, instructions, state["request"])
-```
-
-and returns `{"result": result}`. Therefore the present LangGraph usage is a
-single-node structured reasoning wrapper. Workflow sequencing, routing, approval,
-durability, and recovery are not LangGraph nodes; they are C# application logic.
-
-### Four compiled graphs
-
-Each module calls the shared builder with a different `AgentName` and system
-instruction:
+The `analyze` node calls `reason(agent, instructions, state["request"])` and
+returns `{"result": result}`.
 
 | Agent | Code | Responsibility encoded in its prompt |
 | --- | --- | --- |
-| `workflow-planning` | [`planning.py`](../src/agents/python/app/agents/planning.py#L4-L12) | Classify intent, recommend one specialist, assess risk, and recommend whether approval is needed; never act. |
-| `transaction-explanation` | [`transaction_explanation.py`](../src/agents/python/app/agents/transaction_explanation.py#L4-L11) | Explain transaction status using supplied context without inventing account or merchant data. |
-| `suspicious-activity` | [`suspicious_activity.py`](../src/agents/python/app/agents/suspicious_activity.py#L4-L11) | Separate observed facts from hypotheses and recommend protective next steps; flag modifying actions for approval. |
-| `dispute-planning` | [`dispute.py`](../src/agents/python/app/agents/dispute.py#L4-L11) | Prepare a bounded dispute plan and identify missing information/evidence; never submit a dispute. |
+| `workflow-planning` | [`planning.py`](../src/agents/python/app/agents/planning.py) | Classify intent, recommend one specialist, assess risk, and recommend whether approval is needed; never act. |
+| `transaction-explanation` | [`transaction_explanation.py`](../src/agents/python/app/agents/transaction_explanation.py) | Explain transaction status using supplied context without inventing account or merchant data. |
+
+### `dispute-planning`: conditional on claim completeness
+
+[`dispute.py`](../src/agents/python/app/agents/dispute.py):
+
+```text
+START -> extract_claim -> validate_completeness -> (conditional)
+                                                   |-> request_more_info -> END
+                                                   |-> assess_evidence -> draft_plan -> END
+```
+
+State carries real intermediate values between nodes, not just the terminal
+result:
+
+```python
+class DisputeState(TypedDict, total=False):
+    request: AgentRequest
+    claim: DisputeClaim              # written by extract_claim
+    completeness: CompletenessCheck  # written by validate_completeness, selects the branch
+    assessment: EvidenceAssessment   # written by assess_evidence, read by draft_plan
+    used_fallback: bool
+    result: AgentResult
+```
+
+Each node has its own output schema rather than producing a whole `AgentResult`.
+
+Two safety properties are enforced by code rather than by prompt:
+
+- `validate_completeness` recomputes `is_complete` from the extracted claim's
+  missing fields, so a model cannot declare an empty claim complete and skip the
+  information request.
+- **Both** terminal branches set `requires_approval=True`. Preparing a dispute
+  plan is not filing one, and the human gate does not depend on how complete the
+  claim happened to be.
+
+### `suspicious-activity`: conditional on action versus explanation
+
+[`suspicious_activity.py`](../src/agents/python/app/agents/suspicious_activity.py):
+
+```text
+START -> gather_signals -> classify -> (conditional)
+                                       |-> plan_protective_action -> END
+                                       |-> explain_activity -> END
+```
+
+```python
+class SuspiciousState(TypedDict, total=False):
+    request: AgentRequest
+    signals: SignalSet                       # observed facts vs hypotheses; selects the branch
+    classification: ActivityClassification   # category and severity
+    used_fallback: bool
+    result: AgentResult
+```
+
+The branch keys on `signals.action_requested`, **not** on severity. Describing
+risk is informational and completes immediately; freezing, blocking, or closing
+an account is an action and is gated behind approval. Routing on severity
+instead would send a high-risk *informational* request to the approval queue.
+
+`gather_signals` OR-s the model's `action_requested` with a deterministic
+keyword check, so a model that overlooks "freeze my card" cannot route the
+request away from the approval gate. `requires_approval` is set by the branch,
+never by model output.
+
+### Fallback and execution mode
+
+Every node calls
+[`structured_step`](../src/agents/python/app/model.py), which returns `None` when
+no model endpoint is configured and `ALLOW_FALLBACK` permits degradation, so each
+node applies its own deterministic path. Any node falling back sets
+`used_fallback`, and the terminal node reports `execution_mode="fallback"` for
+the whole invocation. With `ALLOW_FALLBACK=false` — the deployed configuration —
+a missing model endpoint raises `ModelUnavailableError` instead.
+
+### Invocation cost
+
+A multi-node graph issues **one model call per node it visits**: up to four for
+`dispute-planning` and three for `suspicious-activity`. `BANKING_AGENT_INVOKE_TIMEOUT_SECONDS`
+is therefore deployed at 90s, and the orchestrator's
+`FOUNDRY_ATTEMPT_TIMEOUT_SECONDS` at 100s so the agent's own timeout surfaces
+first.
+
+Workflow sequencing, routing, approval, durability, and recovery remain C#
+application logic, not LangGraph nodes.
 
 [`registry.py`](../src/agents/python/app/agents/registry.py#L9-L18) imports those four
 already-compiled graphs and maps the `AgentName` enum to the correct graph. There is
@@ -226,7 +307,7 @@ separate hosted-agent registrations from the same image with a different
 2. validates it as `AgentRequest`;
 3. invokes the selected graph with
    `{"request": payload, "result": None}`;
-4. enforces `AGENT_INVOKE_TIMEOUT_SECONDS` (30 seconds by default);
+4. enforces `BANKING_AGENT_INVOKE_TIMEOUT_SECONDS` (90 seconds by default);
 5. serializes the resulting `AgentResult`; and
 6. returns JSON.
 

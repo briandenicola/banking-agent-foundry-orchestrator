@@ -35,7 +35,7 @@ workers: they do not query PostgreSQL, call one another, or own workflow transit
 | Foundry boundary | Authenticate and invoke statically configured hosted-agent endpoints | [`FoundryMcpClient.cs`](../src/infrastructure/FoundryMcpClient.cs) |
 | Persistence | Store workflow state and enforce concurrency/idempotency | [`src/infrastructure/Persistence`](../src/infrastructure/Persistence) |
 | Recovery | Claim new or stale work after process/revision failure | [`WorkflowExecutionTrigger.cs`](../src/orchestrator/WorkflowExecutionTrigger.cs), [`WorkflowRecoveryWorker.cs`](../src/orchestrator/WorkflowRecoveryWorker.cs) |
-| Hosted agents | Run one-step LangGraph analysis using the configured model | [`src/agents/python/app`](../src/agents/python/app) |
+| Hosted agents | Run LangGraph agent graphs (two single-node, two multi-node) using the configured model | [`src/agents/python/app`](../src/agents/python/app) |
 | Agent deployer | Create or version Foundry hosted agents | [`deploy.py`](../src/agents/deployer/deploy.py) |
 | Database migrator | Apply EF migrations and grant runtime privileges | [`src/database-migrator/Program.cs`](../src/database-migrator/Program.cs) |
 
@@ -152,8 +152,13 @@ registration:
 - `dispute-planning`
 
 [`registry.py`](../src/agents/python/app/agents/registry.py) maps names to compiled
-graphs. [`build_agent_graph`](../src/agents/python/app/agents/base.py) builds the
-current LangGraph topology: `START -> analyze -> END`.
+graphs. Topology differs by agent:
+[`build_agent_graph`](../src/agents/python/app/agents/base.py) compiles
+`START -> analyze -> END` for the two single-step agents, while
+[`dispute.py`](../src/agents/python/app/agents/dispute.py) and
+[`suspicious_activity.py`](../src/agents/python/app/agents/suspicious_activity.py)
+are multi-node graphs with a conditional edge. See
+[agent-implementation.md](agent-implementation.md) for the diagrams.
 [`hosted.py`](../src/agents/python/app/hosted.py) exposes the Foundry
 `InvocationAgentServerHost` entry point, while
 [`model.py`](../src/agents/python/app/model.py) invokes the configured Foundry model
@@ -196,12 +201,17 @@ Transient HTTP 408, 429, 500, 502, 503, and 504 responses are retried up to thre
 attempts. Other transport, authentication, timeout, or contract failures become
 durable workflow failures.
 
-> **Current implementation note:** classes retain `Mcp` names, but this boundary is
-> Foundry's hosted-agent invocation protocol, not MCP JSON-RPC. There is no
-> `tools/list`, `tools/call`, streamable HTTP, SSE, or runtime tool discovery.
-> Microsoft Agent Framework is referenced by the orchestrator project but procedural
-> `WorkflowService` code currently performs orchestration. LiteLLM is deployed for a
-> future direct-model path but no active C# or Python request path calls it.
+> **Current implementation note:** this boundary speaks genuine MCP JSON-RPC 2.0 for
+> every specialist. The orchestrator performs `initialize`, discovers tools with
+> `tools/list`, and invokes them with `tools/call` over the authenticated Foundry
+> hosted-agent endpoint. The versioned typed HTTP envelope remains only as a fallback
+> for a tool absent from `FOUNDRY_MCP_TOOL_ENDPOINTS`. Streamable HTTP and SSE
+> transports are not used; see
+> [ADR 0002](decisions/0002-mcp-sdk-vs-hand-written.md). Microsoft Agent Framework
+> drives the orchestration loop through
+> [`AgentFrameworkWorkflowOrchestrator`](../src/application/AgentFrameworkWorkflowOrchestrator.cs).
+> All model calls are made by the hosted agents directly against Foundry; there is no
+> AI gateway.
 
 ### Agent data and evidence
 
@@ -235,22 +245,26 @@ traces the contract to the exact code. The specialist still cannot observe later
 database changes, another agent's private state, uploaded files, or uncommitted work.
 State transitions, approvals, and audit authority remain in C# and PostgreSQL.
 
-### Recommended shared-state evolution
+### Shared-state evolution
 
 Preserve PostgreSQL as the canonical workflow database while introducing richer
-coordination in layers:
+coordination in layers. The first two layers are now implemented:
 
-1. **Agent Framework orchestration:** model planner, routing, specialist, approval,
-   and action execution as explicit Agent Framework steps. Persist framework
-   checkpoints alongside the workflow version so resume never bypasses the existing
-   claim or approval rules. Tracked in
-   [#17](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/17).
-2. **MCP specialist boundary:** expose specialists as discovered, typed MCP tools.
-   Agents return recommendations or artifacts; only the orchestrator commits
-   authoritative state. Tracked in
-   [#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18).
-3. **Explicit shared artifacts:** add versioned workflow-context/artifact records with
-   provenance, content classification, schema version, producing step, and hash.
+1. **Agent Framework orchestration (implemented,
+   [#17](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/17)):**
+   planner, routing, specialist, approval, and action execution run as explicit
+   Agent Framework steps in
+   [`AgentFrameworkWorkflowOrchestrator`](../src/application/AgentFrameworkWorkflowOrchestrator.cs).
+   Recovery still replays the planning and specialist phases rather than resuming a
+   framework checkpoint.
+2. **MCP specialist boundary (implemented,
+   [#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18)
+   and [#36](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/36)):**
+   all four specialists are exposed as discovered, typed MCP tools. Agents return
+   recommendations or artifacts; only the orchestrator commits authoritative state.
+3. **Explicit shared artifacts (not implemented):** add versioned
+   workflow-context/artifact records with provenance, content classification, schema
+   version, producing step, and hash.
    Pass references or a least-privilege projection to tools rather than copying the
    entire workflow or evidence content into every prompt.
 4. **Transactional event publication:** use an outbox written in the same PostgreSQL
@@ -878,13 +892,16 @@ workflow.
 
 These limitations are intentional documentation callouts, not hidden behavior:
 
-- Microsoft Agent Framework does not yet drive the orchestration loop.
-- The `IMcpClient` boundary uses Foundry hosted-agent HTTP invocation, not MCP
-  ([#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18)).
+- The `IMcpClient` boundary implements only the MCP methods this system needs
+  (`initialize`, `tools/list`, `tools/call`) over Foundry's invocation endpoint.
+  Streamable HTTP, SSE, and resource/prompt primitives are not implemented, and
+  `protocolVersion` negotiation is nominal; see
+  [ADR 0002](decisions/0002-mcp-sdk-vs-hand-written.md).
 - Hosted agents do not call one another or access PostgreSQL.
 - Uploaded evidence is not supplied to agents.
-- LiteLLM has no active caller.
 - Recovery replays planning and specialist phases rather than resuming a checkpoint.
+  LangGraph agent graphs are likewise not checkpointed
+  ([#41](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/41)).
 - `x-correlation-id` is best-effort across worker execution; workflow and trace IDs
   are authoritative.
 - The support-case action is a database simulation, not a production banking action.

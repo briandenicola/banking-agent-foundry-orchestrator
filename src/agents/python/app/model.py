@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import os
 from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from pydantic import BaseModel
 
 from app.contracts import CONTRACT_VERSION, AgentName, AgentRequest, AgentResult
 
 
 StructuredReasoner = Callable[[AgentName, str, AgentRequest], Awaitable[AgentResult]]
+TStep = TypeVar("TStep", bound=BaseModel)
 PROJECT_ENDPOINT_ENV_VAR = "BANKING_AGENT_PROJECT_ENDPOINT"
 LEGACY_PROJECT_ENDPOINT_ENV_VAR = "FOUNDRY_PROJECT_ENDPOINT"
 
@@ -69,6 +72,50 @@ def _model() -> AzureChatOpenAI | ChatOpenAI | None:
         azure_deployment=deployment,
         api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview"),
         azure_ad_token_provider=token_provider,
+    )
+
+
+async def structured_step(
+    instructions: str,
+    request: AgentRequest,
+    schema: type[TStep],
+    step_context: str | None = None,
+) -> TStep | None:
+    """Run one structured-output model call for a single graph node.
+
+    Multi-node graphs need per-node output schemas rather than the terminal
+    ``AgentResult``, and each node needs its own deterministic path when no
+    model is configured. Returning ``None`` signals "no model available, apply
+    your fallback" so that fallback logic stays with the node that owns the
+    decision instead of being centralised in this module.
+
+    Raises ``ModelUnavailableError`` when fallback is disabled, matching
+    :func:`reason`, so a misconfigured production deployment fails loudly
+    rather than silently degrading.
+    """
+    model = _model()
+    if model is None:
+        if not _fallback_allowed():
+            raise ModelUnavailableError(
+                "No model endpoint is configured and deterministic fallback "
+                "is disabled (ALLOW_FALLBACK=false)."
+            )
+        return None
+
+    structured_model = model.with_structured_output(schema)
+    user_content = (
+        f"Trace ID: {request.trace_id}\n"
+        f"Customer request: {request.message}\n"
+        f"Context: {request.specialist_context}"
+    )
+    if step_context:
+        user_content += f"\n\nEarlier steps established:\n{step_context}"
+
+    return await structured_model.ainvoke(
+        [
+            ("system", instructions),
+            ("user", user_content),
+        ]
     )
 
 

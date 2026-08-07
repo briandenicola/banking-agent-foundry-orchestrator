@@ -33,7 +33,6 @@ Generated: 2026-07-31T19:01:09Z
 | Orchestrator | API / Worker | .NET 10, Agent Framework | `src/orchestrator/` |
 | Web UI | Frontend | ASP.NET Core Razor Pages | `src/webui/` |
 | Hosted agents | Agent runtime | Python, LangGraph | `src/agents/python/` |
-| LiteLLM | AI gateway | Python container | `src/litellm/` |
 | Database migrator | Job | .NET 10 | `src/database-migrator/` |
 | Agent deployer | Job | Python | `src/agents/deployer/` |
 
@@ -57,7 +56,6 @@ Generated: 2026-07-31T19:01:09Z
 |-----------|---------------|-----|
 | Orchestrator | Azure Container Apps | Existing consumption environment |
 | Web UI | Azure Container Apps | Existing consumption environment |
-| LiteLLM | Azure Container Apps | Existing consumption environment |
 | Agent deployer | Azure Container Apps Job | Existing consumption environment |
 | Database migrator | Azure Container Apps Job | Existing consumption environment |
 | Images | Azure Container Registry | Existing registry |

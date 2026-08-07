@@ -40,7 +40,6 @@ tasks:
       - task: build-hosted-agents
       - task: build-agent-deployer
       - task: build-database-migrator
-      - task: build-litellm
 
   build-orchestrator:
     desc: Build and push the orchestrator image to ACR
@@ -119,20 +118,6 @@ tasks:
         --image database-migrator:{{.COMMIT_VERSION}}
         --image database-migrator:latest
         --file src/database-migrator/Dockerfile .
-    vars:
-      ACR_NAME:
-        sh: terraform -chdir=./infrastructure output -raw ACR_NAME
-      COMMIT_VERSION:
-        sh: git rev-parse HEAD | cut -c 1-8
-
-  build-litellm:
-    desc: Build and push the LiteLLM image to ACR
-    cmds:
-      - az acr build
-        --registry {{.ACR_NAME}}
-        --image litellm:{{.COMMIT_VERSION}}
-        --image litellm:latest
-        --file src/litellm/Dockerfile .
     vars:
       ACR_NAME:
         sh: terraform -chdir=./infrastructure output -raw ACR_NAME

@@ -42,19 +42,38 @@ async def transaction_explanation(payload: AgentRequest):
     return await invoke(AgentName.TRANSACTION_EXPLANATION, payload)
 
 
-@app.post("/transaction-explanation/mcp")
-async def transaction_explanation_mcp(request: Request):
-    graph = get_agent_graph(AgentName.TRANSACTION_EXPLANATION)
+async def _handle_agent_mcp(request: Request, agent: AgentName):
+    graph = get_agent_graph(agent)
 
     async def invoke_graph(payload: AgentRequest):
         return await graph.ainvoke({"request": payload, "result": None})
 
     return await handle_mcp_request(
         request,
-        agent_name=AgentName.TRANSACTION_EXPLANATION,
+        agent_name=agent,
         invoke_graph=invoke_graph,
         invoke_timeout=30,
     )
+
+
+@app.post("/workflow-planning/mcp")
+async def workflow_planning_mcp(request: Request):
+    return await _handle_agent_mcp(request, AgentName.WORKFLOW_PLANNING)
+
+
+@app.post("/transaction-explanation/mcp")
+async def transaction_explanation_mcp(request: Request):
+    return await _handle_agent_mcp(request, AgentName.TRANSACTION_EXPLANATION)
+
+
+@app.post("/suspicious-activity/mcp")
+async def suspicious_activity_mcp(request: Request):
+    return await _handle_agent_mcp(request, AgentName.SUSPICIOUS_ACTIVITY)
+
+
+@app.post("/dispute-planning/mcp")
+async def dispute_planning_mcp(request: Request):
+    return await _handle_agent_mcp(request, AgentName.DISPUTE_PLANNING)
 
 
 @app.post("/suspicious-activity", response_model=AgentResult)

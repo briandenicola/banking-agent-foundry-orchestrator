@@ -1,0 +1,6 @@
+# Test-only dependencies. Deliberately not in requirements.txt so they stay out
+# of the runtime container image.
+pytest>=8.0,<9.0
+# The official MCP SDK is used as an independent conformance oracle in
+# tests/test_mcp_interop.py; the server implementation does not depend on it.
+mcp>=1.15,<2.0

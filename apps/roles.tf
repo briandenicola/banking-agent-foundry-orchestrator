@@ -8,7 +8,7 @@ resource "azurerm_role_assignment" "acr_pull" {
 }
 
 resource "azurerm_role_assignment" "cognitive_services_user" {
-  for_each = toset(["orchestrator", "litellm"])
+  for_each = toset(["orchestrator"])
 
   scope                            = data.azurerm_cognitive_account.foundry.id
   role_definition_name             = "Cognitive Services User"

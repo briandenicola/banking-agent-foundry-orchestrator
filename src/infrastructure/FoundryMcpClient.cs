@@ -109,9 +109,16 @@ public sealed class FoundryMcpClient : IMcpClient
     {
         if (_mcpToolEndpoints.Count > 0)
         {
-            foreach (var (toolName, endpoint) in _mcpToolEndpoints)
+            // Endpoints are probed concurrently. A hosted-agent round trip costs
+            // several seconds, so probing every agent in sequence scales linearly
+            // with agent count and would approach the readiness validation timeout.
+            var discoveries = await Task.WhenAll(
+                _mcpToolEndpoints.Select(pair =>
+                    DiscoverMcpToolsAsync(pair.Key, pair.Value, cancellationToken)));
+
+            // Mutation stays on this thread; _discoveredTools is not thread-safe.
+            foreach (var discovered in discoveries)
             {
-                var discovered = await DiscoverMcpToolsAsync(toolName, endpoint, cancellationToken);
                 foreach (var tool in discovered)
                 {
                     _discoveredTools[tool.Name] = tool;

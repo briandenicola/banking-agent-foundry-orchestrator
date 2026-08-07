@@ -54,6 +54,7 @@ Before the workshop, participants should have:
 - a Microsoft Azure subscription;
 - access to a Microsoft Foundry project and a model deployment;
 - .NET SDK installed;
+- Python 3.12 installed (for the hosted-agent tests);
 - Docker Desktop or equivalent container tooling;
 - Azure CLI, Terraform, and the repository task runner installed.
 
@@ -90,6 +91,13 @@ Before the workshop, participants should have:
 ### Exercises
 
 ```bash
+task test:all
+```
+
+That is the full local quality gate: .NET unit, contract, and E2E tests plus the
+Python hosted-agent and deployer tests. To run only the .NET solution:
+
+```bash
 dotnet test banking-agent.sln -c Release
 ```
 
@@ -119,6 +127,18 @@ task app:build
 task app:deploy
 ```
 
+`task app:build` tags images with the first eight characters of the current commit
+SHA, so commit any local changes *before* building or the deploy will reference an
+image tag that does not exist in ACR. `task app:deploy` runs `terraform apply`
+without auto-approve and then registers the Hosted Agents, so expect interactive
+confirmation prompts.
+
+Verify the deployment end to end:
+
+```bash
+task app:smoke
+```
+
 ### Platform checkpoints
 
 During deployment, participants should inspect:
@@ -141,6 +161,12 @@ Security posture for the default lab deployment:
   is still required, but the broad Azure `AllowAzureServices` firewall rule
   admits resources from any Azure tenant at the network layer. Do not use that
   default path for regulated workloads.
+- Some tenants forbid creating the service principal and `api://` identifier URI
+  that service authentication depends on. In that case only, set
+  `TF_VAR_enable_service_auth=false` together with
+  `TF_VAR_allow_insecure_service_auth=true`. Workflow endpoints then accept
+  unauthenticated callers, `/health/ready` reports `service_auth` as `Degraded`,
+  and the configuration is rejected in Production. Never use it with real data.
 
 Migration job troubleshooting:
 
@@ -154,7 +180,77 @@ Migration job troubleshooting:
 Participants should be able to explain how the deployed services are connected and
 where the platform controls are applied.
 
-## Module 4: Operate and observe the workflow
+## Module 4: Inspect the MCP tool boundary and the agent graphs
+
+### Objectives
+
+- explain how the orchestrator discovers and invokes specialists over MCP;
+- read a LangGraph agent graph and identify its nodes and conditional edges;
+- understand why some agents are single-node and others branch.
+
+### The MCP boundary
+
+All four specialists are exposed as genuine MCP JSON-RPC 2.0 tools over the
+authenticated Foundry hosted-agent endpoint. The orchestrator performs
+`initialize`, discovers tools with `tools/list`, and invokes them with
+`tools/call`. `FOUNDRY_MCP_TOOL_ENDPOINTS` (set in `apps/main.tf`) maps each tool
+name to its agent endpoint:
+
+| Tool | Agent |
+| --- | --- |
+| `workflow.plan` | `workflow-planning` |
+| `transaction.explain` | `transaction-explanation` |
+| `suspicious.assess` | `suspicious-activity` |
+| `dispute.plan` | `dispute-planning` |
+
+The versioned typed HTTP envelope remains only as a fallback for a tool absent
+from that map. [ADR 0002](decisions/0002-mcp-sdk-vs-hand-written.md) records why
+the MCP server is hand-written rather than built on the official SDK.
+
+### Agent graph topology
+
+Graph shape follows the decision the agent has to make, not uniformity:
+
+| Agent | Shape |
+| --- | --- |
+| `workflow-planning` | single node — one classification step |
+| `transaction-explanation` | single node — one explanation step |
+| `suspicious-activity` | multi-node with a conditional edge |
+| `dispute-planning` | multi-node with a conditional edge |
+
+```text
+dispute-planning:
+  START -> extract_claim -> validate_completeness -> (conditional)
+        -> request_more_info -> END
+        -> assess_evidence -> draft_plan -> END
+
+suspicious-activity:
+  START -> gather_signals -> classify -> (conditional)
+        -> plan_protective_action -> END
+        -> explain_activity -> END
+```
+
+### Exercises
+
+1. Read `src/agents/python/app/mcp_server.py` and find the `_AGENT_TOOLS`
+   registry. Note that tool names must stay in sync with `apps/main.tf` and
+   `src/orchestrator/ReadinessChecks.cs`.
+2. Read `src/agents/python/app/agents/dispute.py` and trace both branches out of
+   `route_on_completeness`.
+3. Call `/health/ready` on the deployed orchestrator and confirm
+   `foundry_configuration` is `Healthy`. That check performs a live MCP
+   `tools/list` against all four agents.
+4. Submit the `suspicious-information` and `suspicious-action` demo scenarios and
+   compare the terminal states. Only the second requires approval.
+
+### Discussion points
+
+- Why does the suspicious-activity graph branch on whether an action was
+  requested rather than on risk severity?
+- Which safety properties belong in graph code rather than in the model prompt?
+- What would tool discovery failure look like to an operator?
+
+## Module 5: Operate and observe the workflow
 
 ### Objectives
 
@@ -176,7 +272,7 @@ where the platform controls are applied.
 - What should be visible in telemetry and what should remain private?
 - What operational signals would the platform team monitor first?
 
-## Module 5: Extend and harden the platform pattern
+## Module 6: Extend and harden the platform pattern
 
 ### Objectives
 
@@ -213,5 +309,6 @@ operate, and harden an Azure-hosted agentic workflow for a real platform team.
 1. 15 minutes: overview and platform architecture walk-through
 2. 20 minutes: local build and test
 3. 35 minutes: Azure deployment, identity, and infrastructure review
-4. 25 minutes: trace, observe, and troubleshoot a workflow
-5. 20 minutes: extension and hardening exercise
+4. 25 minutes: MCP boundary and agent graph walk-through
+5. 25 minutes: trace, observe, and troubleshoot a workflow
+6. 20 minutes: extension and hardening exercise
