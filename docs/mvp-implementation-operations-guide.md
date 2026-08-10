@@ -35,7 +35,7 @@ workers: they do not query PostgreSQL, call one another, or own workflow transit
 | Foundry boundary | Authenticate and invoke statically configured hosted-agent endpoints | [`FoundryMcpClient.cs`](../src/infrastructure/FoundryMcpClient.cs) |
 | Persistence | Store workflow state and enforce concurrency/idempotency | [`src/infrastructure/Persistence`](../src/infrastructure/Persistence) |
 | Recovery | Claim new or stale work after process/revision failure | [`WorkflowExecutionTrigger.cs`](../src/orchestrator/WorkflowExecutionTrigger.cs), [`WorkflowRecoveryWorker.cs`](../src/orchestrator/WorkflowRecoveryWorker.cs) |
-| Hosted agents | Run LangGraph agent graphs (two single-node, two multi-node) using the configured model | [`src/agents/python/app`](../src/agents/python/app) |
+| Hosted agents | Run LangGraph agent graphs (four multi-node graphs) using the configured model | [`src/agents/python/app`](../src/agents/python/app) |
 | Agent deployer | Create or version Foundry hosted agents | [`deploy.py`](../src/agents/deployer/deploy.py) |
 | Database migrator | Apply EF migrations and grant runtime privileges | [`src/database-migrator/Program.cs`](../src/database-migrator/Program.cs) |
 
@@ -152,12 +152,8 @@ registration:
 - `dispute-planning`
 
 [`registry.py`](../src/agents/python/app/agents/registry.py) maps names to compiled
-graphs. Topology differs by agent:
-[`build_agent_graph`](../src/agents/python/app/agents/base.py) compiles
-`START -> analyze -> END` for the two single-step agents, while
-[`dispute.py`](../src/agents/python/app/agents/dispute.py) and
-[`suspicious_activity.py`](../src/agents/python/app/agents/suspicious_activity.py)
-are multi-node graphs with a conditional edge. See
+graphs. All four are multi-node graphs with a conditional edge whose branch is
+decided in code from data an earlier node extracted. See
 [agent-implementation.md](agent-implementation.md) for the diagrams.
 [`hosted.py`](../src/agents/python/app/hosted.py) exposes the Foundry
 `InvocationAgentServerHost` entry point, while

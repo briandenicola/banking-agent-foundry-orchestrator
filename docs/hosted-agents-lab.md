@@ -186,7 +186,7 @@ where the platform controls are applied.
 
 - explain how the orchestrator discovers and invokes specialists over MCP;
 - read a LangGraph agent graph and identify its nodes and conditional edges;
-- understand why some agents are single-node and others branch.
+- understand why every agent branches, and what each branch protects.
 
 ### The MCP boundary
 
@@ -209,16 +209,30 @@ the MCP server is hand-written rather than built on the official SDK.
 
 ### Agent graph topology
 
-Graph shape follows the decision the agent has to make, not uniformity:
+Graph shape follows the decision the agent has to make. All four agents are
+multi-node graphs with exactly one conditional edge.
 
-| Agent | Shape |
+Every agent branches, and every branch keys on data a node extracted rather than
+on model prose:
+
+| Agent | Branch decides |
 | --- | --- |
-| `workflow-planning` | single node — one classification step |
-| `transaction-explanation` | single node — one explanation step |
-| `suspicious-activity` | multi-node with a conditional edge |
-| `dispute-planning` | multi-node with a conditional edge |
+| `workflow-planning` | whether the customer asked us to *act* — which sets the approval gate |
+| `transaction-explanation` | whether the customer actually identified a transaction |
+| `suspicious-activity` | whether the customer asked us to *change* the account |
+| `dispute-planning` | whether the claim has the facts needed to assess evidence |
 
 ```text
+workflow-planning:
+  START -> interpret_request -> select_specialist -> (conditional)
+        -> gate_action_request -> END
+        -> route_informational -> END
+
+transaction-explanation:
+  START -> extract_reference -> classify_status -> (conditional)
+        -> explain_transaction -> END
+        -> request_transaction_details -> END
+
 dispute-planning:
   START -> extract_claim -> validate_completeness -> (conditional)
         -> request_more_info -> END

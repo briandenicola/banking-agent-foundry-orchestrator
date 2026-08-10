@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from pydantic import ValidationError
 
 from app.agents import get_agent_graph
+from app.agents import planning
 from app.contracts import CONTRACT_VERSION, AgentName, AgentRequest, AgentResult
 from app.model import reason
 
@@ -51,25 +52,54 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
     # ------------------------------------------------------------------
 
     async def _planner_system_prompt(self) -> str:
-        """Invoke the real planner graph against a mocked model and return
-        the system prompt it sent, whitespace-normalised so assertions do
-        not depend on how the instructions happen to be line-wrapped."""
-        structured_model = Mock()
-        structured_model.ainvoke = AsyncMock(
-            return_value=AgentResult(
-                agent=AgentName.WORKFLOW_PLANNING,
-                trace_id="test-trace",
-                intent="suspicious_activity",
-                summary="Classified the request.",
-                risk_level="high",
-                requires_approval=False,
-                recommended_action="Invoke the selected specialist agent.",
-                next_step="invoke_specialist",
-                selected_agent=AgentName.SUSPICIOUS_ACTIVITY,
-            )
-        )
+        """Invoke the real planner graph against a mocked model and return the
+        system prompts it sent, whitespace-normalised so assertions do not
+        depend on how the instructions happen to be line-wrapped.
+
+        The planner is a multi-node graph, so each node sends its own system
+        prompt with its own output schema. Every prompt actually dispatched to
+        the model is concatenated, which keeps this a test of what the model is
+        really told rather than a test of a module constant, and keeps it
+        independent of the order the nodes happen to run in."""
+        prompts: list[str] = []
+
+        def _instance_for(schema):
+            # Each node requests a different structured schema; return a minimal
+            # valid instance of whichever one was asked for.
+            if schema is planning.RequestInterpretation:
+                return planning.RequestInterpretation(
+                    asks_to_act=False,
+                    explicitly_requests_dispute=False,
+                    reports_unrecognized_activity=True,
+                )
+            if schema is planning.SpecialistSelection:
+                return planning.SpecialistSelection(
+                    selected_agent="suspicious-activity",
+                    intent="suspicious_activity",
+                    risk_level="high",
+                    summary="Classified the request.",
+                )
+            if schema is planning.PlanNarrative:
+                return planning.PlanNarrative(
+                    summary="Classified the request.",
+                    recommended_action="Invoke the selected specialist agent.",
+                )
+            raise AssertionError(f"Unexpected structured-output schema: {schema!r}")
+
+        def _with_structured_output(schema):
+            structured_model = Mock()
+
+            async def _ainvoke(messages):
+                prompts.append(
+                    next(content for role, content in messages if role == "system")
+                )
+                return _instance_for(schema)
+
+            structured_model.ainvoke = AsyncMock(side_effect=_ainvoke)
+            return structured_model
+
         model_instance = Mock()
-        model_instance.with_structured_output.return_value = structured_model
+        model_instance.with_structured_output.side_effect = _with_structured_output
 
         with patch("app.model._model", return_value=model_instance):
             await self.invoke(
@@ -77,9 +107,8 @@ class AgentGraphTests(unittest.IsolatedAsyncioTestCase):
                 "This transaction is not mine. Explain what I should review.",
             )
 
-        messages = structured_model.ainvoke.await_args.args[0]
-        system_prompt = next(content for role, content in messages if role == "system")
-        return " ".join(system_prompt.split())
+        self.assertTrue(prompts, "The planner sent no system prompt to the model.")
+        return " ".join(" ".join("\n".join(prompts).split()).split())
 
     async def test_planner_prompt_restricts_dispute_to_explicit_requests(self):
         """A customer saying a charge is not theirs must not be read as a

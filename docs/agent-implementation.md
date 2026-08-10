@@ -42,12 +42,11 @@ the current architecture.
 
 | Concern | Source |
 | --- | --- |
-| LangGraph state and topology | [`base.py`](../src/agents/python/app/agents/base.py#L11-L25) |
-| Planner instructions | [`planning.py`](../src/agents/python/app/agents/planning.py#L4-L12) |
-| Transaction instructions | [`transaction_explanation.py`](../src/agents/python/app/agents/transaction_explanation.py#L4-L11) |
-| Suspicious-activity instructions | [`suspicious_activity.py`](../src/agents/python/app/agents/suspicious_activity.py#L4-L11) |
-| Dispute instructions | [`dispute.py`](../src/agents/python/app/agents/dispute.py#L4-L11) |
-| Agent registry | [`registry.py`](../src/agents/python/app/agents/registry.py#L9-L18) |
+| LangGraph graph registry | [`registry.py`](../src/agents/python/app/agents/registry.py) |
+| Planner graph and instructions | [`planning.py`](../src/agents/python/app/agents/planning.py) |
+| Transaction graph and instructions | [`transaction_explanation.py`](../src/agents/python/app/agents/transaction_explanation.py) |
+| Suspicious-activity graph and instructions | [`suspicious_activity.py`](../src/agents/python/app/agents/suspicious_activity.py) |
+| Dispute graph and instructions | [`dispute.py`](../src/agents/python/app/agents/dispute.py) |
 | Request/result schemas | [`contracts.py`](../src/agents/python/app/contracts.py#L9-L40) |
 | Model and deterministic fallback | [`model.py`](../src/agents/python/app/model.py#L15-L143) |
 | Foundry hosted entrypoint | [`hosted.py`](../src/agents/python/app/hosted.py#L20-L67) |
@@ -66,47 +65,100 @@ the current architecture.
 
 ## 1. LangGraph code
 
-### Two graph shapes
+### One graph shape
 
-The four agents do **not** share one topology. Two are genuinely single-step and
-use a single-node wrapper; two make a branching decision and are real multi-node
-graphs.
+All four agents are real multi-node LangGraph graphs. Each runs a short
+sequence of nodes and then takes a **conditional edge** whose branch is decided
+in code from data an earlier node extracted — never from model prose.
 
-| Agent | Shape | Why |
+| Agent | Nodes | The branch, and why it exists |
 | --- | --- | --- |
-| `workflow-planning` | Single node | Classification is one structured decision. There is nothing to branch on before the answer exists. |
-| `transaction-explanation` | Single node | Explaining a transaction is one informational step. |
-| `suspicious-activity` | Multi-node, 1 conditional edge | Whether the customer asked us to *change* the account changes what the agent may do. |
-| `dispute-planning` | Multi-node, 1 conditional edge | A claim missing required facts cannot be assessed for evidence. |
+| `workflow-planning` | 4 | Whether the customer asked us to *act* decides the approval gate. Routing on risk instead would gate high-risk informational questions. |
+| `transaction-explanation` | 4 | Whether the customer actually identified a transaction decides whether we can explain one at all. Explaining an unidentified transaction means fabricating a merchant or amount. |
+| `suspicious-activity` | 4 | Whether the customer asked us to *change* the account changes what the agent may do. |
+| `dispute-planning` | 5 | A claim missing required facts cannot be assessed for evidence. |
 
-**A single node is the correct shape for a genuinely single-step agent.** Adding
-nodes to `workflow-planning` or `transaction-explanation` would add latency and
-cost without adding a decision. The multi-node graphs exist where there is a real
-branch, not to demonstrate LangGraph for its own sake.
+**The branch is the point.** Nodes exist where there is a real decision to make
+and a safety rule to enforce in code, not to demonstrate LangGraph for its own
+sake. Every conditional edge above keys on a value a node *extracted*, so a
+confident model cannot argue its way past the rule.
 
-### Single-node agents
+### `workflow-planning`: conditional on acting versus understanding
 
-[`build_agent_graph`](../src/agents/python/app/agents/base.py#L16-L25) compiles
-this graph for the two single-step agents:
+[`planning.py`](../src/agents/python/app/agents/planning.py):
 
 ```text
-START -> analyze -> END
+START -> interpret_request -> select_specialist -> (conditional)
+                                                   |-> gate_action_request -> END
+                                                   |-> route_informational -> END
 ```
-
-using the two-field [`AgentState`](../src/agents/python/app/agents/base.py#L11-L14):
 
 ```python
-class AgentState(TypedDict):
+class PlanningState(TypedDict, total=False):
     request: AgentRequest
-    result: AgentResult | None
+    interpretation: RequestInterpretation  # what was asked; feeds the branch
+    selection: SpecialistSelection         # exactly one specialist
+    downgraded: bool                       # an unrequested dispute was rejected
+    used_fallback: bool
+    result: AgentResult
 ```
 
-The `analyze` node calls `reason(agent, instructions, state["request"])` and
-returns `{"result": result}`.
+Three safety properties are enforced by code rather than by prompt:
 
-| Agent | Code | Responsibility encoded in its prompt |
+- `interpret_request` **OR**-s the model's `asks_to_act` with a keyword check
+  (`ACTION_TERMS`), so a model that overlooks "freeze my card" still reaches the
+  approval gate. It **AND**-s `explicitly_requests_dispute` with a keyword check
+  (`DISPUTE_TERMS`), so an *inferred* dispute cannot be manufactured. The two
+  directions are deliberate: fail toward gating, and fail away from unrequested
+  disputes.
+- `select_specialist` downgrades a `dispute-planning` selection to
+  `suspicious-activity` whenever the customer did not explicitly ask for a
+  dispute, and records the reason in `evidence` for the audit trail.
+  Unrecognised activity alone is suspicious-activity.
+- `select_specialist` also escalates a `transaction-explanation` selection to
+  `suspicious-activity` when the customer asked for an action. That agent
+  hard-codes `requires_approval=False`, so routing an action request there would
+  let it reach a terminal state with no approval gate. This escalation is
+  likewise recorded in `evidence`.
+- `requires_approval` is set by the branch, never by model output. Risk level
+  and approval stay independent: a message may be high risk and still need no
+  approval.
+
+### `transaction-explanation`: conditional on whether a transaction was identified
+
+[`transaction_explanation.py`](../src/agents/python/app/agents/transaction_explanation.py):
+
+```text
+START -> extract_reference -> classify_status -> (conditional)
+                                                 |-> explain_transaction -> END
+                                                 |-> request_transaction_details -> END
+```
+
+```python
+class ExplanationState(TypedDict, total=False):
+    request: AgentRequest
+    reference: TransactionReference  # merchant/amount/date/descriptor; selects the branch
+    assessment: StatusAssessment     # pending, posted, reversed, recurring, ...
+    used_fallback: bool
+    result: AgentResult
+```
+
+- The branch reads `reference.has_identifying_detail()` — extracted data — not
+  the model's opinion of whether it can answer. A model asked to explain an
+  unidentified transaction will invent a merchant, amount, or date; the graph
+  short circuits to an explicit request for details instead.
+- `extract_reference` leaves unstated fields `null` and its fallback returns an
+  empty reference, because guessing is the exact failure this agent must avoid.
+  A consequence worth knowing: with `ALLOW_FALLBACK=true` and no model, this
+  agent *always* takes the request-details branch, since nothing extracted the
+  reference. That is deliberate — asking is honest, inventing a merchant is not.
+- **Both** terminal branches hard-code `requires_approval=False` and
+  `risk_level="low"`. This agent is informational by charter: it never modifies
+  an account, so it must never open an approval gate.
+
+| Agent | Code | Responsibility |
 | --- | --- | --- |
-| `workflow-planning` | [`planning.py`](../src/agents/python/app/agents/planning.py) | Classify intent, recommend one specialist, assess risk, and recommend whether approval is needed; never act. |
+| `workflow-planning` | [`planning.py`](../src/agents/python/app/agents/planning.py) | Classify intent, select exactly one specialist, assess risk, and decide whether approval is needed; never act. |
 | `transaction-explanation` | [`transaction_explanation.py`](../src/agents/python/app/agents/transaction_explanation.py) | Explain transaction status using supplied context without inventing account or merchant data. |
 
 ### `dispute-planning`: conditional on claim completeness
@@ -185,7 +237,8 @@ a missing model endpoint raises `ModelUnavailableError` instead.
 ### Invocation cost
 
 A multi-node graph issues **one model call per node it visits**: up to four for
-`dispute-planning` and three for `suspicious-activity`. `BANKING_AGENT_INVOKE_TIMEOUT_SECONDS`
+`dispute-planning` and three for each of the other three agents.
+`BANKING_AGENT_INVOKE_TIMEOUT_SECONDS`
 is therefore deployed at 90s, and the orchestrator's
 `FOUNDRY_ATTEMPT_TIMEOUT_SECONDS` at 100s so the agent's own timeout surfaces
 first.
