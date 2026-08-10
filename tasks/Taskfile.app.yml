@@ -27,7 +27,7 @@ tasks:
             -backend-config="container_name={{.TF_BACKEND_CONTAINER}}" \
             -backend-config="key={{.TF_STATE_ENVIRONMENT}}/apps.tfstate"
         else
-          terraform -chdir=./apps init -reconfigure -backend=false -input=false
+          terraform -chdir=./apps init -reconfigure -input=false
         fi
 
         terraform -chdir=./apps validate
@@ -141,7 +141,7 @@ tasks:
             -backend-config="container_name={{.TF_BACKEND_CONTAINER}}" \
             -backend-config="key={{.TF_STATE_ENVIRONMENT}}/apps.tfstate"
         else
-          terraform -chdir=./apps init -reconfigure -backend=false -input=false
+          terraform -chdir=./apps init -reconfigure -input=false
         fi
 
         terraform -chdir=./apps apply -compact-warnings \
@@ -196,7 +196,7 @@ tasks:
             -backend-config="container_name={{.TF_BACKEND_CONTAINER}}" \
             -backend-config="key={{.TF_STATE_ENVIRONMENT}}/apps.tfstate"
         else
-          terraform -chdir=./apps init -reconfigure -backend=false -input=false
+          terraform -chdir=./apps init -reconfigure -input=false
         fi
 
         terraform -chdir=./apps destroy -compact-warnings \

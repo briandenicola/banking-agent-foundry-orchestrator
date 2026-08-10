@@ -3,7 +3,12 @@ version: "3"
 vars:
   ENDPOINT_POINT: FOUNDRY_NEXTGEN_ENDPOINT
   INFRA_DIR: infrastructure
+  APPS_DIR: apps
   APP_PORT: 8082
+  # Must match the Application tag applied by Terraform in
+  # infrastructure/locals.tf and apps/main.tf. The teardown safety net matches
+  # resource groups on this tag, so a mismatch silently orphans resources.
+  RESOURCE_TAG: Banking Agent
 
 tasks:
   default:
@@ -89,8 +94,19 @@ tasks:
 
         terraform -chdir=./{{.INFRA_DIR}} destroy -auto-approve -compact-warnings \
           -var "region={{.REGION}}"
-      - az group list --tag Application="{{.TITLE}}" --query "[].name" -o tsv | xargs --no-run-if-empty -ot -n 1 az group delete -y --no-wait -n || true
-      - rm -rf terraform.tfstate.d .terraform.lock.hcl .terraform terraform.tfstate terraform.tfstate.backup .terraform.tfstate.lock.info terraform.tfstate.* || true
+      - az group list --tag Application="{{.RESOURCE_TAG}}" --query "[].name" -o tsv | xargs --no-run-if-empty -ot -n 1 az group delete -y --no-wait -n || true
+      - |
+        # State artifacts live inside each stack directory, not the repo root.
+        # The provider lock file is intentionally committed, so it is preserved.
+        for dir in "{{.INFRA_DIR}}" "{{.APPS_DIR}}"; do
+          rm -rf \
+            "./$dir/terraform.tfstate.d" \
+            "./$dir/.terraform" \
+            "./$dir/.terraform.tfstate.lock.info" \
+            "./$dir"/terraform.tfstate \
+            "./$dir"/terraform.tfstate.backup \
+            "./$dir"/terraform.tfstate.* || true
+        done
     vars:
       REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
 
