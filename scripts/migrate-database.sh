@@ -2,6 +2,9 @@
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/containerapp-job-logs.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/guard-stack-alignment.sh"
+
+assert_stacks_aligned
 
 job_name="$(terraform -chdir=./apps output -raw DATABASE_MIGRATOR_JOB_NAME)"
 resource_group="$(terraform -chdir=./apps output -raw APPS_RESOURCE_GROUP_NAME)"
