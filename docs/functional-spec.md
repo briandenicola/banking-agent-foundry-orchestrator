@@ -13,6 +13,7 @@ This spec describes the target design. The following parts are **not yet** imple
 | Spec statement | Actual behaviour on `main` | Tracked |
 |---|---|---|
 | LangGraph agents resume mid-graph after failure | All four agents are multi-node graphs with conditional edges, but no agent uses a LangGraph checkpointer, so a failed invocation restarts from the first node rather than resuming. | [#41](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/41) |
+| Service-to-service calls are authenticated with Entra ID | The target tenant denies the app registration this requires, so deployments run with `ENABLE_SERVICE_AUTH=false`. The orchestrator is on internal ingress and is not publicly reachable, but the Web UI remains public and unauthenticated and can start and approve workflows. Exposure is reduced, not closed. | [#40](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/40) |
 
 
 ## Primary user journey

@@ -78,8 +78,11 @@ resource "azurerm_container_app" "webui" {
       }
 
       env {
-        name  = "ORCHESTRATOR_API_BASE_URL"
-        value = "https://${azurerm_container_app.orchestrator.ingress[0].fqdn}"
+        name = "ORCHESTRATOR_API_BASE_URL"
+        # Environment-internal FQDN. See local.orchestrator_internal_fqdn for why
+        # this is constructed instead of read from the orchestrator's computed
+        # ingress attribute.
+        value = local.orchestrator_internal_url
       }
 
       env {
@@ -102,5 +105,10 @@ resource "azurerm_container_app" "webui" {
   depends_on = [
     azurerm_role_assignment.acr_pull,
     azuread_app_role_assignment.webui_workflow_invoke,
+    # ORCHESTRATOR_API_BASE_URL is now a constructed string rather than a
+    # reference to the orchestrator resource, so state the ordering explicitly:
+    # the orchestrator must be on internal ingress before the Web UI is pointed
+    # at its internal FQDN.
+    azurerm_container_app.orchestrator,
   ]
 }

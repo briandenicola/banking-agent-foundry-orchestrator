@@ -583,7 +583,38 @@ start and approve workflows**. Never use this for real or regulated data. The
 system reports the state honestly rather than hiding it: readiness returns
 `service_auth: Degraded`, and the orchestrator logs a startup warning.
 
-Prefer restricting ingress as well, so the exposure is not public.
+### Internal ingress: what it does and does not fix
+
+Because service authentication cannot be provisioned in such a tenant, the
+orchestrator runs on **internal ingress** (`external_enabled = false` in
+`apps/orchestrator.tf`). It is reachable only from inside the Container Apps
+environment, so its unauthenticated workflow and approval endpoints are not
+exposed to the internet. The Web UI reaches it over the environment-internal
+FQDN.
+
+**This is a reduction in exposure, not authentication.** The Web UI remains
+public and unauthenticated — `src/webui/Program.cs` calls `UseAuthorization()`
+without registering an authentication scheme — and the Web UI can start *and*
+approve workflows. Anyone who can reach the Web UI can still drive the system.
+Internal ingress removes the public API, not the ability to use it. Do not
+describe this deployment as secured. Issue #40 tracks the remaining work.
+
+Two consequences worth knowing:
+
+- `ORCHESTRATOR_URL` is now the internal FQDN and is **not routable from an
+  operator workstation**. Anything outside the environment must go through the
+  Web UI.
+- `scripts/smoke-mvp.py` detects the `.internal.` marker and adapts. Orchestrator
+  health is verified transitively through the Web UI readiness probe, which runs
+  `OrchestratorReadinessCheck` against the orchestrator's own `/health/ready`
+  from inside the environment. The authentication baseline check asserts the
+  approval endpoint is unreachable from the internet and continues to report
+  `authentication_required: false`, so the residual exposure stays visible.
+
+The remaining public surface is the Web UI. Restricting it further requires an
+ingress IP allowlist (`ip_security_restriction`), which is supported by the
+provider in use but is not configured here, because pinning the allowlist to one
+egress IP breaks the lab whenever it is presented from a different network.
 
 ## 8. Telemetry and correlation
 

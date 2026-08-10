@@ -16,9 +16,18 @@ resource "azurerm_container_app" "orchestrator" {
     identity = azurerm_user_assigned_identity.this["orchestrator"].id
   }
 
+  # Internal ingress: the orchestrator is reachable only from inside the
+  # Container Apps environment, so its unauthenticated workflow and approval
+  # endpoints are not exposed to the internet. The Web UI reaches it over the
+  # environment-internal FQDN.
+  #
+  # This reduces exposure; it is not authentication. Service authentication
+  # requires directory objects this tenant denies (see issue #40), so anyone who
+  # can reach the *Web UI* can still start and approve workflows. Do not treat
+  # this as a secured deployment.
   ingress {
     allow_insecure_connections = false
-    external_enabled           = true
+    external_enabled           = false
     target_port                = 8080
     transport                  = "auto"
 

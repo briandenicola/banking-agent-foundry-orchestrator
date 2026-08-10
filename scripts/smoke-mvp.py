@@ -254,12 +254,81 @@ def expect_status(actual: int, expected: int, body: dict[str, Any]) -> None:
         raise SmokeFailure(f"Expected HTTP {expected}, received {actual}: {body}")
 
 
-def check_health(orchestrator_url: str, timeout: int) -> dict[str, Any]:
+def orchestrator_is_internal(orchestrator_url: str) -> bool:
+    """True when the orchestrator runs on environment-internal ingress.
+
+    Container Apps internal FQDNs take the form
+    ``<app>.internal.<suffix>.<region>.azurecontainerapps.io``. Detecting the
+    marker keeps smoke working against both ingress modes, so a stack deployed
+    before the lockdown still reports honestly rather than failing to collect.
+    """
+    hostname = urlparse(orchestrator_url).hostname or ""
+    return ".internal." in hostname
+
+
+def assert_not_publicly_reachable(url: str, timeout: int, description: str) -> None:
+    """Fail unless *url* is unreachable from where smoke is running.
+
+    An HTTP response of any status means the endpoint answered, which means the
+    lockdown did not hold. Only a DNS or connection failure proves it did.
+    """
+    request = Request(
+        url,
+        headers={"User-Agent": "banking-agent-mvp-smoke/1.0"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            status = response.status
+    except HTTPError as error:
+        raise SmokeFailure(
+            f"{description} answered HTTP {error.code} from the public internet. "
+            "The orchestrator is meant to be reachable only inside the Container "
+            "Apps environment."
+        ) from error
+    except (URLError, OSError):
+        return
+    raise SmokeFailure(
+        f"{description} answered HTTP {status} from the public internet. "
+        "The orchestrator is meant to be reachable only inside the Container "
+        "Apps environment."
+    )
+
+
+def check_health(orchestrator_url: str, webui_url: str, timeout: int) -> dict[str, Any]:
+    """Verify orchestrator health, by whichever route its ingress allows.
+
+    With internal ingress the orchestrator cannot be probed from an operator
+    workstation, so this asserts two things instead: the public internet cannot
+    reach it, and the Web UI still reports it healthy. The Web UI's
+    ``/health/ready`` runs ``OrchestratorReadinessCheck``, which calls the
+    orchestrator's own ``/health/ready`` from inside the environment, so a 200
+    here is genuine transitive evidence rather than a weaker substitute.
+    """
+    if orchestrator_is_internal(orchestrator_url):
+        assert_not_publicly_reachable(
+            f"{orchestrator_url}/health/ready",
+            timeout,
+            "Orchestrator readiness",
+        )
+        readiness = check_webui_readiness(webui_url, timeout)["readiness"]
+        return {
+            "ingress": "internal",
+            "reachable_from_internet": False,
+            "orchestrator_readiness_via_webui": readiness,
+            "note": (
+                "The orchestrator is not publicly routable. Its health is verified "
+                "through the Web UI readiness probe, which runs "
+                "OrchestratorReadinessCheck against the orchestrator's own "
+                "/health/ready from inside the environment."
+            ),
+        }
+
     endpoints = {
         "liveness": f"{orchestrator_url}/health/live",
         "readiness": f"{orchestrator_url}/health/ready",
     }
-    statuses: dict[str, int] = {}
+    statuses: dict[str, Any] = {"ingress": "external"}
     for name, url in endpoints.items():
         request = Request(
             url,
@@ -772,7 +841,14 @@ def check_workflows(
     }
 
 
-def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -> dict[str, Any]:
+def check_workflows_via_webui(
+    webui_url: str,
+    timeout: int,
+    poll_timeout: int,
+    direct_api_skip_reason: str = (
+        "Direct API token unavailable; workflow lookup remains covered by API tests."
+    ),
+) -> dict[str, Any]:
     """Exercise all four workflow scenarios via the Web UI (managed-identity path).
 
     After each form POST the Web UI reflects the initial status (Draft under
@@ -879,7 +955,7 @@ def check_workflows_via_webui(webui_url: str, timeout: int, poll_timeout: int) -
         },
         "workflow_get_state": {
             "skipped": True,
-            "reason": "Direct API token unavailable; workflow lookup remains covered by API tests.",
+            "reason": direct_api_skip_reason,
         },
     }
 
@@ -960,9 +1036,34 @@ def check_authentication_baseline(
     timeout: int,
     authentication_expected: bool,
 ) -> dict[str, Any]:
+    """Record the deployment's actual authentication posture, honestly.
+
+    This check exists to prove the exposure, so it must never quietly stop
+    testing. With internal ingress the control is network reachability rather
+    than identity, so it asserts the approval endpoint cannot be reached from
+    the public internet -- and still reports that no authentication is enforced,
+    because internal ingress is a reduction in exposure, not a fix.
+    """
+    approval_url = (
+        f"{orchestrator_url}/api/v1/workflows/00000000-0000-0000-0000-000000000001/approval"
+    )
+
+    if orchestrator_is_internal(orchestrator_url):
+        assert_not_publicly_reachable(approval_url, timeout, "Orchestrator approval endpoint")
+        return {
+            "control": "internal-ingress",
+            "anonymous_reachable_from_internet": False,
+            "authentication_required": False,
+            "residual_exposure": (
+                "The Web UI remains public and unauthenticated, and can start and "
+                "approve workflows. Internal ingress removes the public API, not the "
+                "ability to drive it. See issue #40."
+            ),
+        }
+
     status, body = request_json(
         "POST",
-        f"{orchestrator_url}/api/v1/workflows/00000000-0000-0000-0000-000000000001/approval",
+        approval_url,
         body={"decision": "approve", "reason": "Authentication baseline probe"},
         timeout=timeout,
     )
@@ -977,6 +1078,7 @@ def check_authentication_baseline(
         )
 
     return {
+        "control": "public-ingress",
         "anonymous_http_status": status,
         "authentication_required": status == 401,
     }
@@ -1026,7 +1128,7 @@ def main() -> int:
     orchestrator_token = os.environ.get("ORCHESTRATOR_ACCESS_TOKEN", "").strip() or None
 
     checks = [
-        run_check("orchestrator-health", lambda: check_health(orchestrator_url, args.timeout)),
+        run_check("orchestrator-health", lambda: check_health(orchestrator_url, webui_url, args.timeout)),
         run_check("webui-readiness", lambda: check_webui_readiness(webui_url, args.timeout)),
         run_check(
             "container-app-revisions",
@@ -1057,8 +1159,19 @@ def main() -> int:
                     args.poll_timeout,
                     orchestrator_token,
                 )
-                if orchestrator_token
-                else check_workflows_via_webui(webui_url, args.timeout, args.poll_timeout)
+                if orchestrator_token and not orchestrator_is_internal(orchestrator_url)
+                else check_workflows_via_webui(
+                    webui_url,
+                    args.timeout,
+                    args.poll_timeout,
+                    direct_api_skip_reason=(
+                        "Orchestrator ingress is internal, so the direct API is not "
+                        "reachable from here; workflow lookup remains covered by API tests."
+                        if orchestrator_is_internal(orchestrator_url)
+                        else "Direct API token unavailable; workflow lookup remains "
+                        "covered by API tests."
+                    ),
+                )
             ),
         ),
     ]

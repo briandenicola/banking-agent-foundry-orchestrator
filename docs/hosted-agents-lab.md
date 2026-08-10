@@ -167,6 +167,10 @@ Security posture for the default lab deployment:
   `TF_VAR_allow_insecure_service_auth=true`. Workflow endpoints then accept
   unauthenticated callers, `/health/ready` reports `service_auth` as `Degraded`,
   and the configuration is rejected in Production. Never use it with real data.
+  The orchestrator runs on internal ingress so those endpoints are not reachable
+  from the internet, but the Web UI stays public and unauthenticated and can
+  still start and approve workflows. That is a smaller attack surface, not a
+  secure one.
 
 Migration job troubleshooting:
 

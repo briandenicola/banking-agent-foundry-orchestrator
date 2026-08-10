@@ -10,6 +10,22 @@ locals {
   orchestrator_app_name = "${var.app_name}-orchestrator"
   webui_app_name        = "${var.app_name}-webui"
 
+  # The orchestrator's internal FQDN, constructed rather than read from
+  # azurerm_container_app.orchestrator.ingress[0].fqdn.
+  #
+  # This is deliberate. Switching ingress from external to internal changes the
+  # FQDN, but the provider does not mark that computed attribute as unknown, so
+  # Terraform would plan the Web UI using the *old* external FQDN and leave it
+  # pointing at a hostname that no longer resolves. The Web UI would lose the
+  # orchestrator until a second apply corrected the drift.
+  #
+  # Container Apps derives both forms from the environment's default domain:
+  #   external: <app>.<default_domain>
+  #   internal: <app>.internal.<default_domain>
+  # Building it here makes the value known at plan time, so one apply is enough.
+  orchestrator_internal_fqdn = "${local.orchestrator_app_name}.internal.${data.azurerm_container_app_environment.this.default_domain}"
+  orchestrator_internal_url  = "https://${local.orchestrator_internal_fqdn}"
+
   orchestrator_image      = "${data.azurerm_container_registry.this.login_server}/orchestrator:${var.image_tag}"
   webui_image             = "${data.azurerm_container_registry.this.login_server}/webui:${var.image_tag}"
   hosted_agents_image     = "${data.azurerm_container_registry.this.login_server}/hosted-agents:${var.image_tag}"
