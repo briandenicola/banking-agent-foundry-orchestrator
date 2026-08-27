@@ -14,6 +14,9 @@ from azure.identity import ManagedIdentityCredential
 
 
 API_VERSION = "v1"
+# Memory stores are a preview feature served under their own api-version, which
+# is distinct from the (stable) v1 used by the agents API.
+MEMORY_API_VERSION = "2025-11-15-preview"
 TOKEN_SCOPE = "https://ai.azure.com/.default"
 READY_STATUSES = {"active", "running"}
 PENDING_STATUSES = {"creating", "starting", "updating"}
@@ -29,6 +32,60 @@ LEGACY_PROJECT_ENDPOINT_ENV_VAR = "FOUNDRY_PROJECT_ENDPOINT"
 class AgentDefinition:
     name: str
     kind: str
+
+
+@dataclass(frozen=True)
+class MemoryAgentDefinition:
+    """A Foundry `prompt` agent with the managed memory search tool attached.
+
+    Unlike the hosted container agents, Foundry itself runs the model loop and
+    the memory tool for this agent, so there is no image to build.
+    """
+
+    agent_name: str
+    memory_store_name: str
+    instructions: str
+    user_profile_details: str
+    scope: str = "{{$userId}}"
+    update_delay_seconds: int = 300
+    ttl_seconds: int = 2592000
+
+    def tool(self) -> dict[str, Any]:
+        return {
+            "type": "memory_search_preview",
+            "memory_store_name": self.memory_store_name,
+            "scope": self.scope,
+            "update_delay": self.update_delay_seconds,
+        }
+
+    def definition(self, model_deployment: str) -> dict[str, Any]:
+        return {
+            "kind": "prompt",
+            "model": model_deployment,
+            "instructions": self.instructions,
+            "tools": [self.tool()],
+        }
+
+    def store_body(self, chat_model: str, embedding_model: str) -> dict[str, Any]:
+        return {
+            "name": self.memory_store_name,
+            "description": "Banking assistant customer memory",
+            "definition": {
+                "kind": "default",
+                "chat_model": chat_model,
+                "embedding_model": embedding_model,
+                "options": {
+                    "chat_summary_enabled": True,
+                    "user_profile_enabled": True,
+                    # Memory extraction is model-driven, so the only durable
+                    # control over what lands in the store is this instruction.
+                    # Banking chat is dense with exactly the data we must not
+                    # retain, so it is set deliberately rather than defaulted.
+                    "user_profile_details": self.user_profile_details,
+                    "default_ttl_seconds": self.ttl_seconds,
+                },
+            },
+        }
 
 
 class FoundryClient:
@@ -115,6 +172,99 @@ class FoundryClient:
         if status not in READY_STATUSES:
             self._wait_until_running(agent.name, version)
         return version
+
+    def ensure_memory_store(
+        self,
+        agent: MemoryAgentDefinition,
+        chat_model: str,
+        embedding_model: str,
+    ) -> None:
+        path = f"/memory_stores/{quote(agent.memory_store_name, safe='')}"
+        try:
+            self._request("GET", path, api_version=MEMORY_API_VERSION)
+            print(
+                f"{agent.memory_store_name}: memory store already exists; skipping create",
+                flush=True,
+            )
+            return
+        except HTTPError as error:
+            if error.code != 404:
+                raise
+
+        self._request(
+            "POST",
+            "/memory_stores",
+            agent.store_body(chat_model, embedding_model),
+            api_version=MEMORY_API_VERSION,
+        )
+        print(f"{agent.memory_store_name}: created memory store", flush=True)
+
+    def deploy_prompt_agent(
+        self,
+        agent: MemoryAgentDefinition,
+        model_deployment: str,
+    ) -> str:
+        definition = agent.definition(model_deployment)
+
+        existing_version = self._find_matching_prompt_version(agent, definition)
+        if existing_version is not None:
+            version, status = existing_version
+            if status in PENDING_STATUSES:
+                self._wait_until_running(agent.agent_name, version)
+                return version
+
+            print(
+                f"{agent.agent_name}: version {version} already matches definition; skipping",
+                flush=True,
+            )
+            return version
+
+        if self._agent_exists(agent.agent_name):
+            result = self._request(
+                "POST",
+                f"/agents/{quote(agent.agent_name, safe='')}/versions",
+                {"definition": definition},
+            )
+        else:
+            result = self._request(
+                "POST",
+                "/agents",
+                {"name": agent.agent_name, "definition": definition},
+            )
+
+        version = _version(result)
+        if not version:
+            raise RuntimeError(f"{agent.agent_name}: Foundry did not return a created version")
+
+        status = str(result.get("status", "")).lower()
+        if status not in READY_STATUSES:
+            self._wait_until_running(agent.agent_name, version)
+        return version
+
+    def _find_matching_prompt_version(
+        self,
+        agent: MemoryAgentDefinition,
+        definition: dict[str, Any],
+    ) -> tuple[str, str] | None:
+        if not self._agent_exists(agent.agent_name):
+            return None
+
+        response = self._request("GET", f"/agents/{quote(agent.agent_name, safe='')}/versions")
+        for version in _items(response):
+            status = str(version.get("status", "")).lower()
+            if status not in READY_STATUSES | PENDING_STATUSES:
+                continue
+
+            existing = version.get("definition") or {}
+            if (
+                existing.get("kind") == definition["kind"]
+                and existing.get("model") == definition["model"]
+                and existing.get("instructions") == definition["instructions"]
+                and _tools(existing) == definition["tools"]
+            ):
+                return str(version.get("version")), status
+
+        return None
 
     def _agent_exists(self, name: str) -> bool:
         try:
@@ -206,8 +356,10 @@ class FoundryClient:
         method: str,
         path: str,
         body: dict[str, Any] | None = None,
+        *,
+        api_version: str = API_VERSION,
     ) -> dict[str, Any]:
-        url = f"{self._endpoint}{path}?api-version={API_VERSION}"
+        url = f"{self._endpoint}{path}?api-version={api_version}"
         payload = json.dumps(body).encode("utf-8") if body is not None else None
 
         for attempt in range(1, self._attempts + 1):
@@ -252,6 +404,28 @@ class FoundryClient:
             time.sleep(self._retry_delay_seconds * attempt)
 
         raise AssertionError("request retry loop exited unexpectedly")
+
+
+TOOL_COMPARISON_KEYS = ("type", "memory_store_name", "scope", "update_delay")
+
+
+def _tools(definition: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project returned tools onto the keys we set.
+
+    Foundry echoes back server-side defaults alongside the fields we submit, so
+    comparing the raw payloads would report a difference on every run and
+    create a new agent version each deploy.
+    """
+
+    tools = definition.get("tools")
+    if not isinstance(tools, list):
+        return []
+
+    return [
+        {key: tool.get(key) for key in TOOL_COMPARISON_KEYS if key in tool}
+        for tool in tools
+        if isinstance(tool, dict)
+    ]
 
 
 def _items(response: Any) -> list[dict[str, Any]]:
@@ -300,6 +474,38 @@ def _project_endpoint() -> str:
     return endpoint
 
 
+def _memory_agent() -> MemoryAgentDefinition | None:
+    """Build the memory-backed prompt agent from configuration.
+
+    Returns None when the feature is not configured, so an environment without
+    an embedding model deployment continues to deploy the hosted agents.
+    """
+
+    store_name = os.getenv("MEMORY_STORE_NAME", "").strip()
+    if not store_name:
+        return None
+
+    user_profile_details = os.getenv("MEMORY_USER_PROFILE_DETAILS", "").strip()
+    if not user_profile_details:
+        raise KeyError(
+            "MEMORY_USER_PROFILE_DETAILS must be set when MEMORY_STORE_NAME is configured. "
+            "Memory extraction is model-driven, so the redaction instruction is required."
+        )
+
+    instructions = os.getenv("MEMORY_AGENT_INSTRUCTIONS", "").strip()
+    if not instructions:
+        raise KeyError("MEMORY_AGENT_INSTRUCTIONS must be set when MEMORY_STORE_NAME is configured")
+
+    return MemoryAgentDefinition(
+        agent_name=os.getenv("MEMORY_AGENT_NAME", "customer-profile").strip(),
+        memory_store_name=store_name,
+        instructions=instructions,
+        user_profile_details=user_profile_details,
+        update_delay_seconds=int(os.getenv("MEMORY_UPDATE_DELAY_SECONDS", "300")),
+        ttl_seconds=int(os.getenv("MEMORY_TTL_SECONDS", "2592000")),
+    )
+
+
 def main() -> int:
     endpoint = _project_endpoint()
     client_id = os.environ["AZURE_CLIENT_ID"]
@@ -311,6 +517,14 @@ def main() -> int:
     deployed = {}
     for agent in agents:
         deployed[agent.name] = client.deploy(agent, image, model_deployment, endpoint)
+
+    memory_agent = _memory_agent()
+    if memory_agent is not None:
+        embedding_deployment = os.environ["AZURE_AI_EMBEDDING_DEPLOYMENT_NAME"]
+        client.ensure_memory_store(memory_agent, model_deployment, embedding_deployment)
+        deployed[memory_agent.agent_name] = client.deploy_prompt_agent(
+            memory_agent, model_deployment
+        )
 
     print(json.dumps({"status": "ok", "agents": deployed}, sort_keys=True), flush=True)
     return 0

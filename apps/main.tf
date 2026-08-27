@@ -6,6 +6,32 @@ locals {
   foundry_name     = "${var.app_name}-foundry"
   foundry_project  = "${var.app_name}-project"
   model_deployment = "gpt-5.4-mini"
+  # Foundry memory stores require an embedding deployment in addition to the
+  # chat model.
+  embedding_deployment = "text-embedding-3-small"
+
+  memory_store_name = "customer_profile_memory"
+  memory_agent_name = "customer-profile"
+
+  # Memory extraction is model-driven. In a banking assistant the conversation
+  # is full of exactly the data that must not be retained, so the exclusion
+  # instruction is explicit configuration rather than a default.
+  memory_user_profile_details = join(" ", [
+    "Retain only servicing preferences such as preferred contact channel,",
+    "language, accessibility needs, and communication tone.",
+    "Never retain account numbers, card numbers, balances, transaction",
+    "amounts, financial details, government identifiers, credentials,",
+    "precise location, date of birth, or age.",
+  ])
+
+  memory_agent_instructions = join(" ", [
+    "You are a retail banking servicing assistant.",
+    "Use remembered servicing preferences to personalise how you respond.",
+    "Never store or repeat account numbers, card numbers, balances,",
+    "transaction amounts, or government identifiers.",
+    "You provide guidance only; you never approve, action, or commit to any",
+    "account change. Direct the customer to a banker for actions.",
+  ])
 
   orchestrator_app_name = "${var.app_name}-orchestrator"
   webui_app_name        = "${var.app_name}-webui"

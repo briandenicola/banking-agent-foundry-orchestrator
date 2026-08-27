@@ -13,6 +13,11 @@ locals {
   foundry_project_name      = "${local.resource_name}-project"
   model_deployment_name     = "gpt-5.4-mini"
   model_version             = "2026-03-17"
+  # Foundry memory stores require an embedding model deployment alongside the
+  # chat model. GlobalStandard is the only shared SKU offered for this model in
+  # the supported regions; plain Standard is not available.
+  embedding_deployment_name = "text-embedding-3-small"
+  embedding_model_version   = "1"
 
   tags = {
     Application = "Banking Agent"

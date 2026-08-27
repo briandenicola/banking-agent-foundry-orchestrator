@@ -38,6 +38,34 @@ and durable persistence while the hosted agents remain specialized reasoning
 services. The implementation details in this document are the source of truth for
 the current architecture.
 
+## Foundry memory and tools
+
+Four of the five agents use **neither** Foundry memory nor Foundry-managed
+tools. `workflow-planning`, `transaction-explanation`, `suspicious-activity`,
+and `dispute-planning` are `kind: hosted` container agents that declare no
+`tools` array and hold no state between invocations.
+
+Two things in this repository look like exceptions but are not:
+
+- `"memory": "1Gi"` in [`deploy.py`](../src/agents/deployer/deploy.py) is
+  **container RAM**, not Foundry memory.
+- The MCP tools are **our own** JSON-RPC tools called by the C# orchestrator.
+  They are not registered with Foundry.
+
+A fifth agent, `customer-profile`, is a `kind: prompt` agent with the Foundry
+`memory_search_preview` tool attached. Foundry runs its model loop and its
+memory tool; there is no image and no graph for it. It sits outside the
+workflow decision path and can neither approve nor action anything, so no
+audit-critical decision depends on remembered content.
+
+Memory is partitioned per end user via `scope = {{$userId}}`, retained for 30
+days, and constrained by an explicit `user_profile_details` redaction
+instruction that the deployer refuses to default. See
+[ADR 0003](decisions/0003-foundry-memory-prompt-agent.md).
+
+The feature is opt-in: with `MEMORY_STORE_NAME` unset, the deployer skips the
+memory store and prompt agent and deploys the four hosted agents unchanged.
+
 ## Source map
 
 | Concern | Source |

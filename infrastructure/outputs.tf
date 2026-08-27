@@ -40,6 +40,10 @@ output "MODEL_DEPLOYMENT_NAME" {
   value = local.model_deployment_name
 }
 
+output "EMBEDDING_DEPLOYMENT_NAME" {
+  value = local.embedding_deployment_name
+}
+
 output "POSTGRESQL_SERVER_NAME" {
   value = azurerm_postgresql_flexible_server.this.name
 }

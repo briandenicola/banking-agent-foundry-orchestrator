@@ -2,14 +2,18 @@ import json
 import os
 import unittest
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 from deploy import (
     INVOKE_TIMEOUT_ENV_VAR,
     INVOKE_TIMEOUT_SECONDS,
+    MEMORY_API_VERSION,
     AgentDefinition,
     FoundryClient,
+    MemoryAgentDefinition,
     _definitions,
     _items,
+    _memory_agent,
     _project_endpoint,
     _version,
 )
@@ -228,6 +232,200 @@ class DeployerContractTests(unittest.TestCase):
 
     def test_version_falls_back_to_agent_version_id(self):
         self.assertEqual("4", _version({"id": "workflow-planning:4"}))
+
+
+_MEMORY_ENV = {
+    "MEMORY_STORE_NAME": "customer_profile_memory",
+    "MEMORY_AGENT_NAME": "customer-profile",
+    "MEMORY_USER_PROFILE_DETAILS": "Never retain account numbers or balances.",
+    "MEMORY_AGENT_INSTRUCTIONS": "You are a retail banking servicing assistant.",
+}
+
+
+def _memory_agent_fixture(**overrides):
+    defaults = {
+        "agent_name": "customer-profile",
+        "memory_store_name": "customer_profile_memory",
+        "instructions": "You are a retail banking servicing assistant.",
+        "user_profile_details": "Never retain account numbers or balances.",
+    }
+    defaults.update(overrides)
+    return MemoryAgentDefinition(**defaults)
+
+
+class MemoryAgentConfigTests(unittest.TestCase):
+    def test_memory_agent_is_optional(self):
+        """Without MEMORY_STORE_NAME the hosted agents must still deploy."""
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(_memory_agent())
+
+    def test_memory_agent_requires_redaction_instruction(self):
+        """Memory extraction is model-driven, so the redaction rule is mandatory.
+
+        Falling back to a permissive default here is how banking PII would end
+        up in a preview-tier store, so an unset value must fail the deploy.
+        """
+        env = dict(_MEMORY_ENV)
+        del env["MEMORY_USER_PROFILE_DETAILS"]
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(KeyError):
+                _memory_agent()
+
+    def test_memory_agent_rejects_blank_redaction_instruction(self):
+        env = dict(_MEMORY_ENV, MEMORY_USER_PROFILE_DETAILS="   ")
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(KeyError):
+                _memory_agent()
+
+    def test_memory_agent_requires_instructions(self):
+        env = dict(_MEMORY_ENV)
+        del env["MEMORY_AGENT_INSTRUCTIONS"]
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(KeyError):
+                _memory_agent()
+
+    def test_memory_agent_defaults_to_per_user_scope(self):
+        """Scope must partition memory per end user.
+
+        A static scope would pool every customer's memories into one
+        collection, which is cross-customer contamination in a banking app.
+        """
+        with patch.dict(os.environ, _MEMORY_ENV, clear=True):
+            agent = _memory_agent()
+
+        self.assertEqual("{{$userId}}", agent.scope)
+        self.assertEqual("{{$userId}}", agent.tool()["scope"])
+
+
+class PromptAgentDefinitionTests(unittest.TestCase):
+    def test_definition_is_a_prompt_agent_with_the_memory_tool(self):
+        definition = _memory_agent_fixture().definition(_MODEL)
+
+        self.assertEqual("prompt", definition["kind"])
+        self.assertEqual(_MODEL, definition["model"])
+        self.assertEqual(
+            [
+                {
+                    "type": "memory_search_preview",
+                    "memory_store_name": "customer_profile_memory",
+                    "scope": "{{$userId}}",
+                    "update_delay": 300,
+                }
+            ],
+            definition["tools"],
+        )
+
+    def test_definition_has_no_container_configuration(self):
+        """A prompt agent is model-hosted; sending container fields would fail."""
+        definition = _memory_agent_fixture().definition(_MODEL)
+
+        self.assertNotIn("container_configuration", definition)
+        self.assertNotIn("environment_variables", definition)
+
+    def test_store_body_carries_the_redaction_instruction(self):
+        body = _memory_agent_fixture().store_body(_MODEL, "text-embedding-3-small")
+        options = body["definition"]["options"]
+
+        self.assertEqual("default", body["definition"]["kind"])
+        self.assertEqual(_MODEL, body["definition"]["chat_model"])
+        self.assertEqual("text-embedding-3-small", body["definition"]["embedding_model"])
+        self.assertEqual("Never retain account numbers or balances.", options["user_profile_details"])
+        self.assertTrue(options["user_profile_enabled"])
+        self.assertEqual(2592000, options["default_ttl_seconds"])
+
+
+class PromptVersionMatchingTests(unittest.TestCase):
+    def _client(self, existing_definition, status="active"):
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
+        client._agent_exists = Mock(return_value=True)
+        client._request = Mock(
+            return_value={"value": [{"version": "3", "status": status, "definition": existing_definition}]}
+        )
+        return client
+
+    def test_identical_definition_is_reused(self):
+        agent = _memory_agent_fixture()
+        definition = agent.definition(_MODEL)
+        client = self._client(definition)
+
+        self.assertEqual(("3", "active"), client._find_matching_prompt_version(agent, definition))
+
+    def test_server_added_tool_fields_do_not_force_a_new_version(self):
+        """Foundry echoes back defaults; those must not look like a change."""
+        agent = _memory_agent_fixture()
+        definition = agent.definition(_MODEL)
+        echoed = json.loads(json.dumps(definition))
+        echoed["tools"][0]["some_server_default"] = "value"
+        client = self._client(echoed)
+
+        self.assertEqual(("3", "active"), client._find_matching_prompt_version(agent, definition))
+
+    def test_changed_instructions_force_a_new_version(self):
+        agent = _memory_agent_fixture()
+        definition = agent.definition(_MODEL)
+        stale = json.loads(json.dumps(definition))
+        stale["instructions"] = "Older instructions"
+        client = self._client(stale)
+
+        self.assertIsNone(client._find_matching_prompt_version(agent, definition))
+
+    def test_changed_scope_forces_a_new_version(self):
+        """Tightening scope must not silently keep serving the old version."""
+        agent = _memory_agent_fixture()
+        definition = agent.definition(_MODEL)
+        stale = json.loads(json.dumps(definition))
+        stale["tools"][0]["scope"] = "everyone"
+        client = self._client(stale)
+
+        self.assertIsNone(client._find_matching_prompt_version(agent, definition))
+
+    def test_missing_tool_forces_a_new_version(self):
+        agent = _memory_agent_fixture()
+        definition = agent.definition(_MODEL)
+        stale = json.loads(json.dumps(definition))
+        stale["tools"] = []
+        client = self._client(stale)
+
+        self.assertIsNone(client._find_matching_prompt_version(agent, definition))
+
+
+class MemoryStoreProvisioningTests(unittest.TestCase):
+    def _client(self):
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = "https://example.test/project"
+        return client
+
+    def test_existing_store_is_not_recreated(self):
+        client = self._client()
+        client._request = Mock(return_value={"name": "customer_profile_memory"})
+
+        client.ensure_memory_store(_memory_agent_fixture(), _MODEL, "text-embedding-3-small")
+
+        self.assertEqual(1, client._request.call_count)
+        self.assertEqual("GET", client._request.call_args.args[0])
+
+    def test_missing_store_is_created_on_the_preview_api_version(self):
+        client = self._client()
+        not_found = HTTPError("https://example.test", 404, "Not Found", {}, None)
+        client._request = Mock(side_effect=[not_found, {"name": "customer_profile_memory"}])
+
+        client.ensure_memory_store(_memory_agent_fixture(), _MODEL, "text-embedding-3-small")
+
+        create_call = client._request.call_args
+        self.assertEqual("POST", create_call.args[0])
+        self.assertEqual("/memory_stores", create_call.args[1])
+        self.assertEqual(MEMORY_API_VERSION, create_call.kwargs["api_version"])
+        self.assertNotEqual(MEMORY_API_VERSION, "v1")
+
+    def test_unexpected_error_is_not_swallowed(self):
+        client = self._client()
+        client._request = Mock(
+            side_effect=HTTPError("https://example.test", 403, "Forbidden", {}, None)
+        )
+
+        with self.assertRaises(HTTPError):
+            client.ensure_memory_store(_memory_agent_fixture(), _MODEL, "text-embedding-3-small")
 
 
 if __name__ == "__main__":

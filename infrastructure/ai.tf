@@ -69,6 +69,30 @@ resource "azapi_resource" "gpt54_mini" {
   }
 }
 
+resource "azapi_resource" "text_embedding" {
+  type      = "Microsoft.CognitiveServices/accounts/deployments@2025-10-01-preview"
+  name      = local.embedding_deployment_name
+  parent_id = azapi_resource.foundry.id
+
+  # Cognitive Services rejects concurrent deployment writes against a single
+  # account, so this must be serialized behind the chat model deployment.
+  depends_on = [azapi_resource.gpt54_mini]
+
+  body = {
+    sku = {
+      name     = "GlobalStandard"
+      capacity = 10
+    }
+    properties = {
+      model = {
+        format  = "OpenAI"
+        name    = local.embedding_deployment_name
+        version = local.embedding_model_version
+      }
+    }
+  }
+}
+
 data "azurerm_monitor_diagnostic_categories" "foundry" {
   resource_id = azapi_resource.foundry.id
 }

@@ -54,6 +54,31 @@ resource "azurerm_container_app_job" "agent_deployer" {
         name  = "AGENT_DEFINITIONS"
         value = jsonencode(local.hosted_agent_definitions)
       }
+
+      env {
+        name  = "AZURE_AI_EMBEDDING_DEPLOYMENT_NAME"
+        value = local.embedding_deployment
+      }
+
+      env {
+        name  = "MEMORY_STORE_NAME"
+        value = local.memory_store_name
+      }
+
+      env {
+        name  = "MEMORY_AGENT_NAME"
+        value = local.memory_agent_name
+      }
+
+      env {
+        name  = "MEMORY_USER_PROFILE_DETAILS"
+        value = local.memory_user_profile_details
+      }
+
+      env {
+        name  = "MEMORY_AGENT_INSTRUCTIONS"
+        value = local.memory_agent_instructions
+      }
     }
   }
 
