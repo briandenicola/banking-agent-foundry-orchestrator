@@ -119,6 +119,24 @@ async def structured_step(
     )
 
 
+async def tool_findings(instructions: str, request: AgentRequest) -> list[str]:
+    """Run one bounded toolbox round, or return nothing when unconfigured.
+
+    Kept here so nodes depend on a single model-layer entry point rather than
+    constructing a chat client themselves.
+    """
+    from app.toolbox import gather_findings, load_tools, toolbox_enabled
+
+    if not toolbox_enabled():
+        return []
+
+    model = _model()
+    if model is None:
+        return []
+
+    return await gather_findings(model, await load_tools(), instructions, request)
+
+
 async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> AgentResult:
     model = _model()
     if model is None:

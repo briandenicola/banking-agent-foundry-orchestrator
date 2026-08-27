@@ -5,3 +5,4 @@ langgraph>=1.0,<2.0
 langchain-openai>=1.0,<2.0
 azure-identity>=1.20,<2.0
 azure-ai-agentserver-invocations
+langchain-azure-ai[hosting]>=1.2.8

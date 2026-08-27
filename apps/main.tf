@@ -13,6 +13,27 @@ locals {
   memory_store_name = "customer_profile_memory"
   memory_agent_name = "customer-profile"
 
+  # One toolbox serves both agent kinds: hosted agents call this MCP endpoint
+  # at runtime, and the prompt agent attaches it through the standard `mcp`
+  # tool. Adding a tool here reaches every agent without a code change.
+  toolbox_name = "banking-toolbox"
+
+  toolbox_tools = [
+    {
+      type        = "code_interpreter"
+      description = "Run Python to compute totals, averages, and date maths over transaction data the customer supplied."
+    },
+    {
+      type = "toolbox_search"
+    },
+  ]
+
+  # Tool calls are not gated by a Foundry approval prompt. The tools attached
+  # here are read-only and computational, and the workflow's own approval gate
+  # in the C# orchestrator remains the control that matters. Revisit this if a
+  # state-changing tool is ever added to the toolbox.
+  toolbox_require_approval = "never"
+
   # Memory extraction is model-driven. In a banking assistant the conversation
   # is full of exactly the data that must not be retained, so the exclusion
   # instruction is explicit configuration rather than a default.

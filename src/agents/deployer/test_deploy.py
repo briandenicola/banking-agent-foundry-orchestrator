@@ -11,9 +11,11 @@ from deploy import (
     AgentDefinition,
     FoundryClient,
     MemoryAgentDefinition,
+    ToolboxDefinition,
     _definitions,
     _items,
     _memory_agent,
+    _toolbox,
     _project_endpoint,
     _version,
 )
@@ -426,6 +428,108 @@ class MemoryStoreProvisioningTests(unittest.TestCase):
 
         with self.assertRaises(HTTPError):
             client.ensure_memory_store(_memory_agent_fixture(), _MODEL, "text-embedding-3-small")
+
+
+class ToolboxDeploymentTests(unittest.TestCase):
+    def _toolbox(self):
+        return ToolboxDefinition(
+            name="banking-toolbox",
+            tools=[{"type": "code_interpreter"}, {"type": "toolbox_search"}],
+        )
+
+    def test_toolbox_is_optional(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(_toolbox())
+
+    def test_toolbox_requires_tools(self):
+        with patch.dict(os.environ, {"TOOLBOX_NAME": "banking-toolbox"}, clear=True):
+            with self.assertRaises(KeyError):
+                _toolbox()
+
+    def test_toolbox_rejects_untyped_tools(self):
+        env = {"TOOLBOX_NAME": "banking-toolbox", "TOOLBOX_TOOLS": json.dumps([{"name": "x"}])}
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ValueError):
+                _toolbox()
+
+    def test_consumer_endpoint_is_version_independent(self):
+        """The consumer endpoint must follow the default version.
+
+        A version-pinned URL would mean promoting a toolbox version silently
+        does nothing until every agent is redeployed.
+        """
+        url = self._toolbox().mcp_url(_ENDPOINT)
+
+        self.assertEqual(f"{_ENDPOINT}/toolboxes/banking-toolbox/mcp?api-version=v1", url)
+        self.assertNotIn("/versions/", url)
+
+    def test_mcp_tool_points_at_the_toolbox(self):
+        tool = self._toolbox().mcp_tool(_ENDPOINT, "never")
+
+        self.assertEqual("mcp", tool["type"])
+        self.assertEqual("banking_toolbox", tool["server_label"])
+        self.assertIn("/toolboxes/banking-toolbox/mcp", tool["server_url"])
+        self.assertEqual("never", tool["require_approval"])
+
+    def test_prompt_agent_keeps_memory_tool_when_toolbox_is_attached(self):
+        """Attaching the toolbox must not displace the memory tool."""
+        extra = [self._toolbox().mcp_tool(_ENDPOINT, "never")]
+        definition = _memory_agent_fixture().definition(_MODEL, extra)
+
+        types = [tool["type"] for tool in definition["tools"]]
+        self.assertEqual(["memory_search_preview", "mcp"], types)
+
+    def test_attaching_a_toolbox_forces_a_new_agent_version(self):
+        agent = _memory_agent_fixture()
+        without = agent.definition(_MODEL)
+        with_toolbox = agent.definition(_MODEL, [self._toolbox().mcp_tool(_ENDPOINT, "never")])
+
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = _ENDPOINT
+        client._agent_exists = Mock(return_value=True)
+        client._request = Mock(
+            return_value={"value": [{"version": "3", "status": "active", "definition": without}]}
+        )
+
+        self.assertIsNone(client._find_matching_prompt_version(agent, with_toolbox))
+
+    def test_unchanged_tool_set_does_not_create_a_new_version(self):
+        toolbox = self._toolbox()
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = _ENDPOINT
+        client._request = Mock(
+            return_value={"value": [{"version": "1", "tools": toolbox.tools}]}
+        )
+
+        self.assertEqual("1", client.ensure_toolbox(toolbox))
+        self.assertEqual(1, client._request.call_count)
+
+    def test_changed_tool_set_creates_a_new_version(self):
+        toolbox = self._toolbox()
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = _ENDPOINT
+        client._request = Mock(
+            side_effect=[
+                {"value": [{"version": "1", "tools": [{"type": "code_interpreter"}]}]},
+                {"version": "2"},
+            ]
+        )
+
+        self.assertEqual("2", client.ensure_toolbox(toolbox))
+        create_call = client._request.call_args
+        self.assertEqual("POST", create_call.args[0])
+        self.assertEqual("/toolboxes/banking-toolbox/versions", create_call.args[1])
+        self.assertEqual(toolbox.tools, create_call.args[2]["tools"])
+
+    def test_absent_toolbox_is_created(self):
+        toolbox = self._toolbox()
+        client = FoundryClient.__new__(FoundryClient)
+        client._endpoint = _ENDPOINT
+        client._request = Mock(
+            side_effect=[HTTPError(_ENDPOINT, 404, "Not Found", {}, None), {"version": "1"}]
+        )
+
+        self.assertEqual("1", client.ensure_toolbox(toolbox))
 
 
 if __name__ == "__main__":

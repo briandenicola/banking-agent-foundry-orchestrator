@@ -79,6 +79,21 @@ resource "azurerm_container_app_job" "agent_deployer" {
         name  = "MEMORY_AGENT_INSTRUCTIONS"
         value = local.memory_agent_instructions
       }
+
+      env {
+        name  = "TOOLBOX_NAME"
+        value = local.toolbox_name
+      }
+
+      env {
+        name  = "TOOLBOX_TOOLS"
+        value = jsonencode(local.toolbox_tools)
+      }
+
+      env {
+        name  = "TOOLBOX_REQUIRE_APPROVAL"
+        value = local.toolbox_require_approval
+      }
     }
   }
 

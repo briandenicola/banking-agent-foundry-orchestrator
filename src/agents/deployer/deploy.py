@@ -25,6 +25,10 @@ PROJECT_ENDPOINT_ENV_VAR = "BANKING_AGENT_PROJECT_ENDPOINT"
 # to four sequential model calls, so the previous 30s default left no headroom.
 INVOKE_TIMEOUT_ENV_VAR = "BANKING_AGENT_INVOKE_TIMEOUT_SECONDS"
 INVOKE_TIMEOUT_SECONDS = os.environ.get(INVOKE_TIMEOUT_ENV_VAR, "90")
+# Name of the shared toolbox that hosted agents consume over MCP at runtime.
+# Empty means the feature is off and the agents run exactly as before.
+HOSTED_TOOLBOX_ENV_VAR = "BANKING_AGENT_TOOLBOX_NAME"
+HOSTED_TOOLBOX_NAME = os.environ.get("TOOLBOX_NAME", "").strip()
 LEGACY_PROJECT_ENDPOINT_ENV_VAR = "FOUNDRY_PROJECT_ENDPOINT"
 
 
@@ -32,6 +36,40 @@ LEGACY_PROJECT_ENDPOINT_ENV_VAR = "FOUNDRY_PROJECT_ENDPOINT"
 class AgentDefinition:
     name: str
     kind: str
+
+
+@dataclass(frozen=True)
+class ToolboxDefinition:
+    """A Foundry toolbox: several managed tools behind one MCP endpoint.
+
+    The toolbox is the only supported way to give a *hosted* agent
+    Foundry-managed tools, because a hosted agent definition has no
+    declarative `tools` array. Prompt agents consume the same endpoint through
+    the standard `mcp` tool, so one toolbox serves both agent kinds.
+    """
+
+    name: str
+    tools: list[dict[str, Any]]
+    description: str = "Banking agent shared tools"
+
+    def mcp_url(self, project_endpoint: str) -> str:
+        """The consumer endpoint, which always follows the default version.
+
+        Promoting a new toolbox version therefore reaches agents without
+        redeploying them.
+        """
+        return (
+            f"{project_endpoint.rstrip('/')}/toolboxes/"
+            f"{quote(self.name, safe='')}/mcp?api-version={API_VERSION}"
+        )
+
+    def mcp_tool(self, project_endpoint: str, require_approval: str) -> dict[str, Any]:
+        return {
+            "type": "mcp",
+            "server_label": self.name.replace("-", "_"),
+            "server_url": self.mcp_url(project_endpoint),
+            "require_approval": require_approval,
+        }
 
 
 @dataclass(frozen=True)
@@ -58,12 +96,16 @@ class MemoryAgentDefinition:
             "update_delay": self.update_delay_seconds,
         }
 
-    def definition(self, model_deployment: str) -> dict[str, Any]:
+    def definition(
+        self,
+        model_deployment: str,
+        extra_tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         return {
             "kind": "prompt",
             "model": model_deployment,
             "instructions": self.instructions,
-            "tools": [self.tool()],
+            "tools": [self.tool(), *(extra_tools or [])],
         }
 
     def store_body(self, chat_model: str, embedding_model: str) -> dict[str, Any]:
@@ -146,6 +188,9 @@ class FoundryClient:
             },
         }
 
+        if HOSTED_TOOLBOX_NAME:
+            definition["environment_variables"][HOSTED_TOOLBOX_ENV_VAR] = HOSTED_TOOLBOX_NAME
+
         if self._agent_exists(agent.name):
             result = self._request(
                 "POST",
@@ -172,6 +217,42 @@ class FoundryClient:
         if status not in READY_STATUSES:
             self._wait_until_running(agent.name, version)
         return version
+
+    def ensure_toolbox(self, toolbox: ToolboxDefinition) -> str:
+        """Create a toolbox version, reusing the default version if it matches.
+
+        Toolbox versions are immutable, so an unchanged tool set must not
+        create a new version on every deploy.
+        """
+        existing = self._matching_toolbox_version(toolbox)
+        if existing is not None:
+            print(f"{toolbox.name}: toolbox version {existing} already matches; skipping", flush=True)
+            return existing
+
+        result = self._request(
+            "POST",
+            f"/toolboxes/{quote(toolbox.name, safe='')}/versions",
+            {"description": toolbox.description, "tools": toolbox.tools},
+        )
+        version = str(result.get("version", "")).strip()
+        print(f"{toolbox.name}: created toolbox version {version or '(unknown)'}", flush=True)
+        return version
+
+    def _matching_toolbox_version(self, toolbox: ToolboxDefinition) -> str | None:
+        try:
+            response = self._request(
+                "GET", f"/toolboxes/{quote(toolbox.name, safe='')}/versions"
+            )
+        except HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+
+        for version in _items(response):
+            if _tool_types(version.get("tools")) == _tool_types(toolbox.tools):
+                return str(version.get("version"))
+
+        return None
 
     def ensure_memory_store(
         self,
@@ -203,8 +284,9 @@ class FoundryClient:
         self,
         agent: MemoryAgentDefinition,
         model_deployment: str,
+        extra_tools: list[dict[str, Any]] | None = None,
     ) -> str:
-        definition = agent.definition(model_deployment)
+        definition = agent.definition(model_deployment, extra_tools)
 
         existing_version = self._find_matching_prompt_version(agent, definition)
         if existing_version is not None:
@@ -305,6 +387,7 @@ class FoundryClient:
                 and runtime_project_endpoint == project_endpoint
                 and environment.get("ALLOW_FALLBACK") == "false"
                 and environment.get(INVOKE_TIMEOUT_ENV_VAR) == INVOKE_TIMEOUT_SECONDS
+                and environment.get(HOSTED_TOOLBOX_ENV_VAR, "") == HOSTED_TOOLBOX_NAME
             ):
                 return str(version.get("version")), status
 
@@ -406,7 +489,30 @@ class FoundryClient:
         raise AssertionError("request retry loop exited unexpectedly")
 
 
-TOOL_COMPARISON_KEYS = ("type", "memory_store_name", "scope", "update_delay")
+TOOL_COMPARISON_KEYS = (
+    "type",
+    "memory_store_name",
+    "scope",
+    "update_delay",
+    "server_label",
+    "server_url",
+    "require_approval",
+)
+
+
+def _tool_types(tools: Any) -> list[str]:
+    """The ordered tool identity of a toolbox version.
+
+    Compared instead of the whole payload because Foundry returns
+    server-populated fields that we never sent.
+    """
+    if not isinstance(tools, list):
+        return []
+    return sorted(
+        f"{tool.get('type')}:{tool.get('name') or tool.get('server_label') or ''}"
+        for tool in tools
+        if isinstance(tool, dict)
+    )
 
 
 def _tools(definition: dict[str, Any]) -> list[dict[str, Any]]:
@@ -474,6 +580,26 @@ def _project_endpoint() -> str:
     return endpoint
 
 
+def _toolbox() -> ToolboxDefinition | None:
+    """Build the shared toolbox from configuration, or None when disabled."""
+    name = os.getenv("TOOLBOX_NAME", "").strip()
+    if not name:
+        return None
+
+    raw = os.getenv("TOOLBOX_TOOLS", "").strip()
+    if not raw:
+        raise KeyError("TOOLBOX_TOOLS must be set when TOOLBOX_NAME is configured")
+
+    tools = json.loads(raw)
+    if not isinstance(tools, list) or not tools:
+        raise ValueError("TOOLBOX_TOOLS must be a non-empty JSON array")
+    for tool in tools:
+        if not isinstance(tool, dict) or not tool.get("type"):
+            raise ValueError("Each toolbox tool requires a non-empty type")
+
+    return ToolboxDefinition(name=name, tools=tools)
+
+
 def _memory_agent() -> MemoryAgentDefinition | None:
     """Build the memory-backed prompt agent from configuration.
 
@@ -518,12 +644,25 @@ def main() -> int:
     for agent in agents:
         deployed[agent.name] = client.deploy(agent, image, model_deployment, endpoint)
 
+    # The toolbox is created before the prompt agent so the agent's MCP tool
+    # points at an endpoint that already resolves.
+    extra_tools: list[dict[str, Any]] = []
+    toolbox = _toolbox()
+    if toolbox is not None:
+        client.ensure_toolbox(toolbox)
+        extra_tools.append(
+            toolbox.mcp_tool(
+                endpoint,
+                os.getenv("TOOLBOX_REQUIRE_APPROVAL", "never").strip() or "never",
+            )
+        )
+
     memory_agent = _memory_agent()
     if memory_agent is not None:
         embedding_deployment = os.environ["AZURE_AI_EMBEDDING_DEPLOYMENT_NAME"]
         client.ensure_memory_store(memory_agent, model_deployment, embedding_deployment)
         deployed[memory_agent.agent_name] = client.deploy_prompt_agent(
-            memory_agent, model_deployment
+            memory_agent, model_deployment, extra_tools=extra_tools
         )
 
     print(json.dumps({"status": "ok", "agents": deployed}, sort_keys=True), flush=True)

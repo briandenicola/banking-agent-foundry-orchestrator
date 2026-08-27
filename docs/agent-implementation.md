@@ -63,8 +63,30 @@ days, and constrained by an explicit `user_profile_details` redaction
 instruction that the deployer refuses to default. See
 [ADR 0003](decisions/0003-foundry-memory-prompt-agent.md).
 
+### Foundry-managed tools
+
+Hosted agents have no declarative `tools` array, but they are not excluded from
+Foundry tools. A shared **toolbox** (`banking-toolbox`) exposes managed tools
+behind one MCP endpoint, consumed two ways:
+
+- `customer-profile` attaches it via the standard `mcp` tool.
+- Hosted agents load it at runtime with `AzureAIProjectToolbox`
+  (`langchain-azure-ai[hosting]`), gated on `BANKING_AGENT_TOOLBOX_NAME`.
+
+Only `transaction-explanation` calls tools, inside `explain_transaction`. That
+agent cannot require approval by construction, so tool output — which is
+model-influenced content — can never reach an approval decision. Tool
+observations are appended to `evidence`, and the loop is bounded to
+`MAX_TOOL_CALLS`. See [ADR 0004](decisions/0004-foundry-toolbox-tools.md).
+
+Note that hosted agents expose Responses, Invocations, WebSocket, Activity, and
+A2A protocols — **not** MCP. The `/mcp` route in `hosted.py` is tunnelled
+through the invocations protocol and is not a remote MCP server Foundry can
+call.
+
 The feature is opt-in: with `MEMORY_STORE_NAME` unset, the deployer skips the
 memory store and prompt agent and deploys the four hosted agents unchanged.
+With `TOOLBOX_NAME` unset, no toolbox is created and no tools are attached.
 
 ## Source map
 

@@ -26,7 +26,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from app.contracts import CONTRACT_VERSION, AgentName, AgentRequest, AgentResult
-from app.model import structured_step
+from app.model import structured_step, tool_findings
 
 AGENT = AgentName.TRANSACTION_EXPLANATION
 
@@ -114,6 +114,16 @@ Distinguish pending, posted, reversed, recurring, card-present, and
 card-not-present activity. Use the unknown category when the supplied details do
 not justify a more specific one, and state uncertainty rather than guessing.
 """
+
+TOOL_INSTRUCTIONS = """
+You are helping explain a retail banking transaction to the customer who made it.
+
+Use the available tools only when they add something you cannot state reliably
+on your own, such as arithmetic over a set of transactions.
+
+Do not use tools to invent transaction data that was not provided. Do not take,
+recommend, or commit to any account action. If no tool is useful, call none.
+""".strip()
 
 EXPLAIN_INSTRUCTIONS = """
 You explain a banking transaction to a customer using only the supplied context.
@@ -243,11 +253,21 @@ def _evidence(
 
 async def explain_transaction(state: ExplanationState) -> dict:
     """Terminal node 3a: the transaction is identified, so explain it."""
+    # Toolbox tools (for example code interpreter for spending arithmetic) run
+    # before the narrative so their observations become part of the context and
+    # of the audit trail. This node is informational and cannot require
+    # approval, so tool output can never influence an approval decision.
+    findings = await tool_findings(TOOL_INSTRUCTIONS, state["request"])
+
+    step_context = _context(state)
+    if findings:
+        step_context += "\n\nTool observations:\n" + "\n".join(findings)
+
     narrative = await structured_step(
         EXPLAIN_INSTRUCTIONS,
         state["request"],
         ExplanationNarrative,
-        step_context=_context(state),
+        step_context=step_context,
     )
     fallback = narrative is None
     if narrative is None:
@@ -259,10 +279,16 @@ async def explain_transaction(state: ExplanationState) -> dict:
             evidence=[],
         )
 
+    narrative = _evidence(state, narrative)
+    if findings:
+        narrative = narrative.model_copy(
+            update={"evidence": list(narrative.evidence) + findings}
+        )
+
     return {
         "result": _result(
             state,
-            _evidence(state, narrative),
+            narrative,
             intent="transaction_explanation",
             fallback=fallback,
         )
