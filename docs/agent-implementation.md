@@ -84,9 +84,18 @@ A2A protocols — **not** MCP. The `/mcp` route in `hosted.py` is tunnelled
 through the invocations protocol and is not a remote MCP server Foundry can
 call.
 
-The feature is opt-in: with `MEMORY_STORE_NAME` unset, the deployer skips the
-memory store and prompt agent and deploys the four hosted agents unchanged.
-With `TOOLBOX_NAME` unset, no toolbox is created and no tools are attached.
+The feature is off by default. Enable with Terraform flags on `app:apply`:
+
+```bash
+ENABLE_AGENT_MEMORY=true ENABLE_AGENT_TOOLBOX=true task app:apply -- <region>
+task app:deploy-hosted-agents
+```
+
+With both flags false — the default — no memory store, prompt agent, or toolbox
+is created, and the four hosted agents deploy unchanged. The flags must be
+supplied on every subsequent `app:apply`, or Terraform reapplies the `false`
+default. See the
+[operations guide](mvp-implementation-operations-guide.md#optional-agent-features-memory-and-toolbox).
 
 ## Source map
 

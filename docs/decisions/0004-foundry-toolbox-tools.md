@@ -78,14 +78,26 @@ configurable and must be revisited if a state-changing tool is ever added.
 
 ## Reversibility
 
-Both halves are opt-in and independently disableable:
+The feature is off by default, gated by the `enable_agent_toolbox` Terraform
+variable:
 
-- Unset `TOOLBOX_NAME` and no toolbox is created and no MCP tool is attached.
-- Unset `BANKING_AGENT_TOOLBOX_NAME` and the hosted agents load no tools and
-  behave exactly as before.
+```bash
+ENABLE_AGENT_TOOLBOX=true task app:apply -- <region>
+task app:deploy-hosted-agents
+```
+
+When the flag is false, `local.toolbox_name` resolves to an empty string, so no
+toolbox is created, no `mcp` tool is attached to the prompt agent, and
+`BANKING_AGENT_TOOLBOX_NAME` is not set on the hosted agents — which means they
+load no tools and behave exactly as before.
 
 The existing agent test suite passes unchanged with the feature off, which is
 the evidence that the default path is untouched.
+
+> **Correction.** As first shipped, this was opt-in only in the deployer:
+> `apps/` set `TOOLBOX_NAME` unconditionally, so any `app:apply` enabled tools.
+> The Terraform flag closes that gap, and
+> `scripts/tests/test_agent_feature_flags.py` pins it.
 
 ## Verification status
 

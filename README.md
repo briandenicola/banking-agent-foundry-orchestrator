@@ -174,6 +174,26 @@ After deployment, the task grants each active Hosted Agent instance identity the
 
 No `azd` deployment is used.
 
+#### Optional: Foundry memory and toolbox tools
+
+Two Foundry features are available but **off by default**, so the deployment above
+registers only the four hosted agents:
+
+```bash
+# Foundry toolbox tools (code interpreter, tool search)
+ENABLE_AGENT_TOOLBOX=true task app:apply -- swedencentral
+
+# Foundry memory, which adds the `customer-profile` prompt agent
+ENABLE_AGENT_MEMORY=true task app:apply -- swedencentral
+```
+
+Re-run `task app:deploy-hosted-agents` afterwards, and supply the flags on every
+later `app:apply` or Terraform will reapply the `false` default. Memory is a
+preview feature that retains model-extracted customer detail — read
+[ADR 0003](docs/decisions/0003-foundry-memory-prompt-agent.md) and
+[ADR 0004](docs/decisions/0004-foundry-toolbox-tools.md) before enabling either.
+Neither has been verified against live Azure.
+
 Run the deployed MVP smoke checks after the job succeeds:
 
 ```bash

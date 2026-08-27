@@ -149,6 +149,8 @@ tasks:
           -var "region={{.REGION}}" \
           -var "enable_service_auth={{.ENABLE_SERVICE_AUTH}}" \
           -var "allow_insecure_service_auth={{.ALLOW_INSECURE_SERVICE_AUTH}}" \
+          -var "enable_agent_memory={{.ENABLE_AGENT_MEMORY}}" \
+          -var "enable_agent_toolbox={{.ENABLE_AGENT_TOOLBOX}}" \
           -var "image_tag={{.COMMIT_VERSION}}"
     vars:
       APP_NAME:
@@ -156,6 +158,8 @@ tasks:
       REGION: '{{default "swedencentral" .CLI_ARGS}}'
       ENABLE_SERVICE_AUTH: '{{default "true" .ENABLE_SERVICE_AUTH}}'
       ALLOW_INSECURE_SERVICE_AUTH: '{{default "false" .ALLOW_INSECURE_SERVICE_AUTH}}'
+      ENABLE_AGENT_MEMORY: '{{default "false" .ENABLE_AGENT_MEMORY}}'
+      ENABLE_AGENT_TOOLBOX: '{{default "false" .ENABLE_AGENT_TOOLBOX}}'
 
   deploy:
     desc: Deploy the application stack and register Foundry Hosted Agents

@@ -10,13 +10,15 @@ locals {
   # chat model.
   embedding_deployment = "text-embedding-3-small"
 
-  memory_store_name = "customer_profile_memory"
+  # The deployer treats an empty name as "feature off", so the flags collapse
+  # to a single value that both Terraform and the deployer agree on.
+  memory_store_name = var.enable_agent_memory ? "customer_profile_memory" : ""
   memory_agent_name = "customer-profile"
 
   # One toolbox serves both agent kinds: hosted agents call this MCP endpoint
   # at runtime, and the prompt agent attaches it through the standard `mcp`
   # tool. Adding a tool here reaches every agent without a code change.
-  toolbox_name = "banking-toolbox"
+  toolbox_name = var.enable_agent_toolbox ? "banking-toolbox" : ""
 
   toolbox_tools = [
     {

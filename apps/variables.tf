@@ -26,3 +26,15 @@ variable "enable_service_auth" {
   type        = bool
   default     = true
 }
+
+variable "enable_agent_memory" {
+  description = "Deploy the customer-profile prompt agent with a Foundry memory store attached. Memory is a preview feature that retains model-extracted customer detail, so it stays off unless explicitly enabled."
+  type        = bool
+  default     = false
+}
+
+variable "enable_agent_toolbox" {
+  description = "Create the shared Foundry toolbox and let agents call its tools. Off by default so the baseline agents run without tool access."
+  type        = bool
+  default     = false
+}

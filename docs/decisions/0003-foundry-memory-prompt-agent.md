@@ -103,7 +103,21 @@ demonstration environment and should be re-evaluated before any production use.
 
 ## Reversibility
 
-The feature is opt-in. If `MEMORY_STORE_NAME` is unset the deployer skips the
-memory store and the prompt agent entirely and deploys the four hosted agents
-exactly as before, so an environment without an embedding deployment still
-works.
+The feature is off by default and gated by the `enable_agent_memory` Terraform
+variable:
+
+```bash
+ENABLE_AGENT_MEMORY=true task app:apply -- <region>
+task app:deploy-hosted-agents
+```
+
+When the flag is false, `local.memory_store_name` resolves to an empty string,
+the deployer skips the memory store and the prompt agent entirely, and the four
+hosted agents deploy exactly as before. An environment without an embedding
+deployment therefore still works.
+
+> **Correction.** As first shipped, this was opt-in only in the deployer:
+> `apps/` set `MEMORY_STORE_NAME` unconditionally, so any `app:apply` enabled
+> memory whether or not that was intended. The Terraform flag above closes that
+> gap, and `scripts/tests/test_agent_feature_flags.py` pins it so the claim and
+> the deployment cannot drift apart again.

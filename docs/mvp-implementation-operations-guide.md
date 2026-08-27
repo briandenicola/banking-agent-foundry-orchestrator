@@ -732,6 +732,62 @@ terraform -chdir=apps validate
 the application stack, runs migration, and deploys the hosted agents after
 shared infrastructure already exists.
 
+### Optional agent features: memory and toolbox
+
+Foundry memory and Foundry toolbox tools are **off by default**. A default
+deployment registers the four hosted agents exactly as it always has: no memory
+store, no prompt agent, no toolbox, and no tool access.
+
+Enable them by setting the flags on `app:apply` (or on `app:deploy`, which calls
+it):
+
+```bash
+# Toolbox tools only
+ENABLE_AGENT_TOOLBOX=true task app:apply -- swedencentral
+
+# Memory only
+ENABLE_AGENT_MEMORY=true task app:apply -- swedencentral
+
+# Both
+ENABLE_AGENT_MEMORY=true ENABLE_AGENT_TOOLBOX=true task app:apply -- swedencentral
+```
+
+Then re-run the deployer so the new configuration reaches Foundry:
+
+```bash
+task app:deploy-hosted-agents
+```
+
+The flags must be supplied on **every** subsequent `app:apply`. Terraform is
+declarative, so omitting them applies the `false` default and turns the features
+back off.
+
+What each flag does:
+
+| Flag | Effect |
+| --- | --- |
+| `ENABLE_AGENT_MEMORY` | Creates the memory store and registers the `customer-profile` prompt agent with the memory search tool. |
+| `ENABLE_AGENT_TOOLBOX` | Creates the `banking-toolbox` toolbox, attaches it to `customer-profile` as an `mcp` tool, and sets `BANKING_AGENT_TOOLBOX_NAME` on the hosted agents so `transaction-explanation` can call its tools. |
+
+Both flags resolve to an empty name when off, and the deployer treats an empty
+name as "feature off". Turning a flag off later changes the hosted agents'
+environment, so the deployer creates a new agent version rather than leaving the
+old configuration running.
+
+Notes before enabling:
+
+- **Memory is a preview feature** (api-version `2025-11-15-preview`) that
+  retains model-extracted customer detail. Review the redaction instruction in
+  `apps/main.tf` (`memory_user_profile_details`) first. See
+  [ADR 0003](decisions/0003-foundry-memory-prompt-agent.md).
+- Memory requires the embedding deployment created by the infrastructure stack.
+  If `infrastructure/` predates that deployment, re-apply it first.
+- Only `transaction-explanation` calls toolbox tools, and it cannot require
+  approval by construction, so tool output never reaches an approval decision.
+  See [ADR 0004](decisions/0004-foundry-toolbox-tools.md).
+- Neither feature has been verified against live Azure. Treat the first
+  enablement as a test, not as a known-good path.
+
 ### CI/CD deployment
 
 [`ci.yml`](../.github/workflows/ci.yml) validates code, tests, Terraform, and every
