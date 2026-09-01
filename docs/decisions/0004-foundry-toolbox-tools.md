@@ -111,15 +111,25 @@ the evidence that the default path is untouched.
 
 ## Verification status
 
-**Not verified against live Azure.** The Azure subscription was unavailable
-when this was written, so the following are confirmed only by unit tests and by
-reading the published API contracts and the `langchain-azure-ai` 1.2.9 wheel:
+**Partially verified against live Azure.** A deployment to `swedencentral` with
+`ENABLE_AGENT_MEMORY=true ENABLE_AGENT_TOOLBOX=true` ran
+`app:deploy-hosted-agents` to completion, followed by a passing smoke run.
+
+Confirmed by that run:
 
 - The toolbox create/list REST shapes.
+- Regional availability of `code_interpreter` and `toolbox_search`; the toolbox
+  version was accepted with both tool types attached.
 - That the prompt agent accepts a second `mcp` tool alongside the memory tool.
-- That `AzureAIProjectToolbox(toolbox_name=...).get_tools()` authenticates and
-  returns tools in the hosted runtime.
-- Regional availability of `code_interpreter` and `toolbox_search`.
 
-These must be exercised with a real `app:deploy-hosted-agents` and smoke run
-before this is presented as working.
+Still unverified:
+
+- That `AzureAIProjectToolbox(toolbox_name=...).get_tools()` authenticates and
+  returns tools in the hosted runtime. The smoke checks cover routing,
+  approval, and persistence, and none of them assert that
+  `transaction-explanation` actually issued a tool call, so the runtime tool
+  path has not been exercised end to end.
+
+The run also produced the tool-identifier constraint recorded above: the first
+attempt failed with `Multiple tools without identifiers found`, because both
+tools were declared without a `name`.

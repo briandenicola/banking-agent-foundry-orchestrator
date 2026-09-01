@@ -121,3 +121,16 @@ deployment therefore still works.
 > memory whether or not that was intended. The Terraform flag above closes that
 > gap, and `scripts/tests/test_agent_feature_flags.py` pins it so the claim and
 > the deployment cannot drift apart again.
+
+## Verification status
+
+**Partially verified against live Azure.** A `swedencentral` deployment with
+`ENABLE_AGENT_MEMORY=true` created the memory store and registered the
+`customer-profile` prompt agent, and `app:deploy-hosted-agents` completed
+successfully.
+
+What that run did not exercise: no workflow invoked `customer-profile`, so
+memory extraction, the `scope = {{$userId}}` partitioning, the 30-day
+retention, and the `user_profile_details` redaction instruction have not been
+observed against real conversations. Treat the redaction behaviour as
+unverified until it is.

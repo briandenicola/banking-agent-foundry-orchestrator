@@ -30,7 +30,7 @@ This repository contains a banking-focused agentic application built around:
 - Terraform 1.6 or later
 - [Task](https://taskfile.dev/)
 - .NET 10 SDK
-- Python 3
+- Python 3.12 (the version CI uses; the hosted-agent image also builds on 3.12)
 - Permission to create Azure resources and role assignments in the target subscription
 - Entra permission to create application registrations, service principals, and app-role assignments
   only when optional service authentication is enabled
@@ -112,7 +112,9 @@ task app:apply -- swedencentral
 
 This deploys the orchestrator, web UI, managed identities, application RBAC, and the manual database migration and Hosted Agent deployment jobs. For the MVP, the web UI runs one replica and keeps ASP.NET Data Protection keys in local container storage because subscription policy disables public Storage access. Any web UI restart, redeployment, revision replacement, or replica replacement invalidates existing antiforgery cookies; users must refresh the page before resubmitting a form.
 
-Service-to-service API authentication is enabled by default. The `apps/` stack creates an Entra application role (`Workflow.Invoke`) for the orchestrator API and assigns it to the Web UI managed identity, so workflow creation, approval, detail, and evidence endpoints require managed-identity bearer tokens. Setting `TF_VAR_enable_service_auth=false` is only supported for local development; the orchestrator refuses to start with that value outside the Development environment and reports the insecure mode on `/health/ready`.
+`task app:apply` first runs `scripts/guard-image-tags.sh`, which fails fast when the commit-tagged images are not already in the registry. Any commit made between `app:build` and `app:apply` moves the tag, so rebuild or pass an explicit `-var "image_tag=<tag>"`.
+
+Service-to-service API authentication is enabled by default. The `apps/` stack creates an Entra application role (`Workflow.Invoke`) for the orchestrator API and assigns it to the Web UI managed identity, so workflow creation, approval, detail, and evidence endpoints require managed-identity bearer tokens. It can be disabled by setting `ENABLE_SERVICE_AUTH=false` together with `ALLOW_INSECURE_SERVICE_AUTH=true` in `.env`; both are required, and setting only the first fails the apply. This is supported for tenants that forbid creating the service principal and `api://` identifier URI it depends on, and for local development. In that mode the orchestrator logs an explicit insecure-configuration warning at startup and reports the mode on `/health/ready`; without the acknowledgement it refuses to start outside Development. The orchestrator always runs on internal ingress, so the Web UI is the only public surface either way, but the Web UI itself is unauthenticated. Never point this configuration at real data.
 
 The default PostgreSQL network path is demo-grade: it preserves the low-friction lab deployment but creates the broad Azure `AllowAzureServices` firewall rule, which admits resources from any Azure tenant at the network layer. Entra-only database authentication remains required, but regulated or shared environments should set `TF_VAR_enable_private_networking=true` to deploy Container Apps and PostgreSQL Flexible Server on private VNet paths and suppress that firewall rule.
 
@@ -192,7 +194,7 @@ later `app:apply` or Terraform will reapply the `false` default. Memory is a
 preview feature that retains model-extracted customer detail — read
 [ADR 0003](docs/decisions/0003-foundry-memory-prompt-agent.md) and
 [ADR 0004](docs/decisions/0004-foundry-toolbox-tools.md) before enabling either.
-Neither has been verified against live Azure.
+Both have been deployed against live Azure.
 
 Run the deployed MVP smoke checks after the job succeeds:
 

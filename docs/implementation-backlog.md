@@ -71,10 +71,10 @@ issues #17, #18, and #20, all of which are now closed; it is kept as history.
     - Explain each agent's LangGraph state, nodes, routing decisions, model invocation, typed request/result contracts, local fallback behavior, and Microsoft Foundry Hosted Agent adapter.
     - Document how the four Hosted Agents are packaged and deployed independently, how their endpoints and managed identities differ, and how the orchestrator selects and invokes them.
     - Cover Microsoft Entra authentication, managed identity token acquisition, PostgreSQL access, Application Insights/OpenTelemetry correlation, configuration, and failure handling.
-    - Include sequence diagrams and direct `path/to/file:line` references for every important implementation step so readers can move between the guide and the exact code.
-    - Keep line references current whenever referenced code changes.
+    - Include sequence diagrams and direct references for every important implementation step so readers can move between the guide and the exact code.
+    - Reference files and symbol names, not `path/to/file:line`. Line anchors were tried in [`agent-implementation.md`](./agent-implementation.md) and every one of them had drifted to unrelated code within a few releases; they were removed rather than re-pinned.
     - Acceptance criteria: a developer unfamiliar with the repository can trace the primary informational, suspicious-activity, and dispute-approval flows from entrypoint to completion using the guide and its verified code references.
-    - Not delivered. [`mvp-implementation-operations-guide.md`](./mvp-implementation-operations-guide.md) and [`agent-implementation.md`](./agent-implementation.md) cover the narrative, but neither carries the `path/to/file:line` references this item requires.
+    - Partially delivered. [`mvp-implementation-operations-guide.md`](./mvp-implementation-operations-guide.md) and [`agent-implementation.md`](./agent-implementation.md) cover the narrative and link to the relevant files and symbols. Sequence diagrams are still missing.
 
 13. P1 — Audit all documentation for accuracy and currency
     - Review every file under `docs/` (plus `README.md` and `.github/copilot-instructions.md`) against the current implementation, Terraform stacks, Taskfile targets, and CI workflow.

@@ -77,7 +77,13 @@ Only `transaction-explanation` calls tools, inside `explain_transaction`. That
 agent cannot require approval by construction, so tool output — which is
 model-influenced content — can never reach an approval decision. Tool
 observations are appended to `evidence`, and the loop is bounded to
-`MAX_TOOL_CALLS`. See [ADR 0004](decisions/0004-foundry-toolbox-tools.md).
+`MAX_TOOL_CALLS` (4, in [`toolbox.py`](../src/agents/python/app/toolbox.py)).
+See [ADR 0004](decisions/0004-foundry-toolbox-tools.md).
+
+Every tool in a toolbox version needs a unique `name` or `server_label`;
+Foundry rejects a version carrying more than one unidentified tool. The
+deployer asserts this before POSTing, so the constraint fails locally rather
+than as a 400 mid-deployment.
 
 Note that hosted agents expose Responses, Invocations, WebSocket, Activity, and
 A2A protocols — **not** MCP. The `/mcp` route in `hosted.py` is tunnelled
@@ -99,6 +105,11 @@ default. See the
 
 ## Source map
 
+Links point at files and name the symbol to look for, rather than pinning line
+ranges. Every line anchor this document previously carried had drifted to
+unrelated code, so symbol names are used instead: they survive edits and are
+greppable.
+
 | Concern | Source |
 | --- | --- |
 | LangGraph graph registry | [`registry.py`](../src/agents/python/app/agents/registry.py) |
@@ -106,21 +117,23 @@ default. See the
 | Transaction graph and instructions | [`transaction_explanation.py`](../src/agents/python/app/agents/transaction_explanation.py) |
 | Suspicious-activity graph and instructions | [`suspicious_activity.py`](../src/agents/python/app/agents/suspicious_activity.py) |
 | Dispute graph and instructions | [`dispute.py`](../src/agents/python/app/agents/dispute.py) |
-| Request/result schemas | [`contracts.py`](../src/agents/python/app/contracts.py#L9-L40) |
-| Model and deterministic fallback | [`model.py`](../src/agents/python/app/model.py#L15-L143) |
-| Foundry hosted entrypoint | [`hosted.py`](../src/agents/python/app/hosted.py#L20-L67) |
+| Request/result schemas | [`contracts.py`](../src/agents/python/app/contracts.py) |
+| Model and deterministic fallback | [`model.py`](../src/agents/python/app/model.py) |
+| Foundry hosted entrypoint | [`hosted.py`](../src/agents/python/app/hosted.py) |
+| MCP server surface | [`mcp_server.py`](../src/agents/python/app/mcp_server.py) |
+| Toolbox tool loading and call loop | [`toolbox.py`](../src/agents/python/app/toolbox.py) |
 | Shared hosted image | [`Dockerfile.hosted`](../src/agents/python/Dockerfile.hosted) |
 | Agent Framework workflow orchestration | [`AgentFrameworkWorkflowOrchestrator`](../src/application/AgentFrameworkWorkflowOrchestrator.cs) |
 | C# planner/specialist sequence | [`WorkflowService.ExecuteRoutingAsync`](../src/application/WorkflowService.cs) |
 | C# hosted-agent telemetry | [`WorkflowService.InvokeAgentAsync`](../src/application/WorkflowService.cs) |
 | C# result validation | [`WorkflowService.TryReadAgentResult`](../src/application/WorkflowService.cs) |
 | Foundry MCP and typed-envelope invocation | [`FoundryMcpClient.DiscoverToolsAsync`](../src/infrastructure/FoundryMcpClient.cs) and [`FoundryMcpClient.InvokeAsync`](../src/infrastructure/FoundryMcpClient.cs) |
-| Tool-to-agent endpoint map | [`apps/main.tf`](../apps/main.tf#L27-L32) |
-| Hosted-agent definitions | [`apps/main.tf`](../apps/main.tf#L34-L55) |
+| Tool-to-agent endpoint map | [`apps/main.tf`](../apps/main.tf), locals `foundry_tool_endpoints` and `foundry_mcp_tool_endpoints` |
+| Hosted-agent definitions | [`apps/main.tf`](../apps/main.tf), local `hosted_agent_definitions` |
 | Deployer Container Apps Job | [`apps/agent-deployer.tf`](../apps/agent-deployer.tf) |
-| Foundry registration client | [`deploy.py`](../src/agents/deployer/deploy.py#L28-L289) |
-| Foundry and ACR roles | [`apps/roles.tf`](../apps/roles.tf#L19-L54) |
-| Post-deploy instance access | [`deploy-hosted-agents.sh`](../scripts/deploy-hosted-agents.sh#L9-L116) |
+| Foundry registration client | [`deploy.py`](../src/agents/deployer/deploy.py) |
+| Foundry and ACR roles | [`apps/roles.tf`](../apps/roles.tf) |
+| Post-deploy instance access | [`deploy-hosted-agents.sh`](../scripts/deploy-hosted-agents.sh) |
 
 ## 1. LangGraph code
 
@@ -305,13 +318,13 @@ first.
 Workflow sequencing, routing, approval, durability, and recovery remain C#
 application logic, not LangGraph nodes.
 
-[`registry.py`](../src/agents/python/app/agents/registry.py#L9-L18) imports those four
+[`registry.py`](../src/agents/python/app/agents/registry.py) imports those four
 already-compiled graphs and maps the `AgentName` enum to the correct graph. There is
 no dynamic graph discovery.
 
 ### Typed invocation contract
 
-[`contracts.py`](../src/agents/python/app/contracts.py#L9-L40) defines the Pydantic
+[`contracts.py`](../src/agents/python/app/contracts.py) defines the Pydantic
 boundary:
 
 - `AgentName` limits identity to the four registered names.
@@ -331,11 +344,11 @@ boundary:
 `AgentRequest` allows extra fields so the Foundry envelope can evolve without
 immediately failing Pydantic validation. The C# side is stricter about the subset it
 accepts from `AgentResult`; see
-[`TryReadAgentResult`](../src/application/WorkflowService.cs#L767-L824).
+[`TryReadAgentResult`](../src/application/WorkflowService.cs).
 
 ### Model call
 
-[`model._model`](../src/agents/python/app/model.py#L15-L45) chooses one of three
+[`model._model`](../src/agents/python/app/model.py) chooses one of three
 paths:
 
 1. If `BANKING_AGENT_PROJECT_ENDPOINT` exists, create `ChatOpenAI` against the project's
@@ -347,7 +360,7 @@ paths:
    an Entra token for `https://cognitiveservices.azure.com/.default`.
 3. Otherwise, report that no model is configured.
 
-[`reason`](../src/agents/python/app/model.py#L47-L70) wraps the model with
+[`reason`](../src/agents/python/app/model.py) wraps the model with
 `with_structured_output(AgentResult)`, sends the agent-specific instructions as the
 system message, and sends trace ID, customer request, and the normalized specialist
 context as the user message. It then overwrites `agent`, `status`, `trace_id`,
@@ -356,7 +369,7 @@ runtime rather than the model.
 
 If no model is configured and `ALLOW_FALLBACK` is explicitly set to an affirmative
 value for local development,
-[`_local_result`](../src/agents/python/app/model.py#L73-L143) returns deterministic
+[`_local_result`](../src/agents/python/app/model.py) returns deterministic
 rule-based results for every agent. This makes local tests and demonstrations
 repeatable and marks every result with `execution_mode: fallback`. Hosted production
 registrations set `ALLOW_FALLBACK=false`, so missing model configuration fails the
@@ -400,7 +413,7 @@ python -m app.hosted
 ```
 
 At module import,
-[`hosted.py`](../src/agents/python/app/hosted.py#L20-L22):
+[`hosted.py`](../src/agents/python/app/hosted.py):
 
 1. reads `BANKING_AGENT_KIND`;
 2. converts it to the `AgentName` enum;
@@ -447,7 +460,7 @@ fallback behavior are exercised in
 
 ### Planner call
 
-[`ExecuteRoutingAsync`](../src/application/WorkflowService.cs#L189-L355) begins with
+[`ExecuteRoutingAsync`](../src/application/WorkflowService.cs) begins with
 the persisted workflow and creates planner parameters containing:
 
 - customer message;
@@ -491,7 +504,7 @@ The selected C# route maps to one tool:
 The tool map is defined twice for separate purposes:
 
 - `WorkflowService.SpecialistTools` selects the tool name.
-- [`foundry_tool_endpoints`](../apps/main.tf#L27-L32) maps that tool name to a
+- [`foundry_tool_endpoints`](../apps/main.tf) maps that tool name to a
   concrete Foundry hosted-agent URL.
 
 After validating the specialist result, the C# service—not the Python agent—sets
@@ -512,13 +525,13 @@ Python's `requires_approval` is not authoritative.
 8. returns the HTTP body in `McpToolResult.Data["response_body"]`.
 
 The orchestrator registers this implementation through
-[`AddHttpClient<IMcpClient, FoundryMcpClient>`](../src/orchestrator/Program.cs#L137-L153).
+[`AddHttpClient<IMcpClient, FoundryMcpClient>`](../src/orchestrator/Program.cs).
 `IMcpClient` is now accurate for MCP-enabled tools. It remains the adapter interface
 for legacy typed-envelope tools until those agents migrate.
 
 ### Result validation
 
-[`TryReadAgentResult`](../src/application/WorkflowService.cs#L767-L824) rejects a
+[`TryReadAgentResult`](../src/application/WorkflowService.cs) rejects a
 response unless:
 
 - transport status is `ok`;
@@ -536,7 +549,7 @@ approval.
 
 ### Step 1: Build the shared image
 
-[`task app:build-hosted-agents`](../tasks/Taskfile.app.yml#L68-L81) runs an ACR build
+[`task app:build-hosted-agents`](../tasks/Taskfile.app.yml) runs an ACR build
 for `Dockerfile.hosted` and publishes:
 
 ```text
@@ -545,12 +558,12 @@ hosted-agents:latest
 ```
 
 Terraform uses the immutable `image_tag` in
-[`hosted_agents_image`](../apps/main.tf#L16). The same immutable image is supplied to
+[`hosted_agents_image`](../apps/main.tf). The same immutable image is supplied to
 all four registrations.
 
 ### Step 2: Terraform configures the deployer job
 
-[`apps/main.tf`](../apps/main.tf#L34-L55) declares four `{name, kind}` objects.
+The `hosted_agent_definitions` local in [`apps/main.tf`](../apps/main.tf) declares four `{name, kind}` objects.
 [`apps/agent-deployer.tf`](../apps/agent-deployer.tf) creates a manually triggered
 Azure Container Apps Job and injects:
 
@@ -567,7 +580,7 @@ assignments.
 
 ### Step 3: The job registers versions in Foundry
 
-[`deploy.py`](../src/agents/deployer/deploy.py#L28-L289) uses
+[`deploy.py`](../src/agents/deployer/deploy.py) uses
 `ManagedIdentityCredential` and the `https://ai.azure.com/.default` scope. For each
 definition it:
 
@@ -584,7 +597,7 @@ selection.
 
 ### Step 4: Foundry pulls and starts the image
 
-[`apps/roles.tf`](../apps/roles.tf#L40-L54) grants:
+[`apps/roles.tf`](../apps/roles.tf) grants, via `foundry_project_acr_pull` and `foundry_project_user`:
 
 - the Foundry project identity `AcrPull` on the registry; and
 - the Foundry project identity `Foundry User` on the Foundry account.
@@ -597,7 +610,7 @@ invocation-protocol requests to it.
 The hosted-agent instance identity does not exist until Foundry creates a version.
 Therefore Terraform cannot assign its model role in advance.
 
-[`scripts/deploy-hosted-agents.sh`](../scripts/deploy-hosted-agents.sh#L9-L116)
+[`scripts/deploy-hosted-agents.sh`](../scripts/deploy-hosted-agents.sh)
 starts the Container Apps Job, waits for success, lists each active Foundry version,
 extracts its `instance_identity.principal_id`, and idempotently grants
 `Cognitive Services OpenAI User` on the Foundry account.
@@ -610,7 +623,7 @@ versioned script.
 ### Step 6: The orchestrator calls the registered endpoints
 
 Terraform builds these URLs in
-[`foundry_tool_endpoints`](../apps/main.tf#L27-L32):
+[`foundry_tool_endpoints`](../apps/main.tf):
 
 ```text
 .../agents/workflow-planning/endpoint/protocols/invocations?api-version=v1
@@ -619,10 +632,10 @@ Terraform builds these URLs in
 .../agents/dispute-planning/endpoint/protocols/invocations?api-version=v1
 ```
 
-[`apps/orchestrator.tf`](../apps/orchestrator.tf#L115-L139) injects that JSON map and
+[`apps/orchestrator.tf`](../apps/orchestrator.tf) injects that JSON map as `FOUNDRY_TOOL_ENDPOINTS` and
 retry configuration into the orchestrator. The orchestrator identity receives
 `Foundry Agent Consumer` in
-[`apps/roles.tf`](../apps/roles.tf#L19-L25).
+[`apps/roles.tf`](../apps/roles.tf), resource `orchestrator_agent_consumer`.
 
 ## 5. Runtime model enforcement
 

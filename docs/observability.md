@@ -19,8 +19,13 @@ Workflow activities use these safe attributes:
 | `workflow.trace_id` | Trace identifier returned in the workflow API contract and Hosted Agent payload |
 | `correlation.id` | Operator- or service-provided request correlation value |
 | `agent.name`, `tool.name`, `agent.status` | Hosted Agent boundary and outcome |
+| `agent.execution_mode`, `agent.contract_version` | Whether the result came from the live model or the deterministic fallback, and the contract version in use |
+| `agent.discovered_tools`, `agent.discovered_tools.count` | MCP tool names returned by `tools/list` at discovery |
 | `approval.decision` | `approve` or `reject` only |
 | `action.type`, `support_case.created` | Approved action outcome without case contents |
+| `workflow.status`, `workflow.version`, `workflow.expected_version` | State-machine position and optimistic-concurrency values |
+| `workflow.recovery.attempt_count`, `workflow.recovery.max_attempts`, `workflow.recovery.next_attempt_at` | Recovery attempt limiting and backoff |
+| `workflow.operation`, `persistence.found`, `duration_ms` | Operation name, lookup result, and elapsed time |
 | `outcome`, `error.type` | Safe result metadata; exception messages are not recorded |
 
 The application does not attach user messages, approval reasons, evidence content,
@@ -34,6 +39,8 @@ tokens, account data, or raw downstream response bodies to spans or structured l
 - `persistence.workflow.get`
 - `persistence.workflow.update`
 - `workflow.approval`
+- `workflow.recovery`
+- `workflow.recovery.abandoned`
 - `persistence.approval.record`
 - `persistence.support_case.get`
 
@@ -109,5 +116,7 @@ dependencies
 6. Inspect span attributes and logs to confirm the submitted message, approval reason,
    evidence names/content, tokens, and transaction details are absent.
 
-The application test `WorkflowTelemetryTests` performs the same lifecycle assertion
-with explicit PII markers and fails if those values appear in emitted span attributes.
+The application test
+[`WorkflowTelemetryTests`](../tests/BankingAgent.Application.Tests/WorkflowTelemetryTests.cs)
+performs the same lifecycle assertion with explicit PII markers and fails if those
+values appear in emitted span attributes. Run it with `task test:application`.
