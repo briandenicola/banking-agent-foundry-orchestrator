@@ -611,6 +611,29 @@ Two consequences worth knowing:
   approval endpoint is unreachable from the internet and continues to report
   `authentication_required: false`, so the residual exposure stays visible.
 
+**What "unreachable" looks like in practice.** A Container Apps environment
+fronts every app it hosts, internal and external, behind a single public IP.
+The orchestrator's `.internal.` FQDN therefore still resolves publicly and
+still accepts a TCP connection; the front door simply declines to route the
+request and answers with its own page:
+
+```
+Error 404 - This Container App is stopped or does not exist.
+```
+
+That 404 is the lockdown working. `assert_not_publicly_reachable` accepts a DNS
+or connection failure, and a 404 carrying that marker, as proof the request
+never reached the app. Every other response - an app-served 404, a 401, a 200,
+or any status carrying the marker but not 404 - fails the check, because it
+means the orchestrator itself answered.
+
+Verify by hand with:
+
+```bash
+ORCHESTRATOR_URL=$(terraform -chdir=apps output -raw ORCHESTRATOR_URL)
+curl -s "${ORCHESTRATOR_URL}/health/ready" | grep -o "This Container App is stopped or does not exist"
+```
+
 The remaining public surface is the Web UI. Restricting it further requires an
 ingress IP allowlist (`ip_security_restriction`), which is supported by the
 provider in use but is not configured here, because pinning the allowlist to one
@@ -699,6 +722,14 @@ terraform -chdir=apps validate
    ```bash
    task app:build
    ```
+
+   Both `task app:build` and `task app:apply` derive the image tag
+   independently from `git rev-parse HEAD | cut -c 1-8`. **Any commit made
+   between the two steps - including a documentation-only commit - moves the
+   tag that apply requests without rebuilding the images.** `task app:apply`
+   runs `scripts/guard-image-tags.sh` first and refuses to start when the tags
+   are absent, naming the missing images. Rebuild, or apply an existing tag
+   explicitly with `-var "image_tag=<tag>"`.
 
 4. Initialize and review the application plan:
 
@@ -796,8 +827,42 @@ Notes before enabling:
 - Only `transaction-explanation` calls toolbox tools, and it cannot require
   approval by construction, so tool output never reaches an approval decision.
   See [ADR 0004](decisions/0004-foundry-toolbox-tools.md).
-- Neither feature has been verified against live Azure. Treat the first
-  enablement as a test, not as a known-good path.
+- Both features have now been deployed against live Azure with
+  `ENABLE_AGENT_MEMORY=true` and `ENABLE_AGENT_TOOLBOX=true`. That run also
+  found the toolbox tool-identifier constraint recorded in
+  [ADR 0004](decisions/0004-foundry-toolbox-tools.md): Foundry rejects a
+  toolbox version when more than one tool lacks a `name` or `server_label`.
+
+### Recovering a partially applied stack
+
+An apply that fails partway leaves resources created but not recorded, or
+recorded but not created. Both happened during the first end-to-end run and
+neither is self-announcing, so check reality before trusting Terraform.
+
+**Terraform state is not evidence.** `terraform output` reads state, so it
+still names resources that were deleted out of band. After any failed or
+interrupted apply, confirm against Azure:
+
+```bash
+APPS_RG="$(terraform -chdir=infrastructure output -raw APP_NAME)-apps-rg"
+az resource list -g "${APPS_RG}" --query "[].{name:name,type:type}" -o table
+```
+
+A healthy apps stack shows the orchestrator and Web UI container apps, both
+Container Apps jobs, and one user-assigned identity per workload. `task
+app:migrate` and `task app:deploy-hosted-agents` resolve their job names from
+state, so a job that exists in state but not in Azure fails with
+`(ResourceNotFound) The Resource 'Microsoft.App/jobs/...' was not found`.
+
+| Situation | Symptom | Recovery |
+| --- | --- | --- |
+| Resource exists in Azure, absent from state | Apply fails because the name is already taken | Delete the resource, or `terraform -chdir=apps import` it, then re-apply |
+| Resource in state, absent from Azure | A job task fails with `ResourceNotFound`, or apply reports no changes | `terraform -chdir=apps apply -refresh-only` to reconcile, then re-apply |
+| Apply failed midway | Next plan shows replacements of tainted resources | Expected; let the replacement proceed once the underlying cause is fixed |
+
+Terraform refreshes before planning, so an apply that races a deletion still in
+flight can report success with nothing to do. If an apply reports no changes but
+the resources are missing, re-run it once the deletion has completed.
 
 ### CI/CD deployment
 
@@ -885,6 +950,10 @@ antiforgery cookies; users and smoke tests must start with a fresh page/cookie j
 | Workflow becomes `Failed` | Read `workflow.failed`, workflow trace ID, and `hosted_agent.invoke` span | Correct endpoint/RBAC/model access or response contract, then submit a new workflow |
 | Foundry returns 401/403 | Verify orchestrator roles and hosted-agent instance model role | Reapply Terraform RBAC and rerun `task app:deploy-hosted-agents` |
 | Agent deployer fails | Run the deployer task and inspect emitted Container Apps job logs | Correct image, Foundry project access, or registration payload |
+| Deployer fails with `Multiple tools without identifiers found` | A toolbox version carries more than one tool lacking `name`/`server_label` | Give every toolbox tool a unique `name` in `apps/main.tf`; see [ADR 0004](decisions/0004-foundry-toolbox-tools.md) |
+| Job task fails with `Microsoft.App/jobs/... was not found` | State records a job that no longer exists in Azure | `az resource list -g <apps-rg> -o table` to confirm, then `terraform -chdir=apps apply -refresh-only` and re-apply |
+| Apply fails because a resource name is already taken | The resource exists in Azure but not in state | Import it, or delete it and re-apply; wait for the delete to finish before re-applying |
+| Smoke reports the orchestrator answered 404 | The internal FQDN resolves to the shared environment IP; the front door returns its own 404 | Expected when the body contains `This Container App is stopped or does not exist`; any other 404 body means the app answered |
 | `task app:apply` reports missing images | The apps stack deploys images tagged with the current commit; a commit made after the last build moves that tag | Run `task app:build`, or apply with an explicit `-var "image_tag=<existing-tag>"` |
 | PostgreSQL connection fails | Verify managed identity, Entra admin, host/database outputs, and runtime grants | Rerun migration only after identity and network access are correct |
 | Approval returns 409 | Compare status, recorded decision, and workflow version | Refresh durable state; do not overwrite a conflicting decision |
@@ -960,28 +1029,31 @@ smoke passes.
 
 ## 15. Current environment verification appendix
 
-Verified on 2026-07-31:
+Verified on 2026-09-01:
 
 | Item | Verified value |
 | --- | --- |
-| Subscription | `BJD_Core_Subscription` |
 | Region | `swedencentral` |
-| Application image tag | `8560467` |
-| Orchestrator revision | `hare-7040-orchestrator--0000010` |
-| Web UI revision | `hare-7040-webui--0000008` |
-| Readiness | Orchestrator and Web UI `Healthy` |
-| Hosted agents | Four active agents, version 4 |
-| Live smoke | Passed routing, polling, evidence, and approval checks |
-| Terraform application plan | No changes after deployment |
+| Application image tag | `e7ee4b9f` |
+| Optional features | `ENABLE_AGENT_MEMORY=true`, `ENABLE_AGENT_TOOLBOX=true` |
+| Service authentication | Disabled (`ENABLE_SERVICE_AUTH=false`, `ALLOW_INSECURE_SERVICE_AUTH=true`); orchestrator on internal ingress |
+| Hosted agents | Four agents active; each instance identity granted model invocation on the Foundry account |
+| Live smoke | 7 of 7 checks passed |
+| Terraform state | Local, not remote; see below |
 
-Deployment proof is recorded in
-[`/.azure/deployment-plan.md`](../.azure/deployment-plan.md).
+The run exercised the full path: `cloud:apply`, `app:build`, `app:init`,
+`app:apply`, `app:migrate`, `app:deploy-hosted-agents`, `app:smoke`. Memory and
+toolbox were enabled for the first time during it.
+
+Earlier verification on 2026-07-31 covered image tag `8560467` on the `hare-7040`
+deployment, with orchestrator revision `hare-7040-orchestrator--0000010` and Web
+UI revision `hare-7040-webui--0000008`. Deployment proof from that run is recorded
+in [`/.azure/deployment-plan.md`](../.azure/deployment-plan.md).
 
 The GitHub production environment's OIDC/backend values and authoritative remote-state
-migration were not configured at verification time. The live deployment was applied
-from the existing local application state in an isolated working copy. Complete
-[`docs/remote-state.md`](remote-state.md) before relying on the gated production
-workflow.
+migration are still not configured. Both verified deployments were applied from
+local application state. Complete [`docs/remote-state.md`](remote-state.md) before
+relying on the gated production workflow.
 
 ## 16. Known implementation boundaries
 
