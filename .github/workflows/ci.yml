@@ -209,6 +209,46 @@ jobs:
         working-directory: src/agents/deployer
         run: python -m pytest test_deploy.py -v
 
+  # ── Web UI: browser/DOM regression tests ──────────────────────────────────
+  webui-js-tests:
+    name: Web UI DOM tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/webui-js/package-lock.json
+
+      - name: Install dependencies
+        working-directory: tests/webui-js
+        run: npm ci --prefer-offline
+
+      - name: Run DOM tests
+        working-directory: tests/webui-js
+        run: node --test
+
+  # ── Python: deployment script tests ───────────────────────────────────────
+  script-tests:
+    name: Deployment script tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: python -m pip install pytest
+
+      # Guards the smoke script and the optional agent feature flags.
+      # ADRs 0003 and 0004 cite these tests; they must run on every change.
+      - name: Run script tests
+        run: python -m pytest scripts/tests -v
+
   # ── Terraform: infrastructure stack ───────────────────────────────────────
   terraform-infrastructure:
     name: Terraform validate (infrastructure)

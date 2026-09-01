@@ -71,6 +71,12 @@ tasks:
       - python -m pip install -r src/agents/deployer/requirements.txt pytest -q
       - cd src/agents/deployer && python -m pytest test_deploy.py -v
 
+  scripts:
+    desc: Run deployment script tests (smoke assertions and agent feature flags)
+    cmds:
+      - python -m pip install pytest -q
+      - python -m pytest scripts/tests -v
+
   js:
     desc: Run WebUI browser/DOM regression tests (jsdom, no headless browser binary)
     dir: tests/webui-js
@@ -80,7 +86,7 @@ tasks:
 
 
   all:
-    desc: Aggregate quality gate — unit, E2E, and Python hosted tests (no live Azure)
+    desc: Aggregate quality gate — unit, E2E, Python, and script tests (no live Azure)
     cmds:
       - task: unit
       - task: js
@@ -88,3 +94,4 @@ tasks:
       - task: python-agents
       - task: python-deployer
       - task: hosted
+      - task: scripts

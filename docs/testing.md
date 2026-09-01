@@ -19,8 +19,11 @@ Python tests must run from the `src/agents/python` working directory so that rel
 
 ```bash
 cd src/agents/python
-python -m pip install -r requirements.txt pytest
+python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
+
+The `task test:*` targets install these for you, so this step is only needed when
+invoking `pytest` directly.
 
 ---
 
@@ -102,9 +105,16 @@ In `WorkflowAsyncLifecycleTests`, the full 202 → Draft → RecoverAsync → te
 
 ### Category P — Python agent unit tests (`src/agents/python/tests/`)
 
-Pure Python unit tests, no live model calls. Cover:
+Pure Python unit tests, no live model calls. `task test:python-agents` runs the
+whole directory:
 
-- `test_agents.py` (`AgentGraphTests`): routing decisions across all agent types, approval flags, deterministic planning output using patched model calls.
+| File | What it covers |
+|---|---|
+| `test_agents.py` | Routing decisions across all agent types, approval flags, deterministic planning output using patched model calls |
+| `test_agent_graphs.py` | Multi-node LangGraph graph structure and node transitions |
+| `test_mcp_server.py` | The MCP server surface the hosted agents expose |
+| `test_mcp_interop.py` | `initialize`, `tools/list`, and `tools/call` interoperability against the boundary |
+| `test_toolbox.py` | Toolbox tool implementations |
 
 ### Category PH — Python hosted-agent contract tests (`src/agents/python/tests/test_hosted.py`)
 
@@ -114,6 +124,24 @@ Tests for the Foundry Hosted Agent invocation contract (`app/hosted.py`). Cover:
 - Failure propagation.
 - Timeout handling.
 - Boundary contracts for `InvocationAgentServerHost`.
+
+### Category S — Deployment script tests (`scripts/tests/`)
+
+Pure Python unit tests for the deployment and verification scripts. They import
+the scripts directly and use no Azure credentials. Run from the repository root
+with `task test:scripts`.
+
+| File | What it covers |
+|---|---|
+| `test_smoke_static.py` | Argument parsing and static structure of `smoke-mvp.py` |
+| `test_smoke_internal_ingress.py` | Internal-ingress smoke semantics, including that a Container Apps front-door 404 counts as unreachable while an app-served 404 does not |
+| `test_agent_feature_flags.py` | That the memory and toolbox flags stay off by default; cited by [ADR 0003](decisions/0003-foundry-memory-prompt-agent.md) and [ADR 0004](decisions/0004-foundry-toolbox-tools.md) |
+| `test_guard_stack_alignment.py` | `guard-stack-alignment.sh` resource-group alignment checks |
+
+### Category J — Web UI DOM tests (`tests/webui-js/`)
+
+Browser-DOM regression tests for the Web UI submit path, executed with Node's
+built-in test runner against jsdom. No headless browser binary is required.
 
 ---
 
@@ -159,7 +187,7 @@ python -m pytest tests/test_hosted.py -v
 task test:all
 ```
 
-Runs in order: `test:unit` → `test:js` → `test:e2e` → `test:python-agents` → `test:python-deployer` → `test:hosted`. This is the recommended pre-push gate.
+Runs in order: `test:unit` → `test:js` → `test:e2e` → `test:python-agents` → `test:python-deployer` → `test:hosted` → `test:scripts`. This is the recommended pre-push gate.
 
 ### Individual suite shortcuts
 
@@ -169,11 +197,12 @@ Runs in order: `test:unit` → `test:js` → `test:e2e` → `test:python-agents`
 | `task test:application` | Application unit (Category B) |
 | `task test:api` | API contracts (Category C) |
 | `task test:webui` | WebUI token handler (Category D) |
-| `task test:js` | Web UI browser-DOM tests using jsdom |
+| `task test:js` | Web UI DOM tests using jsdom (Category J) |
 | `task test:infrastructure` | EF persistence (Category E) |
 | `task test:e2e` | E2E lifecycle (Category E2E) |
 | `task test:python-agents` | Python agent unit (Category P) |
 | `task test:hosted` | Python hosted contracts (Category PH) |
+| `task test:scripts` | Deployment script tests (Category S) |
 | `task test:all` | All of the above |
 
 ---
@@ -190,9 +219,11 @@ Runs in order: `test:unit` → `test:js` → `test:e2e` → `test:python-agents`
 | `Python agent unit tests` | Category P | Yes |
 | `Python hosted-agent tests` | Category PH | Yes |
 | `Python deployer unit tests` | Deployer tests | Yes |
+| `Web UI DOM tests` | Category J | Yes |
+| `Deployment script tests` | Category S | Yes |
 | `Terraform validate (infrastructure)` | fmt + validate | Yes |
 | `Terraform validate (apps)` | fmt + validate | Yes |
-| `Build container images` | All 7 Dockerfiles | Yes |
+| `Build container images` | All 6 Dockerfiles | Yes |
 
 ### Duplication avoidance
 
@@ -242,3 +273,10 @@ These tests will automatically be picked up by `task test:e2e` and the `dotnet-e
 ### Python (hosted)
 
 Add test functions to `src/agents/python/tests/test_hosted.py`. Once that file exists the `python-hosted-tests` CI job and `task test:hosted` will run them without any further pipeline changes.
+
+### Deployment scripts
+
+Add test modules under `scripts/tests/`. Both `task test:scripts` and the
+`script-tests` CI job collect the whole directory, so no pipeline change is
+needed. Import the script under test directly; these tests must not require
+Azure credentials or network access.
