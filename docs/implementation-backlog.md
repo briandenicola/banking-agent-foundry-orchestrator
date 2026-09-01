@@ -63,3 +63,10 @@ For a concrete, issue-by-issue close plan for the remaining backlog items, see [
     - Include sequence diagrams and direct `path/to/file:line` references for every important implementation step so readers can move between the guide and the exact code.
     - Keep line references current whenever referenced code changes.
     - Acceptance criteria: a developer unfamiliar with the repository can trace the primary informational, suspicious-activity, and dispute-approval flows from entrypoint to completion using the guide and its verified code references.
+
+13. P1 — Audit all documentation for accuracy and currency
+    - Review every file under `docs/` (plus `README.md` and `.github/copilot-instructions.md`) against the current implementation, Terraform stacks, Taskfile targets, and CI workflow.
+    - Verify each documented command, environment variable, Terraform input/output, and `path/to/file:line` reference actually resolves and behaves as described.
+    - Reconcile the backlog, phase plan, and issue-close action plan with the issues that have actually been delivered, and remove or mark superseded guidance.
+    - Confirm ADRs in `docs/decisions/` still reflect the guardrails in force (no AI gateway, no Semantic Kernel, no API keys for service auth).
+    - Acceptance criteria: a reader following any documented runbook end to end hits no stale command, variable, or code reference, and every doc states its current status.
