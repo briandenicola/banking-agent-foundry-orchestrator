@@ -11,11 +11,16 @@ This repository contains a reference banking agent application built around a .N
 - Expose versioned REST APIs under `/api/v1/...` and return ProblemDetails for failures.
 
 ## Build, test, and quality gate
+- Use `task test:all` as the pre-push gate. It runs the .NET unit, DOM, E2E,
+  Python agent, Python deployer, hosted-agent, and deployment script suites.
 - Use `dotnet build -c Release` for the .NET app.
-- Use `dotnet test` when test projects exist.
 - Use `dotnet format --verify-no-changes` when formatting is part of the workflow.
-- Use `python -m compileall src/agents/python` for the Python service stubs until a dedicated test runner exists.
-- Run the local quality gate before marking work complete.
+- Python suites run under pytest: `task test:python-agents`, `task test:hosted`,
+  `task test:python-deployer`, and `task test:scripts`. Python agent tests must
+  run from `src/agents/python/`.
+- Run the local quality gate before marking work complete. Passing tests are not
+  by themselves evidence that an acceptance criterion is met; check the criterion
+  against the code.
 
 ## AI and agent guidance
 - Use Microsoft Foundry and Microsoft Agent Framework for agentic orchestration where practical.
