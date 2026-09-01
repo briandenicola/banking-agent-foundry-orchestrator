@@ -266,11 +266,30 @@ def orchestrator_is_internal(orchestrator_url: str) -> bool:
     return ".internal." in hostname
 
 
+#: Marker in the Container Apps front door's own 404 page. The environment
+#: serves every app - internal and external - behind one public IP, so the
+#: internal FQDN resolves publicly and the front door answers requests for it
+#: with this page instead of routing them. That response is the lockdown
+#: working, not failing.
+PLATFORM_UNAVAILABLE_MARKER = "This Container App is stopped or does not exist"
+
+
+def _error_body(error: HTTPError) -> str:
+    """Return an HTTPError's body, tolerating an error raised without one."""
+    if getattr(error, "fp", None) is None:
+        return ""
+    return error.read().decode("utf-8", errors="replace")
+
+
 def assert_not_publicly_reachable(url: str, timeout: int, description: str) -> None:
     """Fail unless *url* is unreachable from where smoke is running.
 
-    An HTTP response of any status means the endpoint answered, which means the
-    lockdown did not hold. Only a DNS or connection failure proves it did.
+    A DNS or connection failure proves the lockdown held. So does the Container
+    Apps front door's own 404 page, which means the platform declined to route
+    the request rather than the app answering it.
+
+    Any other HTTP response means the endpoint itself answered, so the lockdown
+    did not hold.
     """
     request = Request(
         url,
@@ -281,6 +300,8 @@ def assert_not_publicly_reachable(url: str, timeout: int, description: str) -> N
         with urlopen(request, timeout=timeout) as response:
             status = response.status
     except HTTPError as error:
+        if error.code == 404 and PLATFORM_UNAVAILABLE_MARKER in _error_body(error):
+            return
         raise SmokeFailure(
             f"{description} answered HTTP {error.code} from the public internet. "
             "The orchestrator is meant to be reachable only inside the Container "

@@ -18,6 +18,7 @@ CLI, or Azure access is required.
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
 import types
 import unittest
@@ -94,7 +95,8 @@ class NotPubliclyReachableTests(unittest.TestCase):
         self.assertIn("public internet", str(caught.exception))
 
     def test_an_http_error_response_also_fails_the_check(self):
-        # 404/401/500 all mean something answered, so the endpoint is exposed.
+        # 401/500, and any 404 the app itself served, all mean something
+        # answered, so the endpoint is exposed.
         def _http_error(*_args, **_kwargs):
             raise HTTPError(INTERNAL_URL, 404, "Not Found", {}, None)  # type: ignore[arg-type]
 
@@ -102,6 +104,56 @@ class NotPubliclyReachableTests(unittest.TestCase):
             with self.assertRaises(SmokeFailure) as caught:
                 smoke.assert_not_publicly_reachable(INTERNAL_URL, 5, "Orchestrator")
         self.assertIn("404", str(caught.exception))
+
+    def test_the_platform_front_door_404_is_the_success_condition(self):
+        """The environment serves internal and external apps behind one IP.
+
+        The internal FQDN therefore resolves publicly, and the Container Apps
+        front door answers with its own 404 page rather than routing to the
+        app. That response proves the lockdown held, so treating it as a breach
+        would fail every deployment that is correctly locked down.
+        """
+        page = (
+            "<html><head><title>Azure Container App - Unavailable</title></head>"
+            "<body>Error 404 - This Container App is stopped or does not exist."
+            "</body></html>"
+        ).encode()
+
+        def _front_door_404(*_args, **_kwargs):
+            raise HTTPError(
+                INTERNAL_URL, 404, "Not Found", {}, io.BytesIO(page)  # type: ignore[arg-type]
+            )
+
+        with patch.object(smoke, "urlopen", _front_door_404):
+            smoke.assert_not_publicly_reachable(INTERNAL_URL, 5, "Orchestrator")
+
+    def test_an_app_served_404_still_fails_the_check(self):
+        # Without the marker the 404 came from the app, which means it answered.
+        def _app_404(*_args, **_kwargs):
+            raise HTTPError(
+                INTERNAL_URL, 404, "Not Found", {}, io.BytesIO(b'{"error":"no route"}')  # type: ignore[arg-type]
+            )
+
+        with patch.object(smoke, "urlopen", _app_404):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke.assert_not_publicly_reachable(INTERNAL_URL, 5, "Orchestrator")
+        self.assertIn("404", str(caught.exception))
+
+    def test_a_non_404_carrying_the_marker_still_fails_the_check(self):
+        # The marker only excuses a 404. Anything else answered.
+        def _marked_500(*_args, **_kwargs):
+            raise HTTPError(
+                INTERNAL_URL,
+                500,
+                "Server Error",
+                {},
+                io.BytesIO(b"This Container App is stopped or does not exist"),  # type: ignore[arg-type]
+            )
+
+        with patch.object(smoke, "urlopen", _marked_500):
+            with self.assertRaises(SmokeFailure) as caught:
+                smoke.assert_not_publicly_reachable(INTERNAL_URL, 5, "Orchestrator")
+        self.assertIn("500", str(caught.exception))
 
 
 class HealthCheckTests(unittest.TestCase):
