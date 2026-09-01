@@ -452,6 +452,51 @@ class ToolboxDeploymentTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _toolbox()
 
+    def test_toolbox_rejects_multiple_tools_without_identifiers(self):
+        """Foundry returns 400 when more than one tool lacks an identifier.
+
+        Catching it here names the offending tool types instead of surfacing a
+        urllib traceback from POST /toolboxes/<name>/versions.
+        """
+        env = {
+            "TOOLBOX_NAME": "banking-toolbox",
+            "TOOLBOX_TOOLS": json.dumps(
+                [{"type": "code_interpreter"}, {"type": "toolbox_search"}]
+            ),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ValueError) as caught:
+                _toolbox()
+
+        self.assertIn("code_interpreter", str(caught.exception))
+        self.assertIn("toolbox_search", str(caught.exception))
+
+    def test_toolbox_allows_a_single_tool_without_an_identifier(self):
+        env = {
+            "TOOLBOX_NAME": "banking-toolbox",
+            "TOOLBOX_TOOLS": json.dumps(
+                [{"type": "code_interpreter", "name": "calc"}, {"type": "toolbox_search"}]
+            ),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.assertIsNotNone(_toolbox())
+
+    def test_toolbox_rejects_duplicate_tool_identifiers(self):
+        env = {
+            "TOOLBOX_NAME": "banking-toolbox",
+            "TOOLBOX_TOOLS": json.dumps(
+                [
+                    {"type": "code_interpreter", "name": "same"},
+                    {"type": "toolbox_search", "name": "same"},
+                ]
+            ),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(ValueError) as caught:
+                _toolbox()
+
+        self.assertIn("same", str(caught.exception))
+
     def test_consumer_endpoint_is_version_independent(self):
         """The consumer endpoint must follow the default version.
 

@@ -597,7 +597,41 @@ def _toolbox() -> ToolboxDefinition | None:
         if not isinstance(tool, dict) or not tool.get("type"):
             raise ValueError("Each toolbox tool requires a non-empty type")
 
+    _assert_tool_identifiers(tools)
+
     return ToolboxDefinition(name=name, tools=tools)
+
+
+def _assert_tool_identifiers(tools: list) -> None:
+    """Reject tool sets Foundry will refuse when the toolbox version is created.
+
+    Foundry allows at most one tool without an identifier, and identifiers must
+    be unique. Catching this here fails the deploy with the offending tool types
+    named, instead of a 400 buried in a urllib traceback.
+    """
+    identifiers = [
+        str(tool.get("name") or tool.get("server_label") or "").strip() for tool in tools
+    ]
+
+    unidentified = [
+        str(tool.get("type"))
+        for tool, identifier in zip(tools, identifiers)
+        if not identifier
+    ]
+    if len(unidentified) > 1:
+        raise ValueError(
+            "Foundry allows at most one toolbox tool without a 'name' or "
+            "'server_label'. Add an identifier to these tool types: "
+            + ", ".join(sorted(unidentified))
+        )
+
+    named = [identifier for identifier in identifiers if identifier]
+    duplicates = sorted({name for name in named if named.count(name) > 1})
+    if duplicates:
+        raise ValueError(
+            "Toolbox tool identifiers must be unique. Duplicated: "
+            + ", ".join(duplicates)
+        )
 
 
 def _memory_agent() -> MemoryAgentDefinition | None:

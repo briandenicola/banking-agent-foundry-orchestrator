@@ -69,6 +69,16 @@ The tool loop is a single bounded round (`MAX_TOOL_CALLS = 4`), not an
 open-ended agent loop, because the hosted-agent invocation timeout is a fixed
 budget shared with the graph's own model calls.
 
+## Tool identifiers
+
+Foundry rejects a toolbox version when more than one tool lacks an identifier:
+`Multiple tools without identifiers found. All tools except a single tool must
+have unique identifiers ('name' or 'server_label')`. Every entry in
+`local.toolbox_tools` therefore carries an explicit unique `name`, and the
+deployer validates the set before calling
+`POST /toolboxes/<name>/versions` so a misconfiguration fails with the offending
+tool types named rather than a 400 inside a urllib traceback.
+
 ## Tool approval policy
 
 `require_approval` is `"never"`. The tools in the toolbox today

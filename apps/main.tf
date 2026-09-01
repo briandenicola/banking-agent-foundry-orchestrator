@@ -20,13 +20,17 @@ locals {
   # tool. Adding a tool here reaches every agent without a code change.
   toolbox_name = var.enable_agent_toolbox ? "banking-toolbox" : ""
 
+  # Foundry rejects a toolbox version when more than one tool lacks an
+  # identifier, so every tool carries an explicit unique `name`.
   toolbox_tools = [
     {
       type        = "code_interpreter"
+      name        = "transaction_calculator"
       description = "Run Python to compute totals, averages, and date maths over transaction data the customer supplied."
     },
     {
       type = "toolbox_search"
+      name = "banking_knowledge_search"
     },
   ]
 
