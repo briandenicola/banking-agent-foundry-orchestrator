@@ -1,18 +1,32 @@
 # Issue close action plan
 
-This document is the working plan for closing the remaining backlog issues in a way that is explicit, testable, and observable. It is meant to replace vague status updates with a concrete execution plan.
+>**Status: superseded. Kept as history.**
+>
+>This plan covered issues
+>[#20](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/20),
+>[#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18),
+>and [#17](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/17).
+>All three are closed, and the MCP rollout was finished in
+>[#36](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/36).
+>Nothing here is outstanding work. The section below on evidence required before
+>closing an issue is the part still worth following; it is the practice adopted
+>in [#34](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/34).
+>For current state, read [implementation-backlog.md](./implementation-backlog.md)
+>and the open GitHub issues.
+
+This document was the working plan for closing those issues in a way that is explicit, testable, and observable. It replaced vague status updates with a concrete execution plan.
 
 ## Working assumptions
 
-- These issues are not considered complete until the acceptance criteria are met and the relevant validation steps pass.
+- These issues were not considered complete until the acceptance criteria were met and the relevant validation steps passed.
 - The plan below is ordered to reduce rework: #20 first, then #18, then #17.
 - Each issue must end with evidence in source, tests, and deployment/smoke output before it is marked closed.
 
-## Issue #20 — Fix hosted-agent planner context and live model configuration
+## Issue #20 — Fix hosted-agent planner context and live model configuration (closed)
 
-### Why this issue remains open
+### Why this issue was open
 
-The current implementation still has a contract/configuration gap between planner output and specialist execution, and the hosted-agent path can still fall back silently when the model configuration is incomplete.
+At the time, the implementation had a contract/configuration gap between planner output and specialist execution, and the hosted-agent path could fall back silently when the model configuration was incomplete.
 
 ### Close tasks
 
@@ -47,11 +61,11 @@ The current implementation still has a contract/configuration gap between planne
 
 ---
 
-## Issue #18 — Implement real MCP discovery and invocation for Foundry specialist agents
+## Issue #18 — Implement real MCP discovery and invocation for Foundry specialist agents (closed)
 
-### Why this issue remains open
+### Why this issue was open
 
-The current boundary is still an adapter-shaped wrapper around Foundry hosted-agent HTTP calls. The issue requires a standards-based MCP discovery/invocation path that the orchestrator can discover and invoke through a typed tool contract.
+At the time, the boundary was an adapter-shaped wrapper around Foundry hosted-agent HTTP calls. The issue required a standards-based MCP discovery/invocation path that the orchestrator could discover and invoke through a typed tool contract.
 
 ### Close tasks
 
@@ -85,11 +99,11 @@ The current boundary is still an adapter-shaped wrapper around Foundry hosted-ag
 
 ---
 
-## Issue #17 — Adopt Microsoft Agent Framework for C# workflow orchestration
+## Issue #17 — Adopt Microsoft Agent Framework for C# workflow orchestration (closed)
 
-### Why this issue remains open
+### Why this issue was open
 
-The repo now has orchestration-related code, but the production path still depends on procedural orchestration rather than Agent Framework as the authoritative workflow engine.
+At the time, the repo had orchestration-related code, but the production path depended on procedural orchestration rather than Agent Framework as the authoritative workflow engine.
 
 ### Close tasks
 
@@ -123,7 +137,7 @@ The repo now has orchestration-related code, but the production path still depen
 
 ---
 
-## Recommended execution order
+## Recommended execution order (followed)
 
 1. Close #20 first because it fixes the contract and model-config gap that the later issues depend on.
 2. Close #18 next because it builds the tool boundary the orchestrator needs.

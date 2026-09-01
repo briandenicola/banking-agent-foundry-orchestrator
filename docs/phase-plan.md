@@ -33,17 +33,22 @@ Delivered:
 - Trace ID and workflow status visibility in the UI
 - Basic workflow-state and approval feedback
 
-## Phase 3 — Foundry and hosted-agent integration (Completed with follow-on hardening)
+## Phase 3 — Foundry and hosted-agent integration (Completed)
 Objective: connect the orchestrator to Microsoft Foundry-hosted agents through a typed transport boundary.
 
 Delivered:
 - A typed Foundry-backed invocation boundary and hosted-agent request/response contract
 - Planner-to-specialist context handoff and execution-mode reporting
 - A deployable hosted-agent packaging path for Azure
+- An MCP discovery and invocation path across all four agents, with discovery
+  failure surfacing as a readiness problem (issues #18 and #36)
+- Multi-node LangGraph agent graphs rather than single-node wrappers (issue #22)
 
-Follow-on work:
-- Continue tightening the standards-compliant MCP boundary and runtime discovery path
-- Add more explicit failure handling and contract versioning across the tool boundary
+Known boundaries, recorded rather than outstanding:
+- The MCP client implements only `initialize`, `tools/list`, and `tools/call`;
+  see [ADR 0002](decisions/0002-mcp-sdk-vs-hand-written.md)
+- Agent graphs are not checkpointed, so recovery replays rather than resumes
+  ([#41](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/41))
 
 ## Phase 4 — Safety, audit, and observability (Completed)
 Objective: make the workflow production-minded and reviewable.
@@ -60,6 +65,11 @@ Delivered:
 - Terraform assets for Container Apps, managed identity, PostgreSQL, and supporting resources
 - A deployable app image path through Azure Container Registry
 - Verified deployment and migration flow for the sample environment
+- A private networking path for PostgreSQL (issue #27)
+- An end-to-end run covering apply, migration, hosted-agent deployment, and
+  deployed smoke, including the optional memory and toolbox features; see the
+  verification appendix in
+  [mvp-implementation-operations-guide.md](mvp-implementation-operations-guide.md#15-current-environment-verification-appendix)
 
 ## Phase 6 — Education, platform hardening, and adoption (In progress)
 Objective: turn the sample into a reusable lab and operational reference for Azure platform engineers.
@@ -70,6 +80,15 @@ Planned deliverables:
 - Additional hardening for environment separation, policy, and operations readiness
 
 Next steps:
-- Add more platform-specific exercises around private networking and role boundaries
 - Expand the lab to cover multi-environment deployment and operational runbooks
-- Continue refining the MCP and hosted-agent contract for broader reuse
+- Authenticate the Web UI, the last unauthenticated public surface
+  ([#40](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/40))
+- Add a LangGraph checkpointer so multi-node agents resume instead of restarting
+  ([#41](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/41))
+- Spike the Agent Host Protocol for synchronized workflow session views
+  ([#19](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/19))
+- Audit the documentation set for accuracy and currency
+  ([#44](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/44))
+
+Open GitHub issues are the authoritative list of remaining work; this section is
+a summary of them.

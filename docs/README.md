@@ -49,9 +49,12 @@ This index organizes the banking-agent documentation by audience and task.
 
 | Document | Purpose |
 | --- | --- |
+| [Implementation backlog](implementation-backlog.md) | Lists implementation work and acceptance criteria, reconciled against GitHub Issues. Start here for current status. |
 | [Phase plan](phase-plan.md) | Organizes the target delivery into architecture and implementation phases. |
-| [First sprint plan](first-sprint-plan.md) | Records the scope and exit criteria for the initial end-to-end slice. |
-| [Implementation backlog](implementation-backlog.md) | Lists implementation work and acceptance criteria; active execution is tracked in GitHub Issues. |
+| [First sprint plan](first-sprint-plan.md) | History. Scope and exit criteria of the initial end-to-end slice; completed and partly superseded. |
+| [Issue close action plan](issue-close-action-plan.md) | History. The close plan for issues #17, #18, and #20, all now closed. |
+
+Open GitHub issues are the authoritative list of remaining work.
 
 ## Browse by task
 

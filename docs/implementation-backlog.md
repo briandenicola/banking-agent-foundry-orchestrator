@@ -1,6 +1,8 @@
 # Implementation Backlog
 
-For a concrete, issue-by-issue close plan for the remaining backlog items, see [issue-close-action-plan.md](./issue-close-action-plan.md).
+Delivery status below is reconciled against GitHub Issues. The issue-by-issue
+close plan in [issue-close-action-plan.md](./issue-close-action-plan.md) covered
+issues #17, #18, and #20, all of which are now closed; it is kept as history.
 
 ## Priority legend
 - P0: must-have for the first implementation milestone
@@ -12,6 +14,7 @@ For a concrete, issue-by-issue close plan for the remaining backlog items, see [
 1. P0 — Define the orchestrator contract and workflow state model
    - Define the request/response contract, correlation ID, workflow state, and approval lifecycle.
    - Acceptance criteria: the orchestrator can accept a request and return a traceable workflow state.
+   - Delivered; workflow contract, state model, and approval lifecycle shipped with GitHub issues #5 and #7.
 
 2. P0 — Implement the C# Agent Framework orchestrator skeleton
    - Create the initial orchestrator service, thin API endpoints, and dependency injection composition.
@@ -21,6 +24,7 @@ For a concrete, issue-by-issue close plan for the remaining backlog items, see [
 3. P0 — Build a minimal web UI for workflow interaction
    - Create a simple Razor or Blazor experience for entering requests, viewing workflow status, and approving sensitive actions.
    - Acceptance criteria: a user can submit a request from the browser and see the workflow state and approval guidance.
+   - Delivered; the Web UI was rebuilt with durable progress feedback in GitHub issue #16.
 
 4. P0 — Build the MCP client and tool registry
    - Create the abstraction for loading MCP tools and a generic registry for Foundry-backed agents.
@@ -30,30 +34,37 @@ For a concrete, issue-by-issue close plan for the remaining backlog items, see [
 5. P0 — Integrate a first Foundry-backed LangGraph tool
    - Wire one reasoning or planning tool from Microsoft Foundry-hosted LangGraph agents into the orchestrator.
    - Acceptance criteria: a request produces a tool-backed response with structured metadata.
+   - Delivered; all four hosted agents are invoked over MCP per GitHub issues #18 and #36.
 
 6. P0 — Implement approval enforcement for sensitive actions
    - Add policy-driven approval gates before dispute initiation or other high-risk operations.
    - Acceptance criteria: sensitive actions cannot execute without explicit approval.
+   - Delivered; approval gating and transactional execution completed in GitHub issue #4.
 
 7. P0 — Add structured logging, tracing, and error handling
    - Emit structured logs, correlation IDs, and OpenTelemetry spans for workflow steps and tool calls.
    - Acceptance criteria: each workflow run can be traced and diagnostics are captured without secrets or PII.
+   - Delivered; observability completed in GitHub issue #6 and orchestrator logging in issue #26.
 
 8. P1 — Provision Azure Container Apps and supporting infrastructure with Terraform
    - Create Terraform modules for Container Apps, managed identity, and supporting network/observability resources.
    - Acceptance criteria: infrastructure can be provisioned for a dev environment from a clean machine.
+   - Delivered; Taskfile automation repaired in GitHub issue #11 and private networking added in issue #27.
 
 9. P1 — Add GitHub Actions for build and deploy validation
    - Build, test, and Terraform validation on pull requests; deployment on main after review.
    - Acceptance criteria: CI validates the repo and deployment steps are documented.
+   - Delivered; CI and deployment pipelines modernized in GitHub issue #10.
 
 10. P1 — Add a demo scenario and sample banking data
     - Provide a small dataset and a realistic transaction-explanation or dispute-approval flow.
     - Acceptance criteria: a user can run through the main happy path locally or in a dev environment.
+   - Delivered; demo scenarios and non-PII data added in GitHub issue #8.
 
 11. P2 — Harden for security and reliability
     - Review secrets handling, identity configuration, retry behavior, and operational readiness.
     - Acceptance criteria: the implementation meets the project constitution for security and observability.
+    - Partially delivered. Private networking (#27), recovery attempt limits (#28), evidence retention (#29), Data Protection key persistence (#31), and model cost controls (#33) are closed. The Web UI is still public and unauthenticated; [#40](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/40) tracks the remainder.
 
 12. P1 — Write a code-level technical implementation guide
     - Document the end-to-end request lifecycle from the web/API boundary through the C# orchestrator, planner agent, specialist agents, approval transitions, persistence, and final response.
@@ -63,6 +74,7 @@ For a concrete, issue-by-issue close plan for the remaining backlog items, see [
     - Include sequence diagrams and direct `path/to/file:line` references for every important implementation step so readers can move between the guide and the exact code.
     - Keep line references current whenever referenced code changes.
     - Acceptance criteria: a developer unfamiliar with the repository can trace the primary informational, suspicious-activity, and dispute-approval flows from entrypoint to completion using the guide and its verified code references.
+    - Not delivered. [`mvp-implementation-operations-guide.md`](./mvp-implementation-operations-guide.md) and [`agent-implementation.md`](./agent-implementation.md) cover the narrative, but neither carries the `path/to/file:line` references this item requires.
 
 13. P1 — Audit all documentation for accuracy and currency
     - Review every file under `docs/` (plus `README.md` and `.github/copilot-instructions.md`) against the current implementation, Terraform stacks, Taskfile targets, and CI workflow.

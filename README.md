@@ -244,8 +244,12 @@ task cloud:down -- swedencentral
 
 ## Implementation planning
 
-Deployment status note: `artifacts/deployment-status.txt` captures the current implementation milestone and the next verification steps after Azure deployment finishes.
+Open GitHub issues are the authoritative list of remaining work. The planning
+documents below are reconciled against them.
 
+- `docs/implementation-backlog.md` captures the backlog, acceptance criteria, and what has been delivered.
 - `docs/phase-plan.md` outlines the implementation phases for the project.
-- `docs/implementation-backlog.md` captures the near-term backlog and acceptance criteria.
-- `docs/first-sprint-plan.md` describes the first implementation sprint and its scope.
+- `docs/first-sprint-plan.md` and `docs/issue-close-action-plan.md` are kept as history.
+
+The last verified deployment is recorded in the verification appendix of
+`docs/mvp-implementation-operations-guide.md`.

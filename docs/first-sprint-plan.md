@@ -1,5 +1,17 @@
 # First Sprint Plan
 
+>**Status: completed. Kept as history.**
+>
+>This sprint delivered the first end-to-end slice. Its definition of done is met,
+>and parts of its scope have since been replaced: the stub `IMcpClient` named
+>below was removed in
+>[#32](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/32),
+>and the real MCP discovery and invocation path landed in
+>[#18](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/18)
+>and [#36](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/36).
+>For current state, read [implementation-backlog.md](./implementation-backlog.md)
+>and [phase-plan.md](./phase-plan.md).
+
 ## Sprint goal
 Deliver the first end-to-end slice of the banking agent experience: a C# orchestrator API, a minimal UI, and a workflow path that accepts a request, creates a workflow state, and exposes approval state.
 
