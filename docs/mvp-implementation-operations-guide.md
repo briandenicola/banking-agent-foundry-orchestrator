@@ -758,6 +758,17 @@ Then re-run the deployer so the new configuration reaches Foundry:
 task app:deploy-hosted-agents
 ```
 
+To keep a flag on for every run, set it in `.env` instead. The root `Taskfile.yml`
+loads `.env` via `dotenv`, and the values reach the `app:` tasks:
+
+```bash
+ENABLE_AGENT_MEMORY=true
+ENABLE_AGENT_TOOLBOX=true
+```
+
+An inline environment variable still overrides the file for a single run, for
+example `ENABLE_AGENT_MEMORY=false task app:apply -- swedencentral`.
+
 The flags must be supplied on **every** subsequent `app:apply`. Terraform is
 declarative, so omitting them applies the `false` default and turns the features
 back off.
