@@ -885,6 +885,7 @@ antiforgery cookies; users and smoke tests must start with a fresh page/cookie j
 | Workflow becomes `Failed` | Read `workflow.failed`, workflow trace ID, and `hosted_agent.invoke` span | Correct endpoint/RBAC/model access or response contract, then submit a new workflow |
 | Foundry returns 401/403 | Verify orchestrator roles and hosted-agent instance model role | Reapply Terraform RBAC and rerun `task app:deploy-hosted-agents` |
 | Agent deployer fails | Run the deployer task and inspect emitted Container Apps job logs | Correct image, Foundry project access, or registration payload |
+| `task app:apply` reports missing images | The apps stack deploys images tagged with the current commit; a commit made after the last build moves that tag | Run `task app:build`, or apply with an explicit `-var "image_tag=<existing-tag>"` |
 | PostgreSQL connection fails | Verify managed identity, Entra admin, host/database outputs, and runtime grants | Rerun migration only after identity and network access are correct |
 | Approval returns 409 | Compare status, recorded decision, and workflow version | Refresh durable state; do not overwrite a conflicting decision |
 | Evidence upload fails | Check route, count, size, extension, magic bytes, and duplicate hash | Submit supported unique evidence to a dispute workflow |
