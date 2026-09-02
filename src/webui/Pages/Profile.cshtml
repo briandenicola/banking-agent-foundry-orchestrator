@@ -7,163 +7,233 @@
 @* Antiforgery token for the two POST handlers on this page. *@
 @Html.AntiForgeryToken()
 
-<section class="surface">
-    <h1>Customer profile agent</h1>
-    <p>
-        A Microsoft Foundry <strong>prompt agent</strong>. There is no container and no
-        graph behind it: Foundry runs the model loop and decides on its own when to
-        search memory, when to write memory, and when to execute Python. The whole
-        agent is a model, an instruction, and a tool list.
-    </p>
-    <p>
-        Every message below is an independent request with <strong>no conversation
-        history</strong>. Anything the agent recalls came out of its memory store,
-        not out of the prompt.
-    </p>
-</section>
+<div id="profile-notice" class="notice notice-error" role="alert" hidden>
+    <span class="notice-icon">!</span>
+    <span id="profile-notice-text"></span>
+</div>
 
-<section class="surface">
-    <h2>Run a step</h2>
-    <div id="prompt-buttons">
-        @foreach (var prompt in webui.Pages.ProfileModel.Prompts)
-        {
-            <button type="button" class="btn btn-outline-primary btn-sm m-1"
-                    data-prompt="@prompt.Text">@prompt.Label</button>
-        }
-    </div>
-    <div class="mt-3">
-        <label for="profile-message" class="form-label">Message</label>
-        <textarea id="profile-message" class="form-control" rows="3"
-                  placeholder="Say something to the agent, or pick a step above."></textarea>
-    </div>
-    <div class="mt-3 d-flex gap-2 flex-wrap">
-        <button type="button" id="profile-send" class="btn btn-primary">Send</button>
-        <button type="button" id="profile-refresh" class="btn btn-secondary">
-            Show retained memories
+<div class="profile-grid">
+    <section class="surface request-panel">
+        <div class="section-heading">
+            <div>
+                <span class="step-label">Foundry prompt agent</span>
+                <h2>Customer profile agent</h2>
+            </div>
+            <span class="live-indicator"><span></span> Memory enabled</span>
+        </div>
+
+        <p class="panel-intro">
+            There is no container and no graph behind this one. Foundry runs the model
+            loop and decides on its own when to search memory, when to write memory,
+            and when to execute Python. The whole agent is a model, an instruction,
+            and a tool list.
+        </p>
+        <p class="panel-intro">
+            Every message is an independent request with <strong>no conversation
+            history</strong>, so anything recalled came out of the memory store rather
+            than the prompt.
+        </p>
+
+        <div class="scenario-heading">
+            <span>Guided demonstration</span>
+            <a href="#" id="profile-clear">Clear all memories</a>
+        </div>
+        <div class="scenario-grid" aria-label="Demonstration steps">
+            @foreach (var prompt in webui.Pages.ProfileModel.Prompts)
+            {
+                <button type="button" class="scenario-card" data-prompt="@prompt.Text"
+                        aria-pressed="false">
+                    <strong>@prompt.Label</strong>
+                    <small>@prompt.Description</small>
+                    <span>@prompt.Expectation</span>
+                </button>
+            }
+        </div>
+
+        <label for="profile-message" class="form-label">Message to the agent</label>
+        <textarea id="profile-message" class="form-control request-input" rows="4"
+                  placeholder="Say something to the agent, or choose a step above."></textarea>
+
+        <button type="button" id="profile-send" class="primary-action">
+            <span>Send to the agent</span>
+            <span aria-hidden="true">&#8594;</span>
         </button>
-        <button type="button" id="profile-clear" class="btn btn-outline-danger">
-            Clear all memories
-        </button>
+        <p class="submit-hint" id="profile-status" role="status" aria-live="polite">
+            Memory extraction runs after each reply, so this is slower than a plain chat.
+        </p>
+    </section>
+
+    <div class="profile-results">
+        <section class="surface timeline-card" id="reply-panel" hidden>
+            <div class="section-heading compact">
+                <div>
+                    <span class="step-label">Response</span>
+                    <h3>What the agent said</h3>
+                </div>
+            </div>
+            <div id="profile-tools" class="tool-chips"></div>
+            <p id="profile-reply" class="reply-text"></p>
+        </section>
+
+        <section class="surface timeline-card">
+            <div class="section-heading compact">
+                <div>
+                    <span class="step-label">Memory store</span>
+                    <h3>Retained memories</h3>
+                </div>
+                <button type="button" id="profile-refresh" class="secondary-action">
+                    Refresh
+                </button>
+            </div>
+            <p class="panel-note">
+                Read from the memory tool's own output, not from the model's answer.
+                This is the store's account of what it holds.
+            </p>
+            <ul id="profile-memories" class="memory-list">
+                <li class="memory-empty">Not loaded yet.</li>
+            </ul>
+            <p id="profile-scope" class="memory-scope"></p>
+        </section>
     </div>
-    <p id="profile-status" class="mt-2 text-muted" role="status" aria-live="polite"></p>
-</section>
-
-<section class="surface" id="reply-panel" hidden>
-    <h2>Reply</h2>
-    <p id="profile-tools" class="text-muted"></p>
-    <pre id="profile-reply" class="mb-0" style="white-space:pre-wrap"></pre>
-</section>
-
-<section class="surface">
-    <h2>Retained memories</h2>
-    <p class="text-muted">
-        Read from the memory tool's own output, not from the model's answer. This is
-        the store's account of what it holds.
-    </p>
-    <p id="profile-scope" class="text-muted small"></p>
-    <ul id="profile-memories"><li class="text-muted">Not loaded yet.</li></ul>
-</section>
+</div>
 
 @section Scripts {
 <script>
 (function () {
   const token = document.querySelector('input[name="__RequestVerificationToken"]').value;
   const status = document.getElementById("profile-status");
+  const notice = document.getElementById("profile-notice");
+  const noticeText = document.getElementById("profile-notice-text");
   const box = document.getElementById("profile-message");
   const replyPanel = document.getElementById("reply-panel");
   const reply = document.getElementById("profile-reply");
   const tools = document.getElementById("profile-tools");
   const list = document.getElementById("profile-memories");
   const scope = document.getElementById("profile-scope");
-  const buttons = ["profile-send", "profile-refresh", "profile-clear"]
-    .map((id) => document.getElementById(id));
+  const send = document.getElementById("profile-send");
+  const refresh = document.getElementById("profile-refresh");
+  const clear = document.getElementById("profile-clear");
+  const idle = status.textContent;
+  const cards = document.querySelectorAll(".scenario-card");
 
-  document.querySelectorAll("#prompt-buttons button").forEach((button) => {
-    button.addEventListener("click", () => { box.value = button.dataset.prompt; });
+  const deselect = () => cards.forEach((card) => {
+    card.classList.remove("is-selected");
+    card.setAttribute("aria-pressed", "false");
   });
 
-  const busy = (on, message) => {
-    buttons.forEach((button) => { button.disabled = on; });
-    status.textContent = message || "";
+  cards.forEach((card) => {
+    card.addEventListener("click", () => {
+      deselect();
+      card.classList.add("is-selected");
+      card.setAttribute("aria-pressed", "true");
+      box.value = card.dataset.prompt;
+      box.focus();
+    });
+  });
+
+  const fail = (message) => {
+    noticeText.textContent = message;
+    notice.hidden = false;
   };
 
-  // Memory extraction runs the model again after each turn, so the store lags
-  // the reply. Rendering it immediately would show the previous state.
+  const busy = (on, message) => {
+    [send, refresh].forEach((button) => { button.disabled = on; });
+    clear.classList.toggle("is-disabled", on);
+    status.textContent = message || idle;
+  };
+
   const render = (data) => {
     const memories = data.memories || [];
     scope.textContent = data.scope
-      ? "Scope: " + data.scope + " — resolved by Foundry from the caller's Entra token."
+      ? "Scope " + data.scope + " \u2014 resolved by Foundry from the caller's Entra token."
       : "";
     list.innerHTML = "";
     if (memories.length === 0) {
-      list.innerHTML = '<li class="text-muted">Nothing retained.</li>';
+      list.innerHTML = '<li class="memory-empty">Nothing retained.</li>';
       return;
     }
     memories.forEach((memory) => {
       const item = document.createElement("li");
-      const kind = document.createElement("strong");
-      kind.textContent = "[" + memory.kind + "] ";
-      item.appendChild(kind);
-      item.appendChild(document.createTextNode(memory.content));
+      item.className = "memory-item";
+      const kind = document.createElement("span");
+      kind.className = "memory-kind";
+      kind.textContent = memory.kind;
+      const content = document.createElement("p");
+      content.textContent = memory.content;
+      item.append(kind, content);
       list.appendChild(item);
     });
   };
 
-  const send = async (url, options, message) => {
+  const call = async (url, options, message) => {
+    notice.hidden = true;
     busy(true, message);
     try {
       const response = await fetch(url, options);
       const data = await response.json().catch(() => ({}));
+      busy(false, "");
       if (!response.ok) {
-        busy(false, data.error || "The request failed.");
+        fail(data.error || "The request failed.");
         return null;
       }
-      busy(false, "");
       return data;
     } catch {
-      busy(false, "The profile agent could not be reached.");
+      busy(false, "");
+      fail("The profile agent could not be reached.");
       return null;
     }
   };
 
-  const refresh = async () => {
-    const data = await send("?handler=Memories", {}, "Reading the memory store…");
+  const load = async () => {
+    const data = await call("?handler=Memories", {}, "Reading the memory store\u2026");
     if (data) { render(data); }
   };
 
-  document.getElementById("profile-send").addEventListener("click", async () => {
+  send.addEventListener("click", async () => {
     const message = box.value.trim();
-    if (!message) { busy(false, "Enter a message first."); return; }
-    const data = await send("?handler=Ask", {
+    if (!message) { fail("Enter a message first."); return; }
+    const data = await call("?handler=Ask", {
       method: "POST",
       headers: { "Content-Type": "application/json", "RequestVerificationToken": token },
       body: JSON.stringify({ message })
-    }, "Asking the agent… memory extraction makes this slower than a plain chat.");
+    }, "Asking the agent\u2026");
     if (!data) { return; }
     replyPanel.hidden = false;
     reply.textContent = data.text || "(no text returned)";
-    tools.textContent = (data.toolsUsed || []).length
-      ? "Foundry ran: " + data.toolsUsed.join(", ")
-      : "Foundry ran no tools for this turn.";
+    tools.innerHTML = "";
+    const used = data.toolsUsed || [];
+    if (used.length === 0) {
+      const chip = document.createElement("span");
+      chip.className = "tool-chip tool-chip-none";
+      chip.textContent = "no tools ran";
+      tools.appendChild(chip);
+    }
+    used.forEach((tool) => {
+      const chip = document.createElement("span");
+      chip.className = "tool-chip";
+      chip.textContent = tool;
+      tools.appendChild(chip);
+    });
     render(data);
   });
 
-  document.getElementById("profile-refresh").addEventListener("click", refresh);
+  refresh.addEventListener("click", load);
 
-  document.getElementById("profile-clear").addEventListener("click", async () => {
+  clear.addEventListener("click", async (event) => {
+    event.preventDefault();
     if (!confirm("Delete every retained memory? This clears all scopes, including the one the CLI script uses.")) {
       return;
     }
-    const data = await send("?handler=Clear", {
+    const data = await call("?handler=Clear", {
       method: "POST",
       headers: { "RequestVerificationToken": token }
-    }, "Clearing the memory store…");
-    if (data) {
-      list.innerHTML = '<li class="text-muted">Nothing retained.</li>';
-      scope.textContent = "";
-      replyPanel.hidden = true;
-      busy(false, "Memories cleared. Act 1 will now start from nothing.");
-    }
+    }, "Clearing the memory store\u2026");
+    if (!data) { return; }
+    list.innerHTML = '<li class="memory-empty">Nothing retained.</li>';
+    scope.textContent = "";
+    replyPanel.hidden = true;
+    deselect();
+    busy(false, "Memories cleared. Act 1 now starts from nothing.");
   });
 })();
 </script>

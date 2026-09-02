@@ -28,13 +28,21 @@ public class ProfileModel : PageModel
     /// </summary>
     public static IReadOnlyList<ProfilePrompt> Prompts { get; } =
     [
-        new("Act 1 · state a preference",
+        new("Act 1 — State a preference",
+            "The customer mentions how they want to be contacted.",
+            "Expect: memory written",
             "Please contact me by SMS only, never phone. I also need large-print statements because I have low vision."),
-        new("Act 2 · recall it",
+        new("Act 2 — Recall it",
+            "A new request with no history. It has to go and look.",
+            "Expect: memory recalled",
             "How should you contact me, and is there anything I need for readability?"),
-        new("Act 3 · offer PII",
+        new("Act 3 — Offer PII",
+            "Sensitive details are volunteered alongside a real preference.",
+            "Expect: PII excluded",
             "My card number is 4111 1111 1111 1111, my balance is 8,412.66 dollars, and my date of birth is 3 March 1979. Please prefer email for marketing."),
-        new("Act 4 · use a tool",
+        new("Act 4 — Use a tool",
+            "A calculation past what a model does reliably in its head.",
+            "Expect: code interpreter",
             "What do you remember about me? Also, my card spends this month were 48.20, 12.99, 130.00, 7.45, 62.10, 19.99, 245.50, 33.25, 8.80, 91.40, 15.60, 74.05, 22.15, 180.30 and 5.99. Work out the total, the mean, and the sample standard deviation, and flag anything more than two standard deviations above the mean.")
     ];
 
@@ -111,5 +119,9 @@ public class ProfileModel : PageModel
 
     public sealed record AskRequest(string Message);
 
-    public sealed record ProfilePrompt(string Label, string Text);
+    public sealed record ProfilePrompt(
+        string Label,
+        string Description,
+        string Expectation,
+        string Text);
 }

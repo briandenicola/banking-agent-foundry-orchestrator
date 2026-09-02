@@ -241,6 +241,17 @@ h1, h2, h3, .brand {
   gap: 22px;
 }
 
+/* Evener than the workflow layout: the retained memories are the point of this
+ * page, so they get room to be read from the back of a room rather than being
+ * squeezed into a sidebar. */
+.profile-grid {
+  margin: 28px 0 64px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
 .workspace-grid {
   margin: 28px 0 64px;
 }
@@ -898,7 +909,8 @@ h1, h2, h3, .brand {
   .hero-mark span:nth-child(3) { inset: 52px; }
 
   .workspace-grid,
-  .workflow-layout {
+  .workflow-layout,
+  .profile-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1214,4 +1226,127 @@ h1, h2, h3, .brand {
     border-color: ButtonText;
     border-top-color: Highlight;
   }
+}
+
+
+/* ── Customer profile agent ───────────────────────────────
+ * Reuses the workspace vocabulary: .surface panels, .scenario-card steps,
+ * .primary-action, .step-label. Only the memory list and the tool chips are
+ * new, because nothing existing carries that meaning.
+ */
+.profile-results {
+  display: grid;
+  gap: 22px;
+  align-content: start;
+}
+
+.panel-intro {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.panel-note {
+  margin: 12px 0 16px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.profile-grid .primary-action {
+  margin-top: 20px;
+}
+
+/* The workflow page fills this space with the evidence upload; this page does
+ * not, so the inherited gap reads as a hole. */
+.profile-grid .scenario-grid {
+  margin-bottom: 10px;
+}
+
+/* Which Foundry-managed tools actually ran. This is the evidence that memory
+ * search and the code interpreter executed rather than being described. */
+.tool-chips {
+  margin: 14px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-chip {
+  padding: 4px 10px;
+  color: var(--teal-dark);
+  background: #e7f2ed;
+  border: 1px solid #8eb7a7;
+  border-radius: 999px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.tool-chip-none {
+  color: var(--muted);
+  background: #f4f5ef;
+  border-color: var(--line);
+}
+
+.reply-text {
+  margin: 16px 0 0;
+  color: var(--ink);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.memory-list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 9px;
+  list-style: none;
+}
+
+.memory-item {
+  padding: 12px;
+  background: #f7f9f5;
+  border: 1px solid #dce3dc;
+  border-radius: 12px;
+}
+
+.memory-item p {
+  margin: 6px 0 0;
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.memory-kind {
+  color: var(--teal-dark);
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.memory-empty {
+  padding: 12px;
+  color: var(--muted);
+  background: #f7f9f5;
+  border: 1px dashed #dce3dc;
+  border-radius: 12px;
+  font-size: 0.82rem;
+}
+
+/* The scope is a resolved Entra object id, so it must be able to wrap. */
+.memory-scope {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.scenario-heading a.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
