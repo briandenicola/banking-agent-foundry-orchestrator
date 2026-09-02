@@ -14,6 +14,7 @@ This index organizes the banking-agent documentation by audience and task.
 | Understand, deploy, operate, or troubleshoot the current MVP | [MVP implementation and operations guide](mvp-implementation-operations-guide.md) |
 | Understand product behavior and acceptance expectations | [Functional specification](functional-spec.md) |
 | Understand architecture and implementation boundaries | [Technical specification](technical-spec.md) |
+| See every Azure resource and how the parts connect | [Azure architecture diagram](diagrams/) |
 | Trace the LangGraph agents and Foundry runtime through the code | [Agent implementation and Foundry runtime](agent-implementation.md) |
 | Follow a guided hosted-agents lab for Azure | [Hosted Agents lab](hosted-agents-lab.md) |
 | Run local and CI test suites | [Testing guide](testing.md) |
@@ -36,6 +37,7 @@ This index organizes the banking-agent documentation by audience and task.
 | [Testing guide](testing.md) | Explains test categories, prerequisites, local commands, and CI coverage. |
 | [Workflow observability](observability.md) | Defines telemetry and correlation behavior with ready-to-run Application Insights queries. |
 | [Terraform remote state](remote-state.md) | Covers Azure Blob state, OIDC authentication, environment separation, bootstrap, and migration. |
+| [Diagrams](diagrams/) | Excalidraw diagram of the deployed Azure topology, generated from a script so it can be kept in step with the Terraform. |
 | [Demo scenarios](demo-scenarios.md) | Documents synthetic non-PII scenarios and their expected workflow outcomes. |
 
 ## Architecture decisions
