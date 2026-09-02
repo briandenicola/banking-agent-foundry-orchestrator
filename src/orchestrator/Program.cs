@@ -166,6 +166,14 @@ builder.Services.Configure<FoundryMcpClientOptions>(options =>
         builder.Configuration.GetValue("FOUNDRY_RETRY_BASE_DELAY_MILLISECONDS", 250);
 });
 builder.Services.AddHttpClient<IMcpClient, FoundryMcpClient>();
+builder.Services.Configure<CustomerProfileClientOptions>(options =>
+{
+    options.ProjectEndpoint = builder.Configuration["FOUNDRY_AGENT_ENDPOINT"];
+    options.AgentName = builder.Configuration["MEMORY_AGENT_NAME"] ?? "customer-profile";
+    options.MemoryStoreName = builder.Configuration["MEMORY_STORE_NAME"];
+    options.Scope = builder.Configuration["FOUNDRY_SCOPE"] ?? "https://ai.azure.com/.default";
+});
+builder.Services.AddHttpClient<ICustomerProfileClient, CustomerProfileClient>();
 builder.Services.AddScoped<IWorkflowService, WorkflowService>();
 builder.Services.Configure<WorkflowRecoveryOptions>(options =>
 {
@@ -264,6 +272,7 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     ResponseWriter = WriteReadyHealthResponse
 });
 app.MapWorkflowEndpoints();
+app.MapCustomerProfileEndpoints();
 
 app.Run();
 

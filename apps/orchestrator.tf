@@ -151,6 +151,18 @@ resource "azurerm_container_app" "orchestrator" {
         value = "${var.app_name}-agent"
       }
 
+      # The customer-profile prompt agent and its memory store. Empty when memory
+      # is disabled, which makes the profile endpoints report 503 rather than fail.
+      env {
+        name  = "MEMORY_AGENT_NAME"
+        value = local.memory_agent_name
+      }
+
+      env {
+        name  = "MEMORY_STORE_NAME"
+        value = local.memory_store_name
+      }
+
       env {
         name  = "FOUNDRY_SCOPE"
         value = "https://ai.azure.com/.default"

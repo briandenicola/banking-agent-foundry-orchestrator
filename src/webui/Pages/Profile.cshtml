@@ -1,0 +1,170 @@
+@page
+@model webui.Pages.ProfileModel
+@{
+    ViewData["Title"] = "Customer profile agent";
+}
+
+@* Antiforgery token for the two POST handlers on this page. *@
+@Html.AntiForgeryToken()
+
+<section class="surface">
+    <h1>Customer profile agent</h1>
+    <p>
+        A Microsoft Foundry <strong>prompt agent</strong>. There is no container and no
+        graph behind it: Foundry runs the model loop and decides on its own when to
+        search memory, when to write memory, and when to execute Python. The whole
+        agent is a model, an instruction, and a tool list.
+    </p>
+    <p>
+        Every message below is an independent request with <strong>no conversation
+        history</strong>. Anything the agent recalls came out of its memory store,
+        not out of the prompt.
+    </p>
+</section>
+
+<section class="surface">
+    <h2>Run a step</h2>
+    <div id="prompt-buttons">
+        @foreach (var prompt in webui.Pages.ProfileModel.Prompts)
+        {
+            <button type="button" class="btn btn-outline-primary btn-sm m-1"
+                    data-prompt="@prompt.Text">@prompt.Label</button>
+        }
+    </div>
+    <div class="mt-3">
+        <label for="profile-message" class="form-label">Message</label>
+        <textarea id="profile-message" class="form-control" rows="3"
+                  placeholder="Say something to the agent, or pick a step above."></textarea>
+    </div>
+    <div class="mt-3 d-flex gap-2 flex-wrap">
+        <button type="button" id="profile-send" class="btn btn-primary">Send</button>
+        <button type="button" id="profile-refresh" class="btn btn-secondary">
+            Show retained memories
+        </button>
+        <button type="button" id="profile-clear" class="btn btn-outline-danger">
+            Clear all memories
+        </button>
+    </div>
+    <p id="profile-status" class="mt-2 text-muted" role="status" aria-live="polite"></p>
+</section>
+
+<section class="surface" id="reply-panel" hidden>
+    <h2>Reply</h2>
+    <p id="profile-tools" class="text-muted"></p>
+    <pre id="profile-reply" class="mb-0" style="white-space:pre-wrap"></pre>
+</section>
+
+<section class="surface">
+    <h2>Retained memories</h2>
+    <p class="text-muted">
+        Read from the memory tool's own output, not from the model's answer. This is
+        the store's account of what it holds.
+    </p>
+    <p id="profile-scope" class="text-muted small"></p>
+    <ul id="profile-memories"><li class="text-muted">Not loaded yet.</li></ul>
+</section>
+
+@section Scripts {
+<script>
+(function () {
+  const token = document.querySelector('input[name="__RequestVerificationToken"]').value;
+  const status = document.getElementById("profile-status");
+  const box = document.getElementById("profile-message");
+  const replyPanel = document.getElementById("reply-panel");
+  const reply = document.getElementById("profile-reply");
+  const tools = document.getElementById("profile-tools");
+  const list = document.getElementById("profile-memories");
+  const scope = document.getElementById("profile-scope");
+  const buttons = ["profile-send", "profile-refresh", "profile-clear"]
+    .map((id) => document.getElementById(id));
+
+  document.querySelectorAll("#prompt-buttons button").forEach((button) => {
+    button.addEventListener("click", () => { box.value = button.dataset.prompt; });
+  });
+
+  const busy = (on, message) => {
+    buttons.forEach((button) => { button.disabled = on; });
+    status.textContent = message || "";
+  };
+
+  // Memory extraction runs the model again after each turn, so the store lags
+  // the reply. Rendering it immediately would show the previous state.
+  const render = (data) => {
+    const memories = data.memories || [];
+    scope.textContent = data.scope
+      ? "Scope: " + data.scope + " — resolved by Foundry from the caller's Entra token."
+      : "";
+    list.innerHTML = "";
+    if (memories.length === 0) {
+      list.innerHTML = '<li class="text-muted">Nothing retained.</li>';
+      return;
+    }
+    memories.forEach((memory) => {
+      const item = document.createElement("li");
+      const kind = document.createElement("strong");
+      kind.textContent = "[" + memory.kind + "] ";
+      item.appendChild(kind);
+      item.appendChild(document.createTextNode(memory.content));
+      list.appendChild(item);
+    });
+  };
+
+  const send = async (url, options, message) => {
+    busy(true, message);
+    try {
+      const response = await fetch(url, options);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        busy(false, data.error || "The request failed.");
+        return null;
+      }
+      busy(false, "");
+      return data;
+    } catch {
+      busy(false, "The profile agent could not be reached.");
+      return null;
+    }
+  };
+
+  const refresh = async () => {
+    const data = await send("?handler=Memories", {}, "Reading the memory store…");
+    if (data) { render(data); }
+  };
+
+  document.getElementById("profile-send").addEventListener("click", async () => {
+    const message = box.value.trim();
+    if (!message) { busy(false, "Enter a message first."); return; }
+    const data = await send("?handler=Ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "RequestVerificationToken": token },
+      body: JSON.stringify({ message })
+    }, "Asking the agent… memory extraction makes this slower than a plain chat.");
+    if (!data) { return; }
+    replyPanel.hidden = false;
+    reply.textContent = data.text || "(no text returned)";
+    tools.textContent = (data.toolsUsed || []).length
+      ? "Foundry ran: " + data.toolsUsed.join(", ")
+      : "Foundry ran no tools for this turn.";
+    render(data);
+  });
+
+  document.getElementById("profile-refresh").addEventListener("click", refresh);
+
+  document.getElementById("profile-clear").addEventListener("click", async () => {
+    if (!confirm("Delete every retained memory? This clears all scopes, including the one the CLI script uses.")) {
+      return;
+    }
+    const data = await send("?handler=Clear", {
+      method: "POST",
+      headers: { "RequestVerificationToken": token }
+    }, "Clearing the memory store…");
+    if (data) {
+      list.innerHTML = '<li class="text-muted">Nothing retained.</li>';
+      scope.textContent = "";
+      replyPanel.hidden = true;
+      busy(false, "Memories cleared. Act 1 will now start from nothing.");
+    }
+  });
+})();
+</script>
+}

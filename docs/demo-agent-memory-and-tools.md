@@ -3,11 +3,34 @@
 A ten-minute demonstration of the `customer-profile` agent, showing Foundry-managed
 memory and a Foundry-managed tool working together on Entra ID alone.
 
-Run it with:
+There are two ways to run it. **Use the Web UI for the talk**; the script is for
+rehearsal and for when you want the raw responses.
 
-```bash
-task app:demo-customer-profile
-```
+| | Web UI | Script |
+| --- | --- | --- |
+| How | **Customer profile agent** in the header | `task app:demo-customer-profile` |
+| Good for | Presenting: buttons per act, memories on screen | Rehearsing, debugging, seeing raw JSON |
+| Runs as | The orchestrator's managed identity | You, via `az login` |
+
+> **These two do not share a memory scope.** Foundry derives the scope from the
+> caller's token, so the UI writes as the orchestrator's managed identity and the
+> script writes as you. Memories set in one are invisible to the other. Pick one
+> and stay in it for the whole demonstration. "Clear all memories" in the UI is the
+> exception: it recreates the store, which wipes both.
+
+## Running it from the Web UI
+
+Open **Customer profile agent** in the header. The page has a button per act, a
+free-text box, and a live list of what the store retained.
+
+1. **Clear all memories** first. See the warning below about why.
+2. Press an act button — it fills the message box so the audience can read the
+   prompt before you send it.
+3. **Send**. The reply appears with a line naming the tools Foundry ran.
+4. **Show retained memories** after a few seconds. Extraction runs *after* the
+   reply, so the store lags the answer by a moment; if act 1 looks like it stored
+   nothing, press it again rather than assuming a failure.
+
 
 ## What this agent is, and why it is different
 
@@ -34,18 +57,23 @@ about how much of the loop you want to own.**
 | Tools | Called from our code via the toolbox | Declared inline, run by Foundry |
 | Deploy | Build and push an image | Change a definition |
 
-> **Honesty note.** Nothing in the application calls `customer-profile` yet. It is
-> deployed and it works, but the Web UI workflow does not use it. Wiring it into
-> the orchestrator is tracked as a backlog item. Say this plainly if asked
-> "is this in your app?" — the answer today is "it runs in our project, not yet in
-> our product."
+> **Honesty note.** The banking workflow does not call `customer-profile`. The
+> profile page talks to it directly, so it is reachable from the product but is not
+> yet *part* of the product: no plan, approval, or specialist response is
+> personalised by it. Backlog item 14 tracks that. If asked "is this in your app?",
+> the honest answer is "it is deployed, and we can talk to it from our UI, but the
+> workflow does not use it yet."
 
 ## Before you start
+
+Clear the store, in whichever surface you are presenting from:
 
 ```bash
 task app:demo-customer-profile -- --reset          # clear previous runs
 task app:demo-customer-profile -- --show-memories  # should print (none)
 ```
+
+or press **Clear all memories** on the profile page.
 
 Reset matters more than it looks. The demonstration's whole claim is that act 2
 recalls something act 1 stored. If a previous rehearsal left memories behind, act 2
@@ -85,11 +113,9 @@ will come back to that in act 3."
 **Talk track.** "New request, no history. It has to go and look. Notice what it did
 *not* do: it did not ask me to identify myself." Then show the scope:
 
-```bash
-task app:demo-customer-profile -- --show-memories
-```
-
-The scope is a resolved identity, not a string we passed:
+In the UI the scope is printed under **Retained memories**; from the script it is
+`task app:demo-customer-profile -- --show-memories`. Either way it is a resolved
+identity, not a string we passed:
 
 ```
 Memory scope: cd3cbaf1-…-…_16b3c013-…
@@ -168,6 +194,8 @@ merely unused, it is refused.
 | Act 2 recalls things you never said | A previous run was not cleared | `-- --reset`, then start again |
 | `tool_user_error` about MCP auth | The agent has been pointed at the toolbox again | See below — the deployer guards against this |
 | 404 on the agent | Agents not deployed | `task app:deploy-hosted-agents` |
+| The page says the agent is not configured | `MEMORY_STORE_NAME` is empty, so `enable_agent_memory` is false | `task app:apply` with memory enabled |
+| The UI shows no memories the script just stored | They are different scopes — see the warning at the top | Present from one surface only |
 
 ### The MCP trap
 
@@ -190,3 +218,4 @@ deployer now rejects an `mcp` entry in `MEMORY_AGENT_TOOLS` for this reason.
 | `capacity = 100` | `infrastructure/ai.tf` | Rate limit, not a reservation; GlobalStandard bills per token. Raised because memory extraction doubles token spend |
 | `memory_agent_tools = [code_interpreter]` | `apps/main.tf` | Declared inline, not via the toolbox |
 | `enable_agent_memory`, `enable_agent_toolbox` | `apps/variables.tf` | Both must be `true`, on every apply |
+| `MEMORY_AGENT_NAME`, `MEMORY_STORE_NAME` | `apps/orchestrator.tf` | What the profile page needs to reach the agent. Empty when memory is disabled, which makes the page report "not configured" rather than fail obscurely |
