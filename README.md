@@ -8,6 +8,21 @@ This repository contains a banking-focused agentic application built around:
 - Azure Container Apps deployment
 - Terraform-based infrastructure
 
+## Architecture
+
+[![Azure architecture](docs/diagrams/azure-architecture.png)](docs/diagrams/azure-architecture.excalidraw)
+
+Every Azure resource this repository deploys, which Terraform stack owns it, and
+how the parts reach each other. Solid blue arrows are HTTP request flow, solid
+green arrows are managed-identity access to a data or model plane, and dashed
+grey arrows are deployment-time only. Dashed containers are optional and off by
+default; each is labelled with the flag that turns it on.
+
+The diagram is generated from
+[`docs/diagrams/build-azure-architecture.py`](docs/diagrams/build-azure-architecture.py)
+so it can be kept in step with the Terraform rather than drifting away from it.
+See [`docs/diagrams/README.md`](docs/diagrams/README.md) to rebuild it.
+
 ## Repository layout
 
 - `src/orchestrator/` - C# web API host, recovery worker, and composition root
@@ -18,6 +33,7 @@ This repository contains a banking-focused agentic application built around:
 - `tasks/` - Taskfile definitions for infrastructure, image builds, and deployments
 - `docs/` - project constitution and specifications
 - [`docs/README.md`](docs/README.md) - documentation table of contents and task-based navigation
+- `docs/diagrams/` - generated Excalidraw diagram of the deployed Azure topology
 - `docs/observability.md` - workflow tracing, safe telemetry fields, and Application Insights queries
 - `docs/demo-scenarios.md` - non-PII seed data and expected guided scenario outcomes
 - `docs/agent-implementation.md` - code-level LangGraph, orchestration, and Foundry runtime walkthrough

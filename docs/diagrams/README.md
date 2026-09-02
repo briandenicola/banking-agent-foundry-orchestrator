@@ -2,6 +2,8 @@
 
 ## Azure architecture
 
+[![Azure architecture](azure-architecture.png)](azure-architecture.excalidraw)
+
 [`azure-architecture.excalidraw`](azure-architecture.excalidraw) shows every Azure
 resource this repository deploys, which Terraform stack owns it, and how the parts
 reach each other. Open it at [excalidraw.com](https://excalidraw.com) or with the
@@ -40,3 +42,7 @@ icons from `$AZURE_ICONS`, which defaults to
 
 The generator seeds its random number generator, so regenerating without a content
 change produces no diff.
+
+`azure-architecture.png` is exported from Excalidraw by hand after a change, and is
+what the READMEs embed. Export it at the default scale with a white background so
+the two files stay in agreement.
