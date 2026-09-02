@@ -3,34 +3,19 @@
 A ten-minute demonstration of the `customer-profile` agent, showing Foundry-managed
 memory and a Foundry-managed tool working together on Entra ID alone.
 
-There are two ways to run it. **Use the Web UI for the talk**; the script is for
-rehearsal and for when you want the raw responses.
+Run it from the Web UI: **Customer profile agent** in the header. The page has a
+card per act, a message box, and a live view of the memory store, so the mechanics
+need no narration — spend the time on what is happening underneath, which is what
+the rest of this document is for.
 
-| | Web UI | Script |
-| --- | --- | --- |
-| How | **Customer profile agent** in the header | `task app:demo-customer-profile` |
-| Good for | Presenting: buttons per act, memories on screen | Rehearsing, debugging, seeing raw JSON |
-| Runs as | The orchestrator's managed identity | You, via `az login` |
+The `scripts/demo-customer-profile.py` driver does the same four acts from a
+terminal. Use it for rehearsal and for seeing the raw JSON.
 
-> **These two do not share a memory scope.** Foundry derives the scope from the
-> caller's token, so the UI writes as the orchestrator's managed identity and the
-> script writes as you. Memories set in one are invisible to the other. Pick one
-> and stay in it for the whole demonstration. "Clear all memories" in the UI is the
-> exception: it recreates the store, which wipes both.
-
-## Running it from the Web UI
-
-Open **Customer profile agent** in the header. The page has a button per act, a
-free-text box, and a live list of what the store retained.
-
-1. **Clear all memories** first. See the warning below about why.
-2. Press an act button — it fills the message box so the audience can read the
-   prompt before you send it.
-3. **Send**. The reply appears with a line naming the tools Foundry ran.
-4. **Show retained memories** after a few seconds. Extraction runs *after* the
-   reply, so the store lags the answer by a moment; if act 1 looks like it stored
-   nothing, press it again rather than assuming a failure.
-
+> **The page and the script do not share a memory scope.** Foundry derives the
+> scope from the caller's token, so the page writes as the orchestrator's managed
+> identity and the script writes as you. Memories set in one are invisible to the
+> other. Pick one and stay in it. **Clear all memories** is the exception: it
+> recreates the store, which wipes every scope.
 
 ## What this agent is, and why it is different
 
@@ -64,112 +49,167 @@ about how much of the loop you want to own.**
 > the honest answer is "it is deployed, and we can talk to it from our UI, but the
 > workflow does not use it yet."
 
+## What kind of memory this is
+
+Foundry's built-in memory is usually described in three parts. This store enables
+two of them, and it is worth saying which, because "the agent has memory" invites
+an audience to assume the third.
+
+| Type | What it means | Here? |
+| --- | --- | --- |
+| **User memory** | Durable preferences and facts about a person, carried across sessions | **Yes** — `user_profile_enabled` |
+| **Session memory** | Context held within one conversation thread | **Yes** — `chat_summary_enabled`, as rolling summaries |
+| **Procedural memory** | The agent learning reusable playbooks across runs, so it develops competence rather than re-reading instructions | **No** |
+
+The demonstration turns on **user memory**: a preference stated in one conversation
+is available in a different one. That is the `user_profile` kind in the memory list
+on screen. The `chat_summary` entries alongside it are session memory — an account
+of what happened, not a claim about the person.
+
+Procedural memory is the genuinely interesting one, and this store does not do it.
+If asked, the honest answer is that this agent remembers *the customer*, not *how
+to do its job better*. Its instructions are fixed in Terraform and identical on
+every run.
+
+## How Foundry actually runs it
+
+Nothing here is orchestrated by us. It is worth being concrete about that, because
+"the platform handles it" is the claim the audience is most likely to discount.
+
+**Reading.** When the model decides it needs to know something about the customer,
+it calls `memory_search_preview`. That is a tool call, visible in the response and
+on screen as a chip. It is semantic, not a key lookup: the store embeds memories
+with `text-embedding-3-small` and matches on meaning, which is why "is there
+anything I need for readability?" retrieves a memory phrased as "needs large-print
+statements" without either sentence sharing a keyword.
+
+**Writing.** After the turn, Foundry runs a second model pass over the exchange to
+decide what — if anything — is worth keeping, and reconciles it with what is
+already stored rather than appending. That pass uses `gpt-5.4-mini`, the same
+deployment serving the conversation. Two consequences that matter:
+
+- **A demonstration costs roughly double the tokens the visible conversation
+  suggests.** This is why the model deployment's capacity was raised from 10 to
+  100; at 10 the rate limit was reached during a single clean run.
+- **It is asynchronous.** The reply returns before extraction finishes, so the
+  store lags the answer by a moment. `update_delay` controls how long Foundry
+  batches before extracting, and its default of 300 seconds means a stated
+  preference is not recallable for five minutes. It is set to `0` here.
+
+**Scoping.** The tool declares `"scope": "{{$userId}}"`, which Foundry substitutes
+from the caller's Entra token. There is no application code that could get this
+wrong, and no customer identifier is passed in the request — we probed this: a
+`user` field on the request is silently ignored, and the scope stays bound to the
+token. Per-user isolation is a template variable.
+
+**Forgetting.** Entries carry a 30-day TTL (`default_ttl_seconds`), so the store
+expires stale preferences without anyone running a cleanup job.
+
+**What gets kept** is model-driven, which is exactly why the exclusion rule is
+written out in `user_profile_details` rather than left to judgement. In a banking
+assistant the conversation is saturated with the data you must not retain.
+
+## What the infrastructure actually is
+
+Fewer moving parts than people expect. There is no vector database to run, no
+cache, no state store, and no schema.
+
+| Piece | Where | Note |
+| --- | --- | --- |
+| Foundry account and project | [`infrastructure/ai.tf`](../infrastructure/ai.tf) | `disableLocalAuth = true`, so key-based access is refused, not merely unused |
+| Chat model deployment | `infrastructure/ai.tf` | `gpt-5.4-mini`. Serves the conversation **and** memory extraction |
+| Embedding model deployment | `infrastructure/ai.tf` | `text-embedding-3-small`, for semantic retrieval. Deployed after the chat model because Cognitive Services rejects concurrent deployment writes to one account |
+| Memory store | Created by [`deploy.py`](../src/agents/deployer/deploy.py) | `kind: default`. Not a Terraform resource — the control plane for it is the Foundry data plane API |
+| Agent definition | [`apps/main.tf`](../apps/main.tf) → `deploy.py` | Instructions and the tool list, applied as a new agent version |
+| Orchestrator identity and roles | [`apps/roles.tf`](../apps/roles.tf) | `Foundry Agent Consumer` to invoke; `Cognitive Services User` for the memory-store calls behind **Clear all memories** |
+
+The memory store is a data-plane object rather than an ARM resource, so it is
+created by the deployer container alongside the agents instead of by Terraform.
+That is the one seam in an otherwise Terraform-managed stack, and it is why
+clearing memories from the page recreates the store rather than deleting rows.
+
+**Storage is Microsoft-managed.** You do not provision or see the backing store,
+and you do not size it. What you control is the definition: which memory types are
+on, what may be retained, and for how long.
+
 ## Before you start
 
-Clear the store, in whichever surface you are presenting from:
-
-```bash
-task app:demo-customer-profile -- --reset          # clear previous runs
-task app:demo-customer-profile -- --show-memories  # should print (none)
-```
-
-or press **Clear all memories** on the profile page.
+Press **Clear all memories**, or `task app:demo-customer-profile -- --reset`.
 
 Reset matters more than it looks. The demonstration's whole claim is that act 2
 recalls something act 1 stored. If a previous rehearsal left memories behind, act 2
 will look like it works **even if act 1 failed**, and you will not find out on
 stage.
 
-## The four acts
+## The four acts, and what to say during each
 
 Each act is a separate HTTP request with **no `previous_response_id`**. There is no
-conversation history. That is the control: anything recalled came out of the memory
-store, not out of the prompt.
+conversation history. That is the control, and it is worth stating once at the
+start: anything recalled came out of the memory store, not out of the prompt.
+
+The page tells the audience what each act is for, so do not read the cards out.
+Narrate the part that is not on screen.
 
 ### Act 1 — the customer states a preference
 
-> "Please contact me by SMS only, never phone. I also need large-print statements
-> because I have low vision."
+Chips: `memory_command_preview_call`, `memory_search_call`.
 
-Point at the tool line:
-
-```
-[Foundry ran: memory_command_preview_call, memory_command_preview_call_output, memory_search_call]
-```
-
-**Talk track.** "I did not write code to extract that preference. I did not write a
-schema for it. Foundry decided there was something durable in that sentence and
-wrote it. The only thing I configured was *what is allowed to be kept* — and we
-will come back to that in act 3."
+> "I did not write code to extract that preference, and there is no schema for it.
+> A second model pass looked at the exchange and decided there was something
+> durable in it. The only thing I configured was what is *allowed* to be kept."
 
 ### Act 2 — a new conversation. Does it remember?
 
-> "How should you contact me, and is there anything I need for readability?"
+Chip: `memory_search_call`.
+
+> "New request, no history — it has to go and look. And notice what it did not do:
+> it never asked me who I was."
+
+Then point at the scope line under the memories. It is a resolved Entra object ID,
+not a string the application passed:
 
 ```
-[Foundry ran: memory_search_call]
+Scope cd3cbaf1-…_16b3c013-… — resolved by Foundry from the caller's Entra token.
 ```
 
-**Talk track.** "New request, no history. It has to go and look. Notice what it did
-*not* do: it did not ask me to identify myself." Then show the scope:
-
-In the UI the scope is printed under **Retained memories**; from the script it is
-`task app:demo-customer-profile -- --show-memories`. Either way it is a resolved
-identity, not a string we passed:
-
-```
-Memory scope: cd3cbaf1-…-…_16b3c013-…
-```
-
-The agent definition says `"scope": "{{$userId}}"`. Foundry substitutes the caller's
-Entra object ID from the token on the request. **Per-user memory isolation is a
-template variable, not application code.** Nobody can read another customer's
-preferences, because no code was written that could get it wrong.
+The retrieval is also semantic: the question says "readability" and the memory says
+"large-print statements". No keyword is shared.
 
 ### Act 3 — the customer volunteers PII
 
-> "My card number is 4111 1111 1111 1111, my balance is 8,412.66 dollars, and my
-> date of birth is 3 March 1979. Please prefer email for marketing."
+The agent keeps the marketing preference and refuses the card number, balance and
+date of birth.
 
-The agent keeps the marketing preference and refuses the rest.
+> "What gets kept is decided by a model, so in a banking assistant the exclusion
+> rule has to be explicit configuration rather than a hope."
 
-**Talk track.** "Memory extraction is model-driven. In a banking assistant, the
-conversation is saturated with exactly the data you must not retain, so the
-exclusion rule is explicit configuration rather than a default." Show
-`memory_user_profile_details` in [`apps/main.tf`](../apps/main.tf).
+Show `memory_user_profile_details` in [`apps/main.tf`](../apps/main.tf).
 
 ### Act 4 — prove it, and use a tool
 
-> "What do you remember about me? Also, here are my card spends this month: … work
-> out the total, the mean and the sample standard deviation …"
+Chips: `code_interpreter_call`, `memory_search_call`.
 
-Two things land in one response:
+> "That Python was not written by me and did not run on my machine. Foundry started
+> a sandbox, executed it, and read the result back. The numbers are past what a
+> model does reliably in its head, so this is a real execution rather than a
+> plausible guess."
 
-```
-[Foundry ran: code_interpreter_call, memory_search_call]
-[code interpreter] import statistics
-                   spends = [48.20, 12.99, …]
-```
+Then the proof. The memories listed on the page are read from the
+`memory_search_call` item in the API response — **the store's own account of
+itself**, not the model's prose. Read them out and point at what is absent: no card
+number, no balance, no date of birth. Only servicing preferences.
 
-**Talk track, part one — the tool.** "That Python was not written by me and was not
-run on my machine. Foundry spun up a sandbox, executed it, and read the result
-back. The numbers are deliberately past what a model reliably does in its head, so
-this is a real execution, not a plausible guess."
+## Two questions you should expect
 
-**Talk track, part two — the proof.** The memories printed underneath are read from
-the `memory_search_call` item in the API response, **not** from the model's prose.
-This is the store's own account of itself. Read the list aloud and point out what is
-absent: no card number, no balance, no date of birth. Only servicing preferences.
+**"Your summary mentions a card number."** The `chat_summary` records that
+sensitive data was *offered and refused*, without the values. That is a better
+answer than pretending otherwise: the event stays auditable, the data is not
+retained.
 
-> **Be ready for this question:** *"the summary mentions a card number was given."*
-> Yes — the chat summary records that sensitive data was **offered and refused**,
-> without the values. That is the honest answer and it is a better story than
-> pretending otherwise: the event is auditable, the data is not retained.
-
-> **Also be ready for:** *"you retained 'low vision', which is health data."* True,
-> and deliberate: `memory_user_profile_details` permits accessibility needs, because
-> an assistant that forgets an accessibility need is worse than useless. It is a
-> conscious inclusion, not an oversight.
+**"You retained 'low vision' — that is health data."** True, and deliberate.
+`user_profile_details` permits accessibility needs, because an assistant that
+forgets an accessibility need is worse than useless. A conscious inclusion, not an
+oversight.
 
 ## The closing line
 
@@ -219,3 +259,6 @@ deployer now rejects an `mcp` entry in `MEMORY_AGENT_TOOLS` for this reason.
 | `memory_agent_tools = [code_interpreter]` | `apps/main.tf` | Declared inline, not via the toolbox |
 | `enable_agent_memory`, `enable_agent_toolbox` | `apps/variables.tf` | Both must be `true`, on every apply |
 | `MEMORY_AGENT_NAME`, `MEMORY_STORE_NAME` | `apps/orchestrator.tf` | What the profile page needs to reach the agent. Empty when memory is disabled, which makes the page report "not configured" rather than fail obscurely |
+| `user_profile_enabled`, `chat_summary_enabled` | [`deploy.py`](../src/agents/deployer/deploy.py) | Which memory types the store keeps. Both on; there is no procedural memory option |
+| `default_ttl_seconds` | `deploy.py` | 30 days. Stale preferences expire without a cleanup job |
+| `MEMORY_USER_PROFILE_DETAILS` | `apps/main.tf` | The retention and exclusion rule. The whole PII story is this string |
