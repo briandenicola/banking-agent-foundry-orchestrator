@@ -19,6 +19,7 @@ This index organizes the banking-agent documentation by audience and task.
 | Follow a guided hosted-agents lab for Azure | [Hosted Agents lab](hosted-agents-lab.md) |
 | Run local and CI test suites | [Testing guide](testing.md) |
 | Run a repeatable demonstration | [Demo scenarios](demo-scenarios.md) |
+| Demonstrate Foundry memory and tools | [Agent memory and tools talk track](demo-agent-memory-and-tools.md) |
 
 ## Product and governance
 
@@ -39,6 +40,7 @@ This index organizes the banking-agent documentation by audience and task.
 | [Terraform remote state](remote-state.md) | Covers Azure Blob state, OIDC authentication, environment separation, bootstrap, and migration. |
 | [Diagrams](diagrams/) | Excalidraw diagram of the deployed Azure topology, generated from a script so it can be kept in step with the Terraform. |
 | [Demo scenarios](demo-scenarios.md) | Documents synthetic non-PII scenarios and their expected workflow outcomes. |
+| [Agent memory and tools talk track](demo-agent-memory-and-tools.md) | A talk track for the `customer-profile` prompt agent, covering Foundry-managed memory, per-user scoping, PII exclusion, and the code interpreter. |
 
 ## Architecture decisions
 

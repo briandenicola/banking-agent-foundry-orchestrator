@@ -184,6 +184,11 @@ tasks:
     cmds:
       - python ./scripts/smoke-mvp.py {{.CLI_ARGS}}
 
+  demo-customer-profile:
+    desc: Run the Foundry memory and tools demonstration against the customer-profile agent
+    cmds:
+      - python ./scripts/demo-customer-profile.py {{.CLI_ARGS}}
+
   destroy:
     desc: Destroy the application Container Apps
     cmds:

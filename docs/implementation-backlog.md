@@ -82,3 +82,10 @@ issues #17, #18, and #20, all of which are now closed; it is kept as history.
     - Reconcile the backlog, phase plan, and issue-close action plan with the issues that have actually been delivered, and remove or mark superseded guidance.
     - Confirm ADRs in `docs/decisions/` still reflect the guardrails in force (no AI gateway, no Semantic Kernel, no API keys for service auth).
     - Acceptance criteria: a reader following any documented runbook end to end hits no stale command, variable, or code reference, and every doc states its current status.
+
+14. P2 — Use the `customer-profile` prompt agent in the product
+    - The agent is deployed by [`deploy.py`](../src/agents/deployer/deploy.py) and defined in [`main.tf`](../apps/main.tf), and it works, but nothing in the orchestrator, Web UI, or hosted agent runtime calls it. It exists only for the demonstration in [`demo-agent-memory-and-tools.md`](./demo-agent-memory-and-tools.md).
+    - Decide where remembered servicing preferences belong in the workflow: most likely read before the planner runs, so the plan and the customer-facing wording can respect contact and accessibility preferences.
+    - Its memory is scoped by `{{$userId}}`, resolved by Foundry from the caller's Entra token. The orchestrator calls Foundry with its own managed identity, not the end user's, so this scoping does not survive a service-to-service hop as-is. Resolve that before wiring it in, or every customer shares one memory scope.
+    - Extend the orchestrator's OpenTelemetry spans to cover the call, so it appears in the same trace as the hosted agents.
+    - Acceptance criteria: a preference stated in one Web UI session changes the response in a later, separate session for the same user and only that user, and the call is visible in Application Insights.
