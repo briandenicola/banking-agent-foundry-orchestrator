@@ -15,6 +15,7 @@ from deploy import (
     _definitions,
     _items,
     _memory_agent,
+    _memory_agent_tools,
     _toolbox,
     _project_endpoint,
     _version,
@@ -497,37 +498,17 @@ class ToolboxDeploymentTests(unittest.TestCase):
 
         self.assertIn("same", str(caught.exception))
 
-    def test_consumer_endpoint_is_version_independent(self):
-        """The consumer endpoint must follow the default version.
-
-        A version-pinned URL would mean promoting a toolbox version silently
-        does nothing until every agent is redeployed.
-        """
-        url = self._toolbox().mcp_url(_ENDPOINT)
-
-        self.assertEqual(f"{_ENDPOINT}/toolboxes/banking-toolbox/mcp?api-version=v1", url)
-        self.assertNotIn("/versions/", url)
-
-    def test_mcp_tool_points_at_the_toolbox(self):
-        tool = self._toolbox().mcp_tool(_ENDPOINT, "never")
-
-        self.assertEqual("mcp", tool["type"])
-        self.assertEqual("banking_toolbox", tool["server_label"])
-        self.assertIn("/toolboxes/banking-toolbox/mcp", tool["server_url"])
-        self.assertEqual("never", tool["require_approval"])
-
-    def test_prompt_agent_keeps_memory_tool_when_toolbox_is_attached(self):
-        """Attaching the toolbox must not displace the memory tool."""
-        extra = [self._toolbox().mcp_tool(_ENDPOINT, "never")]
-        definition = _memory_agent_fixture().definition(_MODEL, extra)
+    def test_prompt_agent_keeps_memory_tool_when_tools_are_attached(self):
+        """Attaching inline tools must not displace the memory tool."""
+        definition = _memory_agent_fixture().definition(_MODEL, [{"type": "code_interpreter"}])
 
         types = [tool["type"] for tool in definition["tools"]]
-        self.assertEqual(["memory_search_preview", "mcp"], types)
+        self.assertEqual(["memory_search_preview", "code_interpreter"], types)
 
     def test_attaching_a_toolbox_forces_a_new_agent_version(self):
         agent = _memory_agent_fixture()
         without = agent.definition(_MODEL)
-        with_toolbox = agent.definition(_MODEL, [self._toolbox().mcp_tool(_ENDPOINT, "never")])
+        with_toolbox = agent.definition(_MODEL, [{"type": "code_interpreter"}])
 
         client = FoundryClient.__new__(FoundryClient)
         client._endpoint = _ENDPOINT
@@ -575,6 +556,50 @@ class ToolboxDeploymentTests(unittest.TestCase):
         )
 
         self.assertEqual("1", client.ensure_toolbox(toolbox))
+
+
+class MemoryAgentToolTests(unittest.TestCase):
+    """The prompt agent's tools must be declared inline, never via the toolbox.
+
+    Foundry cannot bind a prompt agent's `mcp` tool to the agent identity, so a
+    toolbox reference fails with a 401 at invocation time and takes the whole
+    response down -- including the memory tool. The deployment reports success,
+    so nothing catches it until someone actually talks to the agent.
+    """
+
+    def test_absent_configuration_attaches_no_tools(self):
+        with patch.dict(os.environ, {"MEMORY_AGENT_TOOLS": ""}, clear=False):
+            self.assertEqual([], _memory_agent_tools())
+
+    def test_inline_tools_are_returned(self):
+        with patch.dict(
+            os.environ,
+            {"MEMORY_AGENT_TOOLS": json.dumps([{"type": "code_interpreter"}])},
+            clear=False,
+        ):
+            self.assertEqual([{"type": "code_interpreter"}], _memory_agent_tools())
+
+    def test_an_mcp_tool_is_rejected(self):
+        tools = [{"type": "mcp", "server_label": "banking_toolbox", "server_url": "https://x"}]
+        with patch.dict(os.environ, {"MEMORY_AGENT_TOOLS": json.dumps(tools)}, clear=False):
+            with self.assertRaises(ValueError) as caught:
+                _memory_agent_tools()
+
+        self.assertIn("mcp", str(caught.exception))
+
+    def test_a_tool_without_a_type_is_rejected(self):
+        with patch.dict(
+            os.environ, {"MEMORY_AGENT_TOOLS": json.dumps([{"name": "x"}])}, clear=False
+        ):
+            with self.assertRaises(ValueError):
+                _memory_agent_tools()
+
+    def test_multiple_unidentified_tools_are_rejected(self):
+        """Foundry allows at most one tool without a name, as for the toolbox."""
+        tools = [{"type": "code_interpreter"}, {"type": "toolbox_search"}]
+        with patch.dict(os.environ, {"MEMORY_AGENT_TOOLS": json.dumps(tools)}, clear=False):
+            with self.assertRaises(ValueError):
+                _memory_agent_tools()
 
 
 if __name__ == "__main__":

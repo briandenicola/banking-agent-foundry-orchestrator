@@ -81,6 +81,16 @@ resource "azurerm_container_app_job" "agent_deployer" {
       }
 
       env {
+        name  = "MEMORY_AGENT_TOOLS"
+        value = jsonencode(local.memory_agent_tools)
+      }
+
+      env {
+        name  = "MEMORY_UPDATE_DELAY_SECONDS"
+        value = tostring(var.memory_update_delay_seconds)
+      }
+
+      env {
         name  = "TOOLBOX_NAME"
         value = local.toolbox_name
       }

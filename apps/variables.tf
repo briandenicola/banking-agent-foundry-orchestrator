@@ -33,6 +33,17 @@ variable "enable_agent_memory" {
   default     = false
 }
 
+variable "memory_update_delay_seconds" {
+  description = "How long Foundry waits after a turn before extracting memories from it. Zero makes a preference recallable on the next turn, which is what a demonstration needs and what makes the behaviour observable. Raise it to batch extraction if turn volume ever justifies the delay."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.memory_update_delay_seconds >= 0
+    error_message = "memory_update_delay_seconds must be zero or greater."
+  }
+}
+
 variable "enable_agent_toolbox" {
   description = "Create the shared Foundry toolbox and let agents call its tools. Off by default so the baseline agents run without tool access."
   type        = bool

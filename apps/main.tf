@@ -15,9 +15,12 @@ locals {
   memory_store_name = var.enable_agent_memory ? "customer_profile_memory" : ""
   memory_agent_name = "customer-profile"
 
-  # One toolbox serves both agent kinds: hosted agents call this MCP endpoint
-  # at runtime, and the prompt agent attaches it through the standard `mcp`
-  # tool. Adding a tool here reaches every agent without a code change.
+  # The toolbox serves the hosted container agents, which have no declarative
+  # tools array and authenticate to this MCP endpoint with their own identity.
+  # The customer-profile prompt agent does NOT use it: Foundry cannot bind a
+  # prompt agent's `mcp` tool to the agent identity, so the call is rejected
+  # with a 401 at invocation time. That agent declares its tools inline in
+  # `memory_agent_tools` below.
   toolbox_name = var.enable_agent_toolbox ? "banking-toolbox" : ""
 
   # Foundry rejects a toolbox version when more than one tool lacks an
@@ -40,6 +43,16 @@ locals {
   # state-changing tool is ever added to the toolbox.
   toolbox_require_approval = "never"
 
+  # Tools attached directly to the customer-profile prompt agent. Foundry runs
+  # the prompt agent's tool loop itself, so managed tools are declared inline
+  # rather than reached through the toolbox. Kept in step with `toolbox_tools`
+  # so both agent kinds can do the same arithmetic over customer-supplied data.
+  memory_agent_tools = var.enable_agent_toolbox ? [
+    {
+      type = "code_interpreter"
+    },
+  ] : []
+
   # Memory extraction is model-driven. In a banking assistant the conversation
   # is full of exactly the data that must not be retained, so the exclusion
   # instruction is explicit configuration rather than a default.
@@ -51,11 +64,20 @@ locals {
     "precise location, date of birth, or age.",
   ])
 
+  # "Do not retain" and "do not use" are separated deliberately. Collapsing them
+  # into a single prohibition makes the agent refuse to calculate over figures
+  # the customer just supplied, which is the one thing its code interpreter
+  # exists to do, so the tool sits there unusable.
   memory_agent_instructions = join(" ", [
     "You are a retail banking servicing assistant.",
     "Use remembered servicing preferences to personalise how you respond.",
-    "Never store or repeat account numbers, card numbers, balances,",
-    "transaction amounts, or government identifiers.",
+    "You may calculate over figures the customer provides in the current",
+    "conversation and show those results back to them. Use the code",
+    "interpreter for arithmetic rather than working it out yourself, and show",
+    "the code when asked.",
+    "Never retain any of it: account numbers, card numbers, balances,",
+    "transaction amounts, financial details and government identifiers must",
+    "never be written to memory or recalled in a later conversation.",
     "You provide guidance only; you never approve, action, or commit to any",
     "account change. Direct the customer to a banker for actions.",
   ])

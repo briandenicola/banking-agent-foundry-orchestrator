@@ -42,34 +42,20 @@ class AgentDefinition:
 class ToolboxDefinition:
     """A Foundry toolbox: several managed tools behind one MCP endpoint.
 
-    The toolbox is the only supported way to give a *hosted* agent
-    Foundry-managed tools, because a hosted agent definition has no
-    declarative `tools` array. Prompt agents consume the same endpoint through
-    the standard `mcp` tool, so one toolbox serves both agent kinds.
+    The toolbox exists for *hosted* agents, because a hosted agent definition
+    has no declarative `tools` array. The container calls this endpoint at
+    runtime and authenticates with its own agent identity.
+
+    It is deliberately not exposed as an `mcp` tool for prompt agents. Foundry
+    has no way to bind a prompt agent's `mcp` tool to the agent identity -- the
+    tool's `authorization` field is a literal header string -- so the call is
+    rejected with a 401 at invocation time. Prompt agents declare managed tools
+    inline instead; see `_memory_agent_tools`.
     """
 
     name: str
     tools: list[dict[str, Any]]
     description: str = "Banking agent shared tools"
-
-    def mcp_url(self, project_endpoint: str) -> str:
-        """The consumer endpoint, which always follows the default version.
-
-        Promoting a new toolbox version therefore reaches agents without
-        redeploying them.
-        """
-        return (
-            f"{project_endpoint.rstrip('/')}/toolboxes/"
-            f"{quote(self.name, safe='')}/mcp?api-version={API_VERSION}"
-        )
-
-    def mcp_tool(self, project_endpoint: str, require_approval: str) -> dict[str, Any]:
-        return {
-            "type": "mcp",
-            "server_label": self.name.replace("-", "_"),
-            "server_url": self.mcp_url(project_endpoint),
-            "require_approval": require_approval,
-        }
 
 
 @dataclass(frozen=True)
@@ -634,6 +620,46 @@ def _assert_tool_identifiers(tools: list) -> None:
         )
 
 
+def _memory_agent_tools() -> list[dict[str, Any]]:
+    """Declarative tools attached directly to the memory prompt agent.
+
+    A prompt agent must NOT reach its tools through the project toolbox. The
+    toolbox MCP endpoint only accepts a caller-supplied credential, and the
+    `mcp` tool's `authorization` field is a literal header string rather than a
+    reference to the agent identity. Pointing a prompt agent at the toolbox
+    therefore fails at invocation time with a 401 from the MCP endpoint, which
+    surfaces as `tool_user_error` and takes the whole response down -- including
+    the memory tool that would otherwise have worked.
+
+    Prompt agents do not need the indirection: Foundry runs their tool loop, so
+    managed tools can be declared inline. The toolbox stays in place for the
+    hosted container agents, which have no declarative tools array and do
+    authenticate to it with their own identity from inside the container.
+    """
+
+    raw = os.getenv("MEMORY_AGENT_TOOLS", "").strip()
+    if not raw:
+        return []
+
+    tools = json.loads(raw)
+    if not isinstance(tools, list):
+        raise ValueError("MEMORY_AGENT_TOOLS must be a JSON array")
+
+    for tool in tools:
+        if not isinstance(tool, dict) or not str(tool.get("type", "")).strip():
+            raise ValueError("Each MEMORY_AGENT_TOOLS entry requires a non-empty type")
+        if tool.get("type") == "mcp":
+            raise ValueError(
+                "MEMORY_AGENT_TOOLS must not contain an 'mcp' tool. Foundry cannot "
+                "authenticate a prompt agent to the project toolbox with its agent "
+                "identity, so the tool fails at invocation time. Declare the managed "
+                "tool inline instead."
+            )
+
+    _assert_tool_identifiers(tools)
+    return tools
+
+
 def _memory_agent() -> MemoryAgentDefinition | None:
     """Build the memory-backed prompt agent from configuration.
 
@@ -678,25 +704,19 @@ def main() -> int:
     for agent in agents:
         deployed[agent.name] = client.deploy(agent, image, model_deployment, endpoint)
 
-    # The toolbox is created before the prompt agent so the agent's MCP tool
-    # points at an endpoint that already resolves.
-    extra_tools: list[dict[str, Any]] = []
+    # The toolbox serves the hosted container agents, which authenticate to it
+    # with their own identity at runtime. It is deliberately not attached to the
+    # prompt agent below; see _memory_agent_tools for why.
     toolbox = _toolbox()
     if toolbox is not None:
         client.ensure_toolbox(toolbox)
-        extra_tools.append(
-            toolbox.mcp_tool(
-                endpoint,
-                os.getenv("TOOLBOX_REQUIRE_APPROVAL", "never").strip() or "never",
-            )
-        )
 
     memory_agent = _memory_agent()
     if memory_agent is not None:
         embedding_deployment = os.environ["AZURE_AI_EMBEDDING_DEPLOYMENT_NAME"]
         client.ensure_memory_store(memory_agent, model_deployment, embedding_deployment)
         deployed[memory_agent.agent_name] = client.deploy_prompt_agent(
-            memory_agent, model_deployment, extra_tools=extra_tools
+            memory_agent, model_deployment, extra_tools=_memory_agent_tools()
         )
 
     print(json.dumps({"status": "ok", "agents": deployed}, sort_keys=True), flush=True)

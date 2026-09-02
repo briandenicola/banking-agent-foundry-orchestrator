@@ -56,8 +56,14 @@ resource "azapi_resource" "gpt54_mini" {
 
   body = {
     sku = {
-      name     = "GlobalStandard"
-      capacity = 10
+      name = "GlobalStandard"
+      # Capacity is a tokens-per-minute rate limit, not a reserved allocation:
+      # GlobalStandard bills per token, so raising this costs nothing until the
+      # tokens are actually spent. It is well above the workflow's own needs
+      # because agent memory extraction runs this same chat model after each
+      # turn, roughly doubling token spend per interaction, and a 429 mid-demo
+      # is indistinguishable from a broken agent.
+      capacity = 100
     }
     properties = {
       model = {
