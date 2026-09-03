@@ -610,15 +610,28 @@ still supports this.
    **Web** redirect URI of `https://<webui-fqdn>/.auth/login/aad/callback`; the
    FQDN comes from `terraform -chdir=apps output`.
 2. Create a client secret on that registration.
-3. Supply both to Terraform out of band, so neither reaches the repository:
+3. Add both to `.env`, which is gitignored and already loaded by every `task`
+   command:
 
    ```bash
-   export TF_VAR_webui_auth_client_id="<application (client) id>"
-   export TF_VAR_webui_auth_client_secret="<client secret value>"
+   TF_VAR_webui_auth_client_id=<application (client) id>
+   TF_VAR_webui_auth_client_secret=<client secret value>
    ```
 
-4. Apply. `apps/webui-auth.tf` creates the `authConfigs/current` child resource
-   and the Web UI starts redirecting anonymous visitors to Entra.
+   **The `TF_VAR_` prefix is required here**, unlike the other settings in
+   `.env`. `ENABLE_SERVICE_AUTH` and its neighbours are bare names because
+   `tasks/Taskfile.app.yml` forwards them explicitly with `-var`; these two are
+   not on that list and reach Terraform through its native `TF_VAR_*`
+   environment variable support instead. A bare `WEBUI_AUTH_CLIENT_ID=...` in
+   `.env` is silently ignored and the Web UI stays public.
+
+   The secret is deliberately passed this way rather than added to the `-var`
+   list, so it never appears in the command line of a running process.
+
+4. Run `task app:apply`. `apps/webui-auth.tf` creates the `authConfigs/current`
+   child resource and the Web UI starts redirecting anonymous visitors to Entra.
+
+To turn sign-in back off, comment both lines out and apply again.
 
 Leaving `webui_auth_client_id` empty keeps the historical behaviour: no
 authentication, Web UI public. Setting the client ID without the secret fails the
