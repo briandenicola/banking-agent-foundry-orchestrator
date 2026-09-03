@@ -110,6 +110,7 @@
   const tools = document.getElementById("profile-tools");
   const list = document.getElementById("profile-memories");
   const scope = document.getElementById("profile-scope");
+  const scopeIsCustomer = @(Model.IsCustomerScoped ? "true" : "false");
   const send = document.getElementById("profile-send");
   const refresh = document.getElementById("profile-refresh");
   const clear = document.getElementById("profile-clear");
@@ -145,7 +146,9 @@
   const render = (data) => {
     const memories = data.memories || [];
     scope.textContent = data.scope
-      ? "Scope " + data.scope + " \u2014 resolved by Foundry from the caller's Entra token."
+      ? scopeIsCustomer
+        ? "Scope " + data.scope + " \u2014 the signed-in customer's object ID, asserted by the orchestrator."
+        : "Scope " + data.scope + " \u2014 resolved by Foundry from the caller's token. Nobody is signed in, so this scope is shared."
       : "";
     list.innerHTML = "";
     if (memories.length === 0) {

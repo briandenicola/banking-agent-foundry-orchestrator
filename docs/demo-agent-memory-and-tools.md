@@ -306,12 +306,23 @@ Chip: `memory_search_call`.
 > "New request, no history — it has to go and look. And notice what it did not do:
 > it never asked me who I was."
 
-Then point at the scope line under the memories. It is a resolved Entra object ID,
-not a string the application passed:
+Then point at the scope line under the memories:
 
 ```
-Scope cd3cbaf1-…_16b3c013-… — resolved by Foundry from the caller's Entra token.
+Scope 98abb71d-… — the signed-in customer's object ID, asserted by the orchestrator.
 ```
+
+That object ID came from Easy Auth, not from anything typed into the page. It is
+worth being precise about who decides it, because the intuitive answer is wrong:
+Foundry resolves the agent's `{{$userId}}` template from *the caller's* token, and
+the caller is the orchestrator's managed identity — one scope for everybody. The
+orchestrator asserts the customer's scope explicitly instead. Sign in as somebody
+else and this store is empty.
+
+If you are asked how that is enforced rather than merely intended: memories
+returned under any other scope are discarded before they reach this page, so a
+scope the service ignored costs personalisation instead of showing one customer
+another's details.
 
 The retrieval is also semantic: the question says "readability" and the memory says
 "large-print statements". No keyword is shared.

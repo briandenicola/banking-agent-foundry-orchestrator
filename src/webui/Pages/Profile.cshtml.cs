@@ -37,6 +37,13 @@ public class ProfileModel : PageModel
         _signedIn.Current.IsAuthenticated ? _signedIn.Current.Id : null;
 
     /// <summary>
+    /// Whether this page's memory is bound to the signed-in customer. Drives
+    /// the caption under the memory list, which must not claim per-customer
+    /// isolation when nobody is signed in and the scope is in fact shared.
+    /// </summary>
+    public bool IsCustomerScoped => CustomerId is not null;
+
+    /// <summary>
     /// Prompts that set up and then prove the demonstration. Act 2 is only
     /// meaningful because each turn is a separate request with no history.
     /// </summary>
