@@ -27,25 +27,47 @@ public static class CustomerProfileEndpoints
                     statusCode: StatusCodes.Status400BadRequest);
             }
 
+            if (request.CustomerId is { Length: > 200 })
+            {
+                return Results.Problem(
+                    title: "A customer identifier must be 200 characters or fewer.",
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
             if (!client.IsConfigured)
             {
                 return NotConfigured();
             }
 
-            var reply = await client.AskAsync(request.Message, cancellationToken);
+            // The customer is carried through so the turn reads and writes that
+            // customer's memory scope. Without it the turn lands in the scope
+            // Foundry derives from the orchestrator's own identity, which every
+            // caller shares -- and which no workflow ever reads, so anything
+            // remembered here would be invisible to the workflow that needs it.
+            var reply = await client.AskAsync(request.Message, request.CustomerId, cancellationToken);
             return Results.Ok(reply);
         }).RequireAuthorization("WorkflowInvoke");
 
         app.MapGet("/api/v1/profile/memories", async (
             ICustomerProfileClient client,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken,
+            [FromQuery] string? customerId = null) =>
         {
+            if (customerId is { Length: > 200 })
+            {
+                return Results.Problem(
+                    title: "A customer identifier must be 200 characters or fewer.",
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
             if (!client.IsConfigured)
             {
                 return NotConfigured();
             }
 
-            var reply = await client.GetMemoriesAsync(cancellationToken);
+            var reply = string.IsNullOrWhiteSpace(customerId)
+                ? await client.GetMemoriesAsync(cancellationToken)
+                : await client.AskAsync(MemoryProbe, customerId, cancellationToken);
             return Results.Ok(reply);
         }).RequireAuthorization("WorkflowInvoke");
 
@@ -68,5 +90,10 @@ public static class CustomerProfileEndpoints
         detail: "Set FOUNDRY_AGENT_ENDPOINT and MEMORY_STORE_NAME, and deploy the agent.",
         statusCode: StatusCodes.Status503ServiceUnavailable);
 
-    public sealed record ProfileMessageRequest(string Message);
+    // Matches the probe CustomerProfileClient.GetMemoriesAsync sends, so a
+    // scoped read asks the same question as an unscoped one.
+    private const string MemoryProbe =
+        "What do you remember about me? Answer in one short sentence.";
+
+    public sealed record ProfileMessageRequest(string Message, string? CustomerId = null);
 }

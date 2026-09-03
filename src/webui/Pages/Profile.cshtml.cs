@@ -15,12 +15,26 @@ public class ProfileModel : PageModel
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<ProfileModel> _logger;
+    private readonly BankingAgent.WebUi.ISignedInCustomerAccessor _signedIn;
 
-    public ProfileModel(IHttpClientFactory httpClientFactory, ILogger<ProfileModel> logger)
+    public ProfileModel(
+        IHttpClientFactory httpClientFactory,
+        ILogger<ProfileModel> logger,
+        BankingAgent.WebUi.ISignedInCustomerAccessor signedIn)
     {
         _httpClient = httpClientFactory.CreateClient("orchestrator");
         _logger = logger;
+        _signedIn = signedIn;
     }
+
+    /// <summary>
+    /// The memory scope for this page, or null when nobody is signed in.
+    /// Scoping to the signed-in person is what makes the page write where the
+    /// workflow later reads; without it the turn lands in a scope shared by
+    /// every caller and no workflow ever sees it.
+    /// </summary>
+    private string? CustomerId =>
+        _signedIn.Current.IsAuthenticated ? _signedIn.Current.Id : null;
 
     /// <summary>
     /// Prompts that set up and then prove the demonstration. Act 2 is only
@@ -56,12 +70,15 @@ public class ProfileModel : PageModel
         return await ForwardAsync(
             () => _httpClient.PostAsJsonAsync(
                 "/api/v1/profile/messages",
-                new { message = request.Message }),
+                new { message = request.Message, customerId = CustomerId }),
             "The profile agent could not be reached.");
     }
 
     public Task<IActionResult> OnGetMemoriesAsync() => ForwardAsync(
-        () => _httpClient.GetAsync("/api/v1/profile/memories"),
+        () => _httpClient.GetAsync(
+            CustomerId is null
+                ? "/api/v1/profile/memories"
+                : $"/api/v1/profile/memories?customerId={Uri.EscapeDataString(CustomerId)}"),
         "The memory store could not be read.");
 
     public Task<IActionResult> OnPostClearAsync() => ForwardAsync(
