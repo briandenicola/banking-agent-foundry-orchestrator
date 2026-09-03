@@ -282,13 +282,14 @@ public sealed class WorkflowService : IWorkflowService
                 cancellationToken);
         }
 
+        var profileEvents = CreateProfileRecallEvents(execution.Context);
         var plannerEvent = CreateInvocationEvent(plannerResult, "workflow.plan");
         if (!TryReadAgentResult(plannerResult, "workflow-planning", out var plannerDecision, out var plannerError))
         {
-            return await PersistFailedAsync(current, [plannerEvent], plannerError, cancellationToken);
+            return await PersistFailedAsync(current, [.. profileEvents, plannerEvent], plannerError, cancellationToken);
         }
 
-        current = await AdvanceAndPersistAsync(current, [plannerEvent], cancellationToken);
+        current = await AdvanceAndPersistAsync(current, [.. profileEvents, plannerEvent], cancellationToken);
 
         var policyRoute = execution.Context.PolicyRoute ?? WorkflowRoutingPolicy.Decide(current.UserMessage);
         var route = execution.Context.Route ?? policyRoute;
@@ -776,6 +777,38 @@ public sealed class WorkflowService : IWorkflowService
             DateTimeOffset.UtcNow,
             "system",
             CreateInvocationEventDetails(result));
+
+    /// <summary>
+    /// Surfaces what the profile agent recalled onto the workflow timeline.
+    ///
+    /// Recall already influences the run -- the preferences are handed to the
+    /// planner and the specialist -- but that happens inside the model prompt,
+    /// where it leaves no trace anyone can inspect. Without this event the only
+    /// evidence that memory was consulted is a log line carrying a count, so
+    /// the audit trail would show a personalised answer arriving with no record
+    /// of what personalised it.
+    /// </summary>
+    private static WorkflowEvent[] CreateProfileRecallEvents(WorkflowExecutionContext context)
+    {
+        var preferences = context.RememberedPreferences;
+        if (preferences.Count == 0)
+        {
+            // Covers every fail-open path in the profile step: no signed-in
+            // customer, no profile agent, an empty store, or a failed lookup.
+            // None of those are events worth recording against the workflow.
+            return [];
+        }
+
+        return
+        [
+            new WorkflowEvent(
+                "workflow.profile_recalled",
+                $"Recalled {preferences.Count} remembered {(preferences.Count == 1 ? "preference" : "preferences")}",
+                context.ProfileRecalledAt ?? DateTimeOffset.UtcNow,
+                "customer-profile",
+                string.Join(" · ", preferences))
+        ];
+    }
 
     private static WorkflowEvent[] CreateRouteAuditEvents(
         AgentDecision plannerDecision,

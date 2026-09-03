@@ -201,7 +201,11 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
                 preferences.Count,
                 context.WorkflowId);
 
-            return context with { RememberedPreferencesOrNull = preferences };
+            return context with
+            {
+                RememberedPreferencesOrNull = preferences,
+                ProfileRecalledAt = DateTimeOffset.UtcNow
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -663,7 +667,13 @@ internal sealed record WorkflowExecutionContext(
     /// or the lookup failed -- all of which mean "proceed without
     /// personalisation" rather than "stop".
     /// </summary>
-    IReadOnlyList<string>? RememberedPreferencesOrNull = null)
+    IReadOnlyList<string>? RememberedPreferencesOrNull = null,
+    /// <summary>
+    /// When the profile step read memory. Carried so the audit event can be
+    /// stamped with the time of the recall itself rather than the time the
+    /// events were later assembled, which would sort it after the planner.
+    /// </summary>
+    DateTimeOffset? ProfileRecalledAt = null)
 {
     public IReadOnlyList<string> RememberedPreferences => RememberedPreferencesOrNull ?? [];
 }
