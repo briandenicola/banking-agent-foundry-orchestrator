@@ -62,3 +62,9 @@ variable "webui_auth_client_secret" {
   default     = ""
   sensitive   = true
 }
+
+variable "webui_auth_tenant_id" {
+  description = "Entra tenant that issues Web UI sign-in tokens. Empty uses the tenant the infrastructure is deployed into, which is the single-tenant default. Set it when the app registration and its users live in a tenant the operator controls rather than the subscription's tenant; only sign-in moves, as managed identities and every Foundry data-plane call stay in the deployment tenant."
+  type        = string
+  default     = ""
+}

@@ -1,6 +1,8 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Azure.Core;
 using Azure.Identity;
 using BankingAgent.Application;
@@ -26,14 +28,26 @@ public sealed class CustomerProfileClientOptions
 /// instruction, and a tool list. Foundry runs the loop. There is therefore no
 /// orchestration in this class -- it sends a turn and reports what Foundry did.
 ///
-/// Memory is scoped by <c>{{$userId}}</c>, which Foundry resolves from the
-/// caller's Entra token. Because this runs as the orchestrator's managed
-/// identity, every caller through the API shares one scope. That is acceptable
-/// for a demonstration and wrong for real customers; see backlog item 14.
+/// Memory scoping
+/// --------------
+/// The deployed agent is scoped by <c>{{$userId}}</c>, which Foundry resolves
+/// from the *caller's* token. Since this runs as the orchestrator's managed
+/// identity, referencing the agent by name puts every customer in one shared
+/// scope. Passing a scope alongside an agent reference does not fix it: Foundry
+/// accepts the field, returns 200, and ignores it.
+///
+/// So when a caller asks for a specific scope, the request is sent inline
+/// instead: the deployed agent's own definition is read back from Foundry and
+/// re-posted with the memory tool's scope replaced. That is honoured, and is
+/// verified end to end by <c>scripts/verify-memory-scope.py</c>. The definition
+/// is fetched rather than duplicated so Terraform remains the single source of
+/// truth for the model, instructions, and tools.
 /// </summary>
 public sealed class CustomerProfileClient : ICustomerProfileClient
 {
     private const string MemoryApiVersion = "2025-11-15-preview";
+    private const string AgentsApiVersion = "v1";
+    private const string MemoryToolType = "memory_search_preview";
     private const string MemoryProbe =
         "What do you remember about me? Answer in one short sentence.";
 
@@ -42,6 +56,11 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
     private readonly CustomerProfileClientOptions _options;
     private readonly TokenCredential _credential;
     private readonly string? _endpoint;
+
+    // The deployed definition only changes when the agent is redeployed, which
+    // restarts this process, so it is read once and reused.
+    private readonly SemaphoreSlim _definitionLock = new(1, 1);
+    private JsonObject? _cachedDefinition;
 
     public CustomerProfileClient(
         HttpClient httpClient,
@@ -83,19 +102,28 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
 
         // No previous_response_id: every turn is independent, so anything the
         // agent recalls came out of the memory store and not the prompt.
-        object agentReference = requestedScope is null
-            ? new { type = "agent_reference", name = _options.AgentName }
-            : new { type = "agent_reference", name = _options.AgentName, scope = requestedScope };
+        string payload;
+        if (requestedScope is null)
+        {
+            payload = JsonSerializer.Serialize(new
+            {
+                agent_reference = new { type = "agent_reference", name = _options.AgentName },
+                input = message
+            });
+        }
+        else
+        {
+            // An agent reference cannot carry a scope, so the definition is
+            // sent inline. See the note on this class.
+            var definition = await GetDefinitionAsync(cancellationToken);
+            payload = BuildScopedRequest(definition, requestedScope, message).ToJsonString();
+        }
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"{_endpoint}/openai/v1/responses")
         {
-            Content = JsonContent.Create(new
-            {
-                agent_reference = agentReference,
-                input = message
-            })
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
         };
         await AuthorizeAsync(request, cancellationToken);
 
@@ -132,6 +160,159 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
         }
 
         return confined;
+    }
+
+    /// <summary>
+    /// The deployed agent's newest definition, read from Foundry so that the
+    /// model, instructions, and tools stay owned by Terraform rather than being
+    /// restated here and drifting.
+    /// </summary>
+    private async Task<JsonObject> GetDefinitionAsync(CancellationToken cancellationToken)
+    {
+        if (_cachedDefinition is not null)
+        {
+            return _cachedDefinition;
+        }
+
+        await _definitionLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_cachedDefinition is not null)
+            {
+                return _cachedDefinition;
+            }
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"{_endpoint}/agents/{_options.AgentName}/versions?api-version={AgentsApiVersion}");
+            await AuthorizeAsync(request, cancellationToken);
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError(
+                    "Reading the {Agent} definition returned {StatusCode}: {Body}",
+                    _options.AgentName,
+                    (int)response.StatusCode,
+                    body);
+                throw new CustomerProfileException(
+                    $"Reading the profile agent definition returned {(int)response.StatusCode}.");
+            }
+
+            _cachedDefinition = ReadLatestDefinition(body);
+            return _cachedDefinition;
+        }
+        finally
+        {
+            _definitionLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Picks the highest-numbered version from the agent versions listing.
+    /// Ordering is explicit because the API does not promise one, and answering
+    /// from a superseded definition would silently use stale instructions.
+    /// </summary>
+    internal static JsonObject ReadLatestDefinition(string body)
+    {
+        var root = JsonNode.Parse(body) as JsonObject
+            ?? throw new CustomerProfileException("The agent versions listing was not an object.");
+
+        var versions = (root["data"] ?? root["value"]) as JsonArray;
+        if (versions is null || versions.Count == 0)
+        {
+            throw new CustomerProfileException(
+                "The profile agent has no deployed versions.");
+        }
+
+        JsonObject? newest = null;
+        var highest = int.MinValue;
+        foreach (var entry in versions)
+        {
+            if (entry is not JsonObject version)
+            {
+                continue;
+            }
+
+            var number = version["version"] switch
+            {
+                JsonValue value when value.TryGetValue(out int parsed) => parsed,
+                JsonValue value when value.TryGetValue(out string? text)
+                    && int.TryParse(text, out var parsed) => parsed,
+                _ => 0
+            };
+
+            if (number >= highest)
+            {
+                highest = number;
+                newest = version;
+            }
+        }
+
+        if (newest?["definition"] is not JsonObject definition)
+        {
+            throw new CustomerProfileException(
+                "The profile agent version carried no definition.");
+        }
+
+        return JsonNode.Parse(definition.ToJsonString())!.AsObject();
+    }
+
+    /// <summary>
+    /// The deployed definition, re-posted inline with the memory tool bound to
+    /// one customer's scope.
+    /// </summary>
+    /// <remarks>
+    /// Every other tool is carried across unchanged, because the agent's value
+    /// in the demonstration is that Foundry runs the code interpreter as well
+    /// as memory search. <c>code_interpreter</c> alone needs a fixup: deployed
+    /// it needs no container, but sent inline the API rejects it outright
+    /// without one.
+    ///
+    /// A definition with no memory tool is an error rather than a request sent
+    /// as-is. Sending it would write this customer's turn into the shared
+    /// caller scope, which is the leak the scope exists to prevent.
+    /// </remarks>
+    internal static JsonObject BuildScopedRequest(
+        JsonObject definition,
+        string scope,
+        string message)
+    {
+        var body = JsonNode.Parse(definition.ToJsonString())!.AsObject();
+
+        // "kind" identifies a stored agent definition and is rejected inline.
+        body.Remove("kind");
+
+        var tools = body["tools"] as JsonArray;
+        var scoped = 0;
+        foreach (var entry in tools ?? [])
+        {
+            if (entry is not JsonObject tool)
+            {
+                continue;
+            }
+
+            switch (tool["type"]?.GetValue<string>())
+            {
+                case MemoryToolType:
+                    tool["scope"] = scope;
+                    scoped++;
+                    break;
+                case "code_interpreter" when tool["container"] is null:
+                    tool["container"] = new JsonObject { ["type"] = "auto" };
+                    break;
+            }
+        }
+
+        if (scoped == 0)
+        {
+            throw new CustomerProfileException(
+                "The profile agent has no memory tool to scope; refusing to send an unscoped request.");
+        }
+
+        body["input"] = message;
+        return body;
     }
 
     /// <summary>

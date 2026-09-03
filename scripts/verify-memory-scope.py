@@ -189,23 +189,29 @@ def latest_definition(endpoint: str) -> dict[str, Any]:
 
 
 def scoped_definition(definition: dict[str, Any], scope: str) -> dict[str, Any]:
-    """The deployed definition with only the memory tool's scope replaced.
+    """The deployed definition with the memory tool bound to `scope`.
 
-    Tools other than the memory tool are dropped. This probe is about memory
-    isolation, and carrying the rest across costs a false negative: sent inline,
-    `code_interpreter` requires a `container` field it does not need on a
-    deployed agent, and the request is rejected before the scope is ever tested.
+    Every other tool is carried across, so this probes the request the
+    orchestrator actually sends (see CustomerProfileClient.BuildScopedRequest)
+    rather than a stripped-down variant that might pass where the real one
+    fails. `code_interpreter` needs one fixup: deployed it carries no container,
+    but sent inline the API rejects it without one.
     """
     body = json.loads(json.dumps(definition))
     tools = body.get("tools") or []
-    kept = [tool for tool in tools if tool.get("type") == "memory_search_preview"]
-    if not kept:
+    scoped = 0
+
+    for tool in tools:
+        if tool.get("type") == "memory_search_preview":
+            tool["scope"] = scope
+            scoped += 1
+        elif tool.get("type") == "code_interpreter" and "container" not in tool:
+            tool["container"] = {"type": "auto"}
+
+    if not scoped:
         raise ProbeError("no memory_search_preview tool found on the deployed agent")
 
-    for tool in kept:
-        tool["scope"] = scope
-
-    body["tools"] = kept
+    body["tools"] = tools
     body.pop("kind", None)
     return body
 

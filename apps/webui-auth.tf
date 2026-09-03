@@ -21,6 +21,18 @@
 locals {
   webui_auth_enabled = var.webui_auth_client_id != ""
 
+  # The tenant that signs users in is independent of the tenant the Azure
+  # resources live in. Defaulting to the deployment's own tenant preserves the
+  # single-tenant setup; overriding it lets the registration and its users live
+  # in a tenant the operator controls, which is the only way to get real
+  # multi-user sign-in when the subscription's tenant denies app registration.
+  # Nothing else moves: the managed identities, Foundry, and every data-plane
+  # call stay in the deployment tenant.
+  webui_auth_tenant_id = coalesce(
+    var.webui_auth_tenant_id,
+    data.azurerm_client_config.current.tenant_id,
+  )
+
   # Container App secret names must be lowercase alphanumeric or dashes.
   webui_auth_secret_name = "webui-auth-client-secret"
 
@@ -59,7 +71,7 @@ resource "azapi_resource" "webui_auth" {
         azureActiveDirectory = {
           enabled = true
           registration = {
-            openIdIssuer            = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0"
+            openIdIssuer            = "https://login.microsoftonline.com/${local.webui_auth_tenant_id}/v2.0"
             clientId                = var.webui_auth_client_id
             clientSecretSettingName = local.webui_auth_secret_name
           }

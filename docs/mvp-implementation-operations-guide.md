@@ -609,18 +609,28 @@ still supports this.
 1. Create an app registration in the portal, or with `az ad app create`. Add a
    **Web** redirect URI of `https://<webui-fqdn>/.auth/login/aad/callback`; the
    FQDN comes from `terraform -chdir=apps output`.
-2. Create a client secret on that registration.
-3. Add both to `.env`, which is gitignored and already loaded by every `task`
+2. Enable **ID tokens** on the registration: Authentication → Implicit grant and
+   hybrid flows → *ID tokens (used for implicit and hybrid flows)*, or
+   `az ad app update --id <client-id> --set web.implicitGrantSettings.enableIdTokenIssuance=true`.
+   Easy Auth uses the hybrid flow and requests `response_type=id_token`. Without
+   this the redirect to Entra succeeds and the callback fails with
+   `AADSTS700054: response_type 'id_token' is not enabled for the application`,
+   which surfaces to the user as a bare `401` from the Web UI. Leave access
+   tokens off; nothing here calls a downstream API as the user.
+3. Create a client secret on that registration.
+4. Add these to `.env`, which is gitignored and already loaded by every `task`
    command:
 
    ```bash
    TF_VAR_webui_auth_client_id=<application (client) id>
    TF_VAR_webui_auth_client_secret=<client secret value>
+   # Only when the registration lives outside the subscription's tenant:
+   TF_VAR_webui_auth_tenant_id=<directory (tenant) id of the registration>
    ```
 
    **The `TF_VAR_` prefix is required here**, unlike the other settings in
    `.env`. `ENABLE_SERVICE_AUTH` and its neighbours are bare names because
-   `tasks/Taskfile.app.yml` forwards them explicitly with `-var`; these two are
+   `tasks/Taskfile.app.yml` forwards them explicitly with `-var`; these are
    not on that list and reach Terraform through its native `TF_VAR_*`
    environment variable support instead. A bare `WEBUI_AUTH_CLIENT_ID=...` in
    `.env` is silently ignored and the Web UI stays public.
@@ -628,8 +638,26 @@ still supports this.
    The secret is deliberately passed this way rather than added to the `-var`
    list, so it never appears in the command line of a running process.
 
-4. Run `task app:apply`. `apps/webui-auth.tf` creates the `authConfigs/current`
+5. Run `task app:apply`. `apps/webui-auth.tf` creates the `authConfigs/current`
    child resource and the Web UI starts redirecting anonymous visitors to Entra.
+
+#### Signing in users from a different tenant
+
+`webui_auth_tenant_id` exists because the tenant that signs *people* in is
+independent of the tenant the Azure resources live in. Where the subscription's
+tenant denies app registration, or simply has no test users to demonstrate
+per-customer behaviour with, the registration and its users can live in a tenant
+the operator controls; Easy Auth validates against whichever issuer is
+configured. Leave it empty for the single-tenant default.
+
+Only sign-in moves. The managed identities, Foundry, and every data-plane call
+stay in the deployment's own tenant, because a managed identity is an Azure
+resource that can only obtain tokens from its home tenant. That has one
+consequence worth stating plainly: **it does not unblock service authentication**
+(`enable_service_auth`). The Web UI reaches the orchestrator using its managed
+identity, which cannot acquire a token for an `api://` application registered
+somewhere else, so moving registrations to a controlled tenant does not work
+around the constraint in issue #30.
 
 To turn sign-in back off, comment both lines out and apply again.
 
