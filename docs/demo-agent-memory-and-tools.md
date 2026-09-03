@@ -244,11 +244,18 @@ That token is what Foundry resolves `{{$userId}}` from — so these two files de
 the *fallback* scope, the one shared by every caller when no customer is known.
 
 Per-customer memory is decided elsewhere, and it is worth being able to point at
-the chain: Easy Auth establishes the person
-([`apps/webui-auth.tf`](../apps/webui-auth.tf)), `EasyAuthCustomerAccessor` reads
-their object ID out of the platform's headers, the Web UI passes it to the
-orchestrator, and `CustomerProfileClient` binds the memory tool to it. Sign in as
-someone else and the store answers differently.
+the chain. There are two, and which one is running is a deployment flag:
+
+- **Default.** Easy Auth establishes the person
+  ([`apps/webui-auth.tf`](../apps/webui-auth.tf)), `EasyAuthCustomerAccessor` reads
+  their object ID out of the platform's headers, the Web UI passes it to the
+  orchestrator as a value, and `CustomerProfileClient` binds the memory tool to
+  it.
+- **With `enable_user_delegation`.** The Web UI signs the user in itself and sends
+  the orchestrator a token for them, so the orchestrator *derives* the object ID
+  instead of being told it. The next section is the code.
+
+Either way, sign in as someone else and the store answers differently.
 
 ### The tests worth showing
 
@@ -272,6 +279,163 @@ If someone asks how any of this is held in place:
   and that the signed-in customer is carried all the way from the page to the
   agent. The last one matters most — a turn written to the wrong scope fails
   silently, since the write succeeds and simply lands where nothing reads.
+
+## The code, when someone asks to see it
+
+Three questions come up every time: how do you know *who* the customer is, how
+does memory get bound to them, and what actually happens when the agent uses a
+tool. Each is a handful of lines, and showing them is more convincing than the
+architecture diagram.
+
+### Identity: the orchestrator derives the customer, it is not told
+
+The interesting part is what is **absent**. With `enable_user_delegation` on, the
+Web UI never sends a customer identifier the orchestrator trusts. It sends a
+token, and the orchestrator reads the identity out of it.
+
+The Web UI is a confidential client running its own OpenID Connect sign-in, so it
+already holds a refresh token for this user and can ask Entra for a token
+addressed to the orchestrator — `DelegatedUserTokenHandler`:
+
+```csharp
+// ITokenAcquisition is scoped, and message handlers are pooled across requests,
+// so a constructor-injected copy would outlive the scope it came from.
+var tokenAcquisition = context.RequestServices.GetRequiredService<ITokenAcquisition>();
+
+var token = await tokenAcquisition.GetAccessTokenForUserAsync([scope], user: context.User);
+
+request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+```
+
+On the other side, `CustomerAssertionGuard` compares the customer the request
+claims to act for against the `oid` claim in that token:
+
+```csharp
+var subject = ReadObjectId(httpContextAccessor.HttpContext?.User);
+
+if (string.IsNullOrWhiteSpace(subject))
+{
+    return Results.Problem(
+        title: "The request did not carry a user identity.",
+        statusCode: StatusCodes.Status401Unauthorized);
+}
+
+if (!string.Equals(subject, assertedCustomerId, StringComparison.OrdinalIgnoreCase))
+{
+    return Results.Problem(
+        title: "The request asked to act for a different customer than the token identifies.",
+        statusCode: StatusCodes.Status403Forbidden);
+}
+```
+
+**Call this what it is.** It is not on-behalf-of, and the difference is worth
+being straight about if an architect in the room asks. OBO was built first and
+abandoned: it needs an incoming user token, which behind Easy Auth means the
+token store, whose only supported backing is a blob **SAS URL** — and the target
+subscription's policy forbids shared-key storage access and silently reverts
+attempts to enable it. The SAS returns `403 KeyBasedAuthenticationNotPermitted`
+while sign-in continues to look perfectly healthy.
+
+An application that runs its own sign-in never needed the exchange anyway: OBO
+exists for a middle tier that receives a token it did not request, which is not
+this. The security property is identical — a token issued to the Web UI, for this
+user, with the orchestrator as its audience — and Entra can say so.
+[ADR 0005](decisions/0005-delegated-user-authentication.md) has the full account.
+
+The honest limits, which are better volunteered than extracted:
+
+- It covers the **interactive path only**. Workflows resume through the recovery
+  worker long after any user token has expired, so that path still asserts the
+  customer recorded on the workflow.
+- It **stops at the orchestrator**. Foundry's data plane authorises on Azure
+  RBAC, so a delegated token would be evaluated against the *user* principal and
+  would require every bank customer to hold a Foundry role in the bank's tenant.
+  Foundry calls use the orchestrator's managed identity with the customer's object
+  ID asserted as a memory scope.
+
+### Memory: one tool entry, and the scope that makes it per-customer
+
+The agent-side definition is four lines — `MemoryAgentDefinition.tool` in
+[`deploy.py`](../src/agents/deployer/deploy.py):
+
+```python
+{
+    "type": "memory_search_preview",
+    "memory_store_name": self.memory_store_name,
+    "scope": self.scope,          # "{{$userId}}" by default
+    "update_delay": self.update_delay_seconds,
+}
+```
+
+`{{$userId}}` is resolved by Foundry from the calling token, which means the
+*orchestrator's* managed identity — one shared scope for every customer. That is
+the fallback, not the goal. To bind a turn to a specific person the request is
+sent **inline** instead of by agent reference, with the tool's scope rewritten,
+in `CustomerProfileClient.BuildScopedRequest`:
+
+```csharp
+case MemoryToolType:
+    tool["scope"] = scope;
+    scoped++;
+    break;
+```
+
+```csharp
+if (scoped == 0)
+{
+    throw new CustomerProfileException(
+        "The profile agent has no memory tool to scope; refusing to send an unscoped request.");
+}
+```
+
+That refusal is the point: a request that cannot be scoped is not sent at all,
+rather than quietly falling back to the shared scope.
+
+Foundry reports the scope it actually used, so the reply is checked rather than
+assumed — `EnforceScope`:
+
+```csharp
+var kept = reply.Memories
+    .Where(memory => string.Equals(memory.Scope, requestedScope, StringComparison.Ordinal))
+    .ToList();
+```
+
+If the service ever ignores the requested scope, this turns a data leak into lost
+personalisation, and logs a warning saying so. Worth saying out loud: the failure
+mode was designed for, not discovered.
+
+### Tool calling: ordinary MCP, no bespoke protocol
+
+The hosted LangGraph agents are reached as MCP tools over JSON-RPC 2.0. There is
+no proprietary envelope — `FoundryMcpClient.BuildToolsCallRequest`:
+
+```csharp
+new()
+{
+    ["jsonrpc"] = "2.0",
+    ["id"] = CreateRequestId("tools/call", toolName, parameters),
+    ["method"] = "tools/call",
+    ["params"] = new Dictionary<string, object?>
+    {
+        ["name"] = toolName,
+        ["arguments"] = parameters
+    }
+};
+```
+
+Discovery is the same shape with `tools/list`. The request `id` is a hash of the
+method and arguments rather than a counter, so a retried call reuses its id and
+is idempotent to a server that deduplicates.
+
+Two things are worth pointing at while this is on screen:
+
+- **The memory agent must not be given MCP tools.** `_memory_agent_tools` rejects
+  any `mcp` entry outright, because attaching the toolbox to the prompt agent made
+  it return `tool_user_error` on every single call. The guard carries the reason
+  in its error text.
+- **Tool failures are surfaced, not swallowed.** `McpFailureDescription` turns a
+  transport or protocol failure into something a person can act on, instead of an
+  empty answer that looks like the agent simply had nothing to say.
 
 ## Before you start
 

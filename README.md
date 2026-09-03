@@ -23,6 +23,108 @@ The diagram is generated from
 so it can be kept in step with the Terraform rather than drifting away from it.
 See [`docs/diagrams/README.md`](docs/diagrams/README.md) to rebuild it.
 
+## How it works, in code
+
+Three capabilities carry the demonstration. Each is short enough to read on a
+slide, and the talk track
+([`docs/demo-agent-memory-and-tools.md`](docs/demo-agent-memory-and-tools.md))
+expands on all three.
+
+### Delegated user identity
+
+The orchestrator **derives** the customer from a validated token rather than
+trusting an identifier the Web UI sends. Behind `enable_user_delegation` the Web
+UI runs its own OpenID Connect sign-in, so it holds a refresh token for the user
+and can request a token addressed to the orchestrator (`DelegatedUserTokenHandler`):
+
+```csharp
+var tokenAcquisition = context.RequestServices.GetRequiredService<ITokenAcquisition>();
+var token = await tokenAcquisition.GetAccessTokenForUserAsync([scope], user: context.User);
+request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+```
+
+`CustomerAssertionGuard` then rejects any request naming a customer the token
+does not identify:
+
+```csharp
+if (!string.Equals(subject, assertedCustomerId, StringComparison.OrdinalIgnoreCase))
+{
+    return Results.Problem(
+        title: "The request asked to act for a different customer than the token identifies.",
+        statusCode: StatusCodes.Status403Forbidden);
+}
+```
+
+This is deliberately **not** on-behalf-of. OBO was implemented and abandoned: it
+requires the Easy Auth token store, whose only supported backing is a blob SAS
+URL, and subscription policy here forbids shared-key storage access. An
+application that performs its own sign-in never needs the exchange. See
+[ADR 0005](docs/decisions/0005-delegated-user-authentication.md).
+
+Off by default; with the flag off, Easy Auth signs the user in and their object
+ID is passed onward as an asserted value.
+
+### Foundry memory, scoped per customer
+
+The memory tool is declared on the prompt agent (`MemoryAgentDefinition.tool`):
+
+```python
+{
+    "type": "memory_search_preview",
+    "memory_store_name": self.memory_store_name,
+    "scope": self.scope,          # "{{$userId}}" by default
+    "update_delay": self.update_delay_seconds,
+}
+```
+
+`{{$userId}}` resolves to the *caller's* identity — the orchestrator's managed
+identity — which is one shared scope. To bind a turn to a person, the request is
+sent inline with the scope rewritten, and a request that cannot be scoped is
+refused rather than silently widened (`CustomerProfileClient.BuildScopedRequest`):
+
+```csharp
+if (scoped == 0)
+{
+    throw new CustomerProfileException(
+        "The profile agent has no memory tool to scope; refusing to send an unscoped request.");
+}
+```
+
+Replies are checked against the scope that was asked for, so a service that
+ignored it costs personalisation rather than leaking (`EnforceScope`):
+
+```csharp
+var kept = reply.Memories
+    .Where(memory => string.Equals(memory.Scope, requestedScope, StringComparison.Ordinal))
+    .ToList();
+```
+
+### Tool calling over MCP
+
+Hosted LangGraph agents are invoked as standards-compliant MCP tools over
+JSON-RPC 2.0, with no proprietary envelope
+(`FoundryMcpClient.BuildToolsCallRequest`):
+
+```csharp
+new()
+{
+    ["jsonrpc"] = "2.0",
+    ["id"] = CreateRequestId("tools/call", toolName, parameters),
+    ["method"] = "tools/call",
+    ["params"] = new Dictionary<string, object?>
+    {
+        ["name"] = toolName,
+        ["arguments"] = parameters
+    }
+};
+```
+
+The request `id` is a hash of the method and arguments rather than a counter, so
+a retry reuses its id. Note that the **memory prompt agent must not be given MCP
+tools**: the toolbox endpoint accepts only a caller-supplied credential, so a
+prompt agent pointed at it fails with `tool_user_error` and takes the whole
+response down. `_memory_agent_tools` rejects any `mcp` entry for that reason.
+
 ## Repository layout
 
 - `src/orchestrator/` - C# web API host, recovery worker, and composition root
