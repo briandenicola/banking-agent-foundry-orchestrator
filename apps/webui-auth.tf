@@ -19,6 +19,8 @@
 # as a memory scope the orchestrator asserts on the user's behalf.
 
 locals {
+  # The registration is usable whenever it is supplied. Whether Easy Auth or the
+  # application's own OpenID Connect handler consumes it is decided below.
   webui_auth_enabled = var.webui_auth_client_id != ""
 
   # The tenant that signs users in is independent of the tenant the Azure
@@ -46,8 +48,12 @@ locals {
   ]
 }
 
+# Easy Auth and in-application sign-in are alternatives, not layers. With both
+# on, the platform's redirect intercepts the application's own /signin-oidc
+# callback and sign-in can never complete, so this resource is absent whenever
+# delegation is on.
 resource "azapi_resource" "webui_auth" {
-  count = local.webui_auth_enabled ? 1 : 0
+  count = local.webui_auth_enabled && !local.user_delegation_enabled ? 1 : 0
 
   # The auth configuration is a singleton child resource and must be named
   # "current"; the API rejects any other name.
@@ -79,51 +85,25 @@ resource "azapi_resource" "webui_auth" {
             allowedAudiences = [var.webui_auth_client_id]
           }
 
-          # Without this, Easy Auth requests `response_type=id_token` and stores
-          # no access token at all, so X-MS-TOKEN-AAD-ACCESS-TOKEN is absent even
-          # with the token store enabled.
-          #
-          # The requested scope is the Web UI's *own* API, not the
-          # orchestrator's. That is what makes this a real on-behalf-of flow: the
-          # exchange requires an assertion whose audience is the middle tier, and
-          # Entra will not issue one for an application that exposes no API.
-          # Asking Easy Auth for the orchestrator scope directly would skip the
-          # exchange entirely and hand the browser's token straight through.
-          login = merge(
-            {},
-            local.obo_enabled ? {
-              loginParameters = [
-                # The hybrid flow: the id_token arrives on the redirect and the
-                # code is redeemed server-side for the access and refresh tokens
-                # that land in the token store.
-                "response_type=code id_token",
-                "scope=openid profile offline_access ${local.webui_api_scope}",
-              ]
-            } : {},
-          )
         }
       }
 
       login = {
-        # The token store persists the provider's access and refresh tokens so
-        # they can be retrieved later, and Container Apps only injects
-        # X-MS-TOKEN-AAD-ACCESS-TOKEN when it is on. On-behalf-of has nothing to
-        # exchange without that header, so the store follows the OBO flag.
+        # Off, deliberately. Enabling it on Container Apps requires a storage
+        # account and a blob SAS URL setting, and the API rejects the config
+        # outright without one. That is a real cost for no benefit here:
+        # EasyAuthCustomerAccessor reads only the X-MS-CLIENT-PRINCIPAL headers,
+        # which are injected on every authenticated request whether or not the
+        # store exists. Sign-in and the session cookie are unaffected.
         #
-        # It stays off otherwise. Enabling it on Container Apps requires a
-        # storage account and a SAS URL setting, and the API rejects the config
-        # outright without one -- a real cost for no benefit, because
-        # EasyAuthCustomerAccessor reads only the X-MS-CLIENT-PRINCIPAL headers
-        # and those are injected on every authenticated request whether or not
-        # the store exists. Sign-in and the session cookie are unaffected.
-        tokenStore = merge(
-          { enabled = local.obo_enabled },
-          local.obo_enabled ? {
-            azureBlobStorage = {
-              sasUrlSettingName = local.token_store_secret_name
-            }
-          } : {},
-        )
+        # It is also unusable in some subscriptions regardless of what we want:
+        # a policy that sets allowSharedKeyAccess = false makes the SAS return
+        # 403 on first use while sign-in continues to look healthy. That is what
+        # ruled out on-behalf-of; see
+        # docs/decisions/0005-delegated-user-authentication.md.
+        tokenStore = {
+          enabled = false
+        }
       }
     }
   }

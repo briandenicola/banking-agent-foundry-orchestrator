@@ -69,14 +69,14 @@ variable "webui_auth_tenant_id" {
   default     = ""
 }
 
-variable "enable_obo" {
-  description = "Call the orchestrator as the signed-in customer rather than as the Web UI application, by exchanging the user's Easy Auth token for an orchestrator-audience token. Requires webui_auth_client_id and obo_app_id, and provisions a storage account for the Easy Auth token store (see webui-obo.tf). Off by default so existing deployments are unchanged."
+variable "enable_user_delegation" {
+  description = "Call the orchestrator as the signed-in customer rather than as the Web UI application. The Web UI runs its own OpenID Connect sign-in and acquires an orchestrator token for the user, replacing Container Apps built-in authentication (see webui-delegation.tf). Requires webui_auth_client_id and orchestrator_api_app_id. Off by default so existing deployments are unchanged."
   type        = bool
   default     = false
 }
 
-variable "obo_app_id" {
-  description = "Application ID of a hand-created Entra app registration that represents the orchestrator API. It must expose a user_impersonation scope under api://<obo_app_id> and pre-authorize webui_auth_client_id. Ignored unless enable_obo is true."
+variable "orchestrator_api_app_id" {
+  description = "Application ID of a hand-created Entra app registration that represents the orchestrator API. It must expose a user_impersonation scope under api://<orchestrator_api_app_id> and pre-authorize webui_auth_client_id. Ignored unless enable_user_delegation is true."
   type        = string
   default     = ""
 }

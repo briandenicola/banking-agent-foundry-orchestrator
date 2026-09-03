@@ -216,23 +216,23 @@ resource "azurerm_container_app" "orchestrator" {
         value = data.azurerm_application_insights.this.connection_string
       }
 
-      # On-behalf-of. When enabled the orchestrator validates a user token from
-      # the sign-in tenant instead of a service token, so it is mutually
-      # exclusive with service authentication; the precondition below and a
-      # matching startup guard both enforce that.
+      # Delegated user authentication. When enabled the orchestrator validates a
+      # user token from the sign-in tenant instead of a service token, so it is
+      # mutually exclusive with service authentication; the precondition below
+      # and a matching startup guard both enforce that.
       env {
-        name  = "OBO_ENABLED"
-        value = tostring(local.obo_enabled)
+        name  = "USER_DELEGATION_ENABLED"
+        value = tostring(local.user_delegation_enabled)
       }
 
       env {
-        name  = "OBO_TENANT_ID"
-        value = local.obo_enabled ? local.webui_auth_tenant_id : ""
+        name  = "USER_DELEGATION_TENANT_ID"
+        value = local.user_delegation_enabled ? local.webui_auth_tenant_id : ""
       }
 
       env {
-        name  = "OBO_APP_ID"
-        value = local.obo_enabled ? var.obo_app_id : ""
+        name  = "ORCHESTRATOR_API_APP_ID"
+        value = local.user_delegation_enabled ? var.orchestrator_api_app_id : ""
       }
     }
   }
@@ -244,13 +244,13 @@ resource "azurerm_container_app" "orchestrator" {
     }
 
     precondition {
-      condition     = !local.obo_enabled || !var.enable_service_auth
-      error_message = "enable_obo and enable_service_auth cannot both be true. Both configure the same JWT bearer scheme, with different issuers and audiences, so the orchestrator would reject one set of callers whichever won. The orchestrator refuses to start in this combination."
+      condition     = !local.user_delegation_enabled || !var.enable_service_auth
+      error_message = "enable_user_delegation and enable_service_auth cannot both be true. Both configure the same JWT bearer scheme, with different issuers and audiences, so the orchestrator would reject one set of callers whichever won. The orchestrator refuses to start in this combination."
     }
 
     precondition {
-      condition     = !var.enable_obo || local.obo_enabled
-      error_message = "enable_obo=true also requires webui_auth_client_id and obo_app_id. On-behalf-of exchanges the signed-in user's token, so without Easy Auth there is no user token to exchange, and without obo_app_id there is no orchestrator audience to exchange it for."
+      condition     = !var.enable_user_delegation || local.user_delegation_enabled
+      error_message = "enable_user_delegation=true also requires webui_auth_client_id and orchestrator_api_app_id. The Web UI signs the user in against that registration, so without it there is nobody to sign in, and without orchestrator_api_app_id there is no audience to request a token for."
     }
   }
 

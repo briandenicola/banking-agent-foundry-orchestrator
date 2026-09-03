@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 
@@ -26,6 +27,76 @@ public sealed record SignedInCustomer(string Id, string? DisplayName)
 public interface ISignedInCustomerAccessor
 {
     SignedInCustomer Current { get; }
+}
+
+/// <summary>
+/// Reads the signed-in user from the authenticated principal, for deployments
+/// where the Web UI runs its own OpenID Connect sign-in rather than sitting
+/// behind Container Apps built-in authentication.
+///
+/// Nothing here is gated on a configuration flag, unlike
+/// <see cref="EasyAuthCustomerAccessor"/>. The difference is where the identity
+/// comes from: a header can be forged by any caller that reaches the container,
+/// so honouring it is only safe while the platform is verifying and replacing
+/// it, whereas this principal was built by the authentication handler in this
+/// process from a token it validated itself. There is no configuration under
+/// which it is untrustworthy.
+/// </summary>
+public sealed class ClaimsPrincipalCustomerAccessor(IHttpContextAccessor httpContextAccessor)
+    : ISignedInCustomerAccessor
+{
+    public SignedInCustomer Current
+    {
+        get
+        {
+            var principal = httpContextAccessor.HttpContext?.User;
+
+            if (principal?.Identity?.IsAuthenticated != true)
+            {
+                return SignedInCustomer.Anonymous;
+            }
+
+            var id = Read(principal, "oid")
+                ?? Read(principal, "http://schemas.microsoft.com/identity/claims/objectidentifier");
+
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return SignedInCustomer.Anonymous;
+            }
+
+            var name = Read(principal, "preferred_username") ?? Read(principal, "name");
+
+            return new SignedInCustomer(id.Trim(), string.IsNullOrWhiteSpace(name) ? null : name.Trim())
+            {
+                GivenName = ReadGivenName(principal),
+            };
+        }
+    }
+
+    /// <summary>
+    /// A first name to greet the user by, or null when the token offers none.
+    /// Never falls back to the UPN, which is an address rather than a name.
+    /// </summary>
+    private static string? ReadGivenName(ClaimsPrincipal principal)
+    {
+        var given = Read(principal, "given_name") ?? Read(principal, ClaimTypes.GivenName);
+        if (!string.IsNullOrWhiteSpace(given))
+        {
+            return given.Trim();
+        }
+
+        var displayName = Read(principal, "name");
+        if (string.IsNullOrWhiteSpace(displayName) || displayName.Contains('@'))
+        {
+            return null;
+        }
+
+        var first = displayName.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+        return first.Length == 0 ? null : first;
+    }
+
+    private static string? Read(ClaimsPrincipal principal, string type) =>
+        principal.FindFirst(type)?.Value;
 }
 
 /// <summary>

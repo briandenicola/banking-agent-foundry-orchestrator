@@ -2,10 +2,14 @@ using Azure.Core;
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using BankingAgent.WebUi;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.Identity.Client;
+using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.Identity.Web;
 using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,9 +23,17 @@ if (!Uri.TryCreate(orchestratorApiBaseUrl, UriKind.Absolute, out var orchestrato
     throw new InvalidOperationException("ORCHESTRATOR_API_BASE_URL must be an absolute URL.");
 }
 
+// Read early because it decides which identity source the rest of the
+// container is built around.
+var userDelegationEnabled = builder.Configuration.GetValue<bool?>("USER_DELEGATION_ENABLED") ?? false;
+
 builder.Services.AddRazorPages();
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddSingleton<ISignedInCustomerAccessor, EasyAuthCustomerAccessor>();
+
+if (!userDelegationEnabled)
+{
+    builder.Services.AddSingleton<ISignedInCustomerAccessor, EasyAuthCustomerAccessor>();
+}
 builder.Services.AddHttpClient("orchestrator-health", client =>
 {
     client.BaseAddress = orchestratorApiBaseUri;
@@ -55,44 +67,72 @@ builder.Services.AddAntiforgery(options =>
 var orchestratorTokenScope = builder.Configuration["ORCHESTRATOR_TOKEN_SCOPE"];
 var azureClientId = builder.Configuration["AZURE_CLIENT_ID"];
 
-// On-behalf-of: call the orchestrator as the signed-in customer rather than as
-// the application. Off by default, so every existing deployment keeps the
-// behaviour it has.
-var oboEnabled = builder.Configuration.GetValue<bool?>("OBO_ENABLED") ?? false;
-
-if (oboEnabled)
+// Call the orchestrator as the signed-in customer rather than as the
+// application. Off by default, so every existing deployment keeps the behaviour
+// it has: Container Apps built-in authentication in front, and the customer
+// identifier passed onward as a value the orchestrator trusts.
+if (userDelegationEnabled)
 {
-    var oboScope = builder.Configuration["ORCHESTRATOR_OBO_SCOPE"];
-    var oboClientId = builder.Configuration["WEBUI_AUTH_CLIENT_ID"];
-    var oboClientSecret = builder.Configuration["WEBUI_AUTH_CLIENT_SECRET"];
-    var oboTenantId = builder.Configuration["WEBUI_AUTH_TENANT_ID"];
+    var apiScope = builder.Configuration["ORCHESTRATOR_API_SCOPE"];
+    var clientId = builder.Configuration["WEBUI_AUTH_CLIENT_ID"];
+    var clientSecret = builder.Configuration["WEBUI_AUTH_CLIENT_SECRET"];
+    var tenantId = builder.Configuration["WEBUI_AUTH_TENANT_ID"];
 
-    ArgumentException.ThrowIfNullOrWhiteSpace(oboScope, "ORCHESTRATOR_OBO_SCOPE");
-    ArgumentException.ThrowIfNullOrWhiteSpace(oboClientId, "WEBUI_AUTH_CLIENT_ID");
-    ArgumentException.ThrowIfNullOrWhiteSpace(oboClientSecret, "WEBUI_AUTH_CLIENT_SECRET");
-    ArgumentException.ThrowIfNullOrWhiteSpace(oboTenantId, "WEBUI_AUTH_TENANT_ID");
+    ArgumentException.ThrowIfNullOrWhiteSpace(apiScope, "ORCHESTRATOR_API_SCOPE");
+    ArgumentException.ThrowIfNullOrWhiteSpace(clientId, "WEBUI_AUTH_CLIENT_ID");
+    ArgumentException.ThrowIfNullOrWhiteSpace(clientSecret, "WEBUI_AUTH_CLIENT_SECRET");
+    ArgumentException.ThrowIfNullOrWhiteSpace(tenantId, "WEBUI_AUTH_TENANT_ID");
 
-    // Registered as a singleton for its token cache: the exchange is a network
-    // round trip to Entra, and a per-request client would repeat it on every
-    // page load and invite throttling.
-    builder.Services.AddSingleton(_ => ConfidentialClientApplicationBuilder
-        .Create(oboClientId)
-        .WithClientSecret(oboClientSecret)
-        .WithAuthority($"https://login.microsoftonline.com/{oboTenantId}")
-        .Build());
+    builder.Services
+        .AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+        .AddMicrosoftIdentityWebApp(options =>
+        {
+            options.Instance = "https://login.microsoftonline.com/";
+            options.TenantId = tenantId;
+            options.ClientId = clientId;
+            options.ClientSecret = clientSecret;
+            options.CallbackPath = "/signin-oidc";
+            options.SignedOutCallbackPath = "/signout-oidc";
 
-    builder.Services.AddTransient(sp => new OnBehalfOfTokenHandler(
-        sp.GetRequiredService<IConfidentialClientApplication>(),
+            // The guard on the orchestrator reads the short "oid" claim. Claim
+            // mapping would rewrite it to a schema URI and the guard would
+            // reject every customer.
+            options.MapInboundClaims = false;
+        })
+        // Requests the orchestrator scope during sign-in, so the authorization
+        // code redeems into a refresh token that covers it and the token cache
+        // can serve orchestrator tokens without another interactive prompt.
+        .EnableTokenAcquisitionToCallDownstreamApi([apiScope])
+        // Per-process and lost on restart, which costs a re-sign-in and nothing
+        // else. A distributed cache would need a backing store, and every store
+        // available here is either a key at rest or blocked by the same policy
+        // that ruled out the Easy Auth token store.
+        .AddInMemoryTokenCaches();
+
+    builder.Services.AddAuthorization();
+
+    // Sign-in is required to use the application at all, but not to answer the
+    // platform's probes; those are mapped outside the Razor Pages pipeline and
+    // so are unaffected by this convention.
+    builder.Services.Configure<RazorPagesOptions>(options =>
+    {
+        options.Conventions.AuthorizeFolder("/");
+        // Reachable while unauthenticated by definition, and requiring sign-in
+        // to view an error page turns any failure into a redirect loop.
+        options.Conventions.AllowAnonymousToPage("/Error");
+    });
+
+    builder.Services.AddSingleton<ISignedInCustomerAccessor, ClaimsPrincipalCustomerAccessor>();
+    builder.Services.AddTransient(sp => new DelegatedUserTokenHandler(
         sp.GetRequiredService<IHttpContextAccessor>(),
-        oboScope,
-        sp.GetRequiredService<ILogger<OnBehalfOfTokenHandler>>()));
+        apiScope));
 
     builder.Services.AddHttpClient("orchestrator", client =>
     {
         client.BaseAddress = orchestratorApiBaseUri;
     })
         .AddHttpMessageHandler<CorrelationIdHandler>()
-        .AddHttpMessageHandler<OnBehalfOfTokenHandler>();
+        .AddHttpMessageHandler<DelegatedUserTokenHandler>();
 }
 else if (!string.IsNullOrWhiteSpace(orchestratorTokenScope))
 {
@@ -150,8 +190,20 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStaticFiles();
 app.UseRouting();
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapRazorPages();
+
+if (userDelegationEnabled)
+{
+    // Both schemes, deliberately. Clearing only the local cookie would leave the
+    // Entra session intact, so the next sign-in would complete silently and the
+    // user would appear unable to sign out.
+    app.MapGet("/signout", () => Results.SignOut(
+        new AuthenticationProperties { RedirectUri = "/" },
+        [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme]));
+}
+
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = _ => false

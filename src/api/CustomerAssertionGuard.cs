@@ -14,7 +14,7 @@ namespace BankingAgent.Api;
 /// anything in the request itself. Anything that could reach the orchestrator
 /// directly could read any customer's remembered profile by naming them.
 ///
-/// With an on-behalf-of token the request carries the customer's own identity,
+/// With a delegated user token the request carries the customer's own identity,
 /// so the claim can be verified rather than trusted. A mismatch is refused
 /// outright rather than quietly corrected to the token's subject, because the
 /// only things that produce one are a bug in the caller or an attempt to read
@@ -61,7 +61,7 @@ public sealed class CustomerAssertionGuard(
         {
             return Results.Problem(
                 title: "The request did not carry a user identity.",
-                detail: "On-behalf-of authentication is enabled, so acting for a customer requires a delegated user token.",
+                detail: "Delegated user authentication is enabled, so acting for a customer requires a user token.",
                 statusCode: StatusCodes.Status401Unauthorized);
         }
 
@@ -84,7 +84,7 @@ public sealed class CustomerAssertionGuard(
 }
 
 /// <summary>
-/// Used when on-behalf-of authentication is switched off, which is the default
+/// Used when delegated user authentication is switched off, which is the default
 /// and the behaviour every existing deployment has.
 /// </summary>
 public sealed class DisabledCustomerAssertionGuard : ICustomerAssertionGuard
