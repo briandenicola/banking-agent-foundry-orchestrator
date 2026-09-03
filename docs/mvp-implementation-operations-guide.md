@@ -673,24 +673,49 @@ both, because the token names one audience and is validated by the other.
    named `user_impersonation` on it.
 4. Pre-authorize the Web UI's client ID for that scope, so users are not prompted
    to consent.
-5. Verify the orchestrator registration:
+5. **Set `requestedAccessTokenVersion` to `2` on that registration.** A
+   hand-created registration leaves it `null`, which makes Entra issue **v1**
+   access tokens whose `iss` is `https://sts.windows.net/<tenant>/`. The
+   orchestrator validates against the v2 issuer
+   `https://login.microsoftonline.com/<tenant>/v2.0`, so every call is rejected.
+   Sign-in itself succeeds — the browser session is fine and the user looks
+   authenticated — and the only symptom is `401 authentication_required` from the
+   orchestrator on the first request that reaches it.
+
+   The portal is the reliable route: App registrations → the orchestrator app →
+   **Manifest** → set `api.requestedAccessTokenVersion` to `2`. `az ad app update
+   --set api.requestedAccessTokenVersion=2` does **not** work; generic update
+   cannot reach that property and fails with "Couldn't find 'api' in ''".
+   Otherwise PATCH it through Graph, addressing the app by its **object** ID
+   rather than its application ID:
+
+   ```bash
+   az rest --method PATCH \
+     --url https://graph.microsoft.com/v1.0/applications/$(az ad app show --id <orchestrator-app-id> --query id -o tsv) \
+     --headers "Content-Type=application/json" \
+     --body '{"api":{"requestedAccessTokenVersion":2}}'
+   ```
+
+6. Verify the orchestrator registration:
 
    ```bash
    az ad app show --id <orchestrator-app-id> \
-     --query "{uris:identifierUris, scopes:api.oauth2PermissionScopes[].value, preauth:api.preAuthorizedApplications[].appId}" -o json
+     --query "{uris:identifierUris, tokenVersion:api.requestedAccessTokenVersion, scopes:api.oauth2PermissionScopes[].value, preauth:api.preAuthorizedApplications[].appId}" -o json
    ```
 
-   `preauth` must contain the Web UI's client ID.
-6. Add to `.env`:
+   `preauth` must contain the Web UI's client ID and `tokenVersion` must be `2`.
+7. Add to `.env`:
 
    ```bash
    TF_VAR_enable_user_delegation=true
    TF_VAR_orchestrator_api_app_id=<orchestrator application (client) id>
    ```
 
-7. Run `task app:apply`, then sign out and sign back in. A session established
+8. Run `task app:apply`, then sign out and sign back in. A session established
    before the change was issued by a different authentication scheme and will not
-   carry an orchestrator token.
+   carry an orchestrator token. Sign out again after any change to the
+   registration too: the token cache is in-process and will otherwise keep
+   serving the token it already holds.
 
 The Web UI reuses the same `webui_auth_client_id` and `webui_auth_client_secret`
 as the Easy Auth path: it is a confidential client and must prove it is the
