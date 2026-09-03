@@ -299,6 +299,27 @@ class MemoryAgentConfigTests(unittest.TestCase):
         self.assertEqual("{{$userId}}", agent.scope)
         self.assertEqual("{{$userId}}", agent.tool()["scope"])
 
+    def test_memory_agent_defaults_to_the_platform_guardrail(self):
+        """No configured policy must still attach a guardrail, not skip one.
+
+        Omitting rai_config entirely leaves the agent with no content safety
+        screening at its own boundary, so the empty object is deliberate: it
+        tells Foundry to apply Microsoft.DefaultV2.
+        """
+        with patch.dict(os.environ, _MEMORY_ENV, clear=True):
+            agent = _memory_agent()
+
+        self.assertEqual("", agent.rai_policy_name)
+        self.assertEqual({}, agent.definition(_MODEL)["rai_config"])
+
+    def test_memory_agent_uses_a_configured_rai_policy(self):
+        policy = "/subscriptions/x/resourceGroups/y/providers/Microsoft.CognitiveServices/accounts/z/raiPolicies/banking"
+        env = dict(_MEMORY_ENV, MEMORY_AGENT_RAI_POLICY=policy)
+        with patch.dict(os.environ, env, clear=True):
+            agent = _memory_agent()
+
+        self.assertEqual({"rai_policy_name": policy}, agent.definition(_MODEL)["rai_config"])
+
 
 class PromptAgentDefinitionTests(unittest.TestCase):
     def test_definition_is_a_prompt_agent_with_the_memory_tool(self):
@@ -388,6 +409,46 @@ class PromptVersionMatchingTests(unittest.TestCase):
         definition = agent.definition(_MODEL)
         stale = json.loads(json.dumps(definition))
         stale["tools"] = []
+        client = self._client(stale)
+
+        self.assertIsNone(client._find_matching_prompt_version(agent, definition))
+
+    def test_server_resolved_default_policy_does_not_force_a_new_version(self):
+        """Requesting the default guardrail must stay idempotent.
+
+        We send an empty rai_config, but Foundry may echo back the concrete
+        policy it resolved. Treating that as a change would mint a new agent
+        version on every single deploy.
+        """
+        agent = _memory_agent_fixture()
+        definition = agent.definition(_MODEL)
+        echoed = json.loads(json.dumps(definition))
+        echoed["rai_config"] = {"rai_policy_name": "Microsoft.DefaultV2"}
+        client = self._client(echoed)
+
+        self.assertEqual(("3", "active"), client._find_matching_prompt_version(agent, definition))
+
+    def test_changed_rai_policy_forces_a_new_version(self):
+        """Swapping the guardrail must actually redeploy.
+
+        Otherwise the deploy reports success while the agent keeps serving
+        under the previous policy, which reads as a guardrail that is applied
+        when it is not.
+        """
+        agent = _memory_agent_fixture(rai_policy_name="/subscriptions/x/raiPolicies/banking")
+        definition = agent.definition(_MODEL)
+        stale = json.loads(json.dumps(definition))
+        stale["rai_config"] = {"rai_policy_name": "/subscriptions/x/raiPolicies/old"}
+        client = self._client(stale)
+
+        self.assertIsNone(client._find_matching_prompt_version(agent, definition))
+
+    def test_dropped_rai_config_forces_a_new_version(self):
+        """An existing version with no guardrail must not satisfy a request for one."""
+        agent = _memory_agent_fixture(rai_policy_name="/subscriptions/x/raiPolicies/banking")
+        definition = agent.definition(_MODEL)
+        stale = json.loads(json.dumps(definition))
+        stale.pop("rai_config")
         client = self._client(stale)
 
         self.assertIsNone(client._find_matching_prompt_version(agent, definition))

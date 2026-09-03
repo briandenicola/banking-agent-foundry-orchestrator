@@ -73,6 +73,16 @@ class MemoryAgentDefinition:
     scope: str = "{{$userId}}"
     update_delay_seconds: int = 300
     ttl_seconds: int = 2592000
+    # Full ARM resource ID of a Responsible AI policy. Empty means Foundry
+    # applies its default policy (Microsoft.DefaultV2), which is why the
+    # rai_config block below is always sent: omitting it entirely attaches no
+    # guardrail at the agent boundary at all.
+    rai_policy_name: str = ""
+
+    def rai_config(self) -> dict[str, Any]:
+        if not self.rai_policy_name:
+            return {}
+        return {"rai_policy_name": self.rai_policy_name}
 
     def tool(self) -> dict[str, Any]:
         return {
@@ -92,6 +102,7 @@ class MemoryAgentDefinition:
             "model": model_deployment,
             "instructions": self.instructions,
             "tools": [self.tool(), *(extra_tools or [])],
+            "rai_config": self.rai_config(),
         }
 
     def store_body(self, chat_model: str, embedding_model: str) -> dict[str, Any]:
@@ -329,6 +340,7 @@ class FoundryClient:
                 and existing.get("model") == definition["model"]
                 and existing.get("instructions") == definition["instructions"]
                 and _tools(existing) == definition["tools"]
+                and _rai_policy_matches(existing, agent.rai_policy_name)
             ):
                 return str(version.get("version")), status
 
@@ -499,6 +511,27 @@ def _tool_types(tools: Any) -> list[str]:
         for tool in tools
         if isinstance(tool, dict)
     )
+
+
+def _rai_policy_matches(definition: dict[str, Any], requested_policy: str) -> bool:
+    """Compare the guardrail policy, tolerating a server-resolved default.
+
+    When we request the default policy we send an empty `rai_config`, and
+    Foundry is free to echo back the concrete policy it resolved
+    (`Microsoft.DefaultV2`). Comparing that literally would report a difference
+    on every run and create a new agent version each deploy, exactly as
+    described in `_tools`. So an empty request matches any existing value; only
+    an explicitly requested policy is compared.
+    """
+
+    if not requested_policy:
+        return True
+
+    config = definition.get("rai_config")
+    if not isinstance(config, dict):
+        return False
+
+    return config.get("rai_policy_name") == requested_policy
 
 
 def _tools(definition: dict[str, Any]) -> list[dict[str, Any]]:
@@ -689,6 +722,7 @@ def _memory_agent() -> MemoryAgentDefinition | None:
         user_profile_details=user_profile_details,
         update_delay_seconds=int(os.getenv("MEMORY_UPDATE_DELAY_SECONDS", "300")),
         ttl_seconds=int(os.getenv("MEMORY_TTL_SECONDS", "2592000")),
+        rai_policy_name=os.getenv("MEMORY_AGENT_RAI_POLICY", "").strip(),
     )
 
 

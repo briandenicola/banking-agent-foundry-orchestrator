@@ -347,6 +347,20 @@ the orchestrator still calls Foundry as itself, and the orchestrator's own ingre
 is unauthenticated. This is a sound pattern — authenticate the user, then scope
 their data — not a finished authorisation story. Issue #40 tracks the rest.
 
+**"What stops it saying something harmful?"** Two layers, and it is worth
+separating them because they are often conflated. The model deployment applies
+Azure's default content filter to prompts and completions. Separately, the
+agent itself carries a content safety guardrail: `MemoryAgentDefinition` sends
+an `rai_config` on the agent definition, which screens at the agent boundary.
+Today that is Foundry's default policy rather than a policy the bank chose, and
+saying so is better than implying a bespoke one exists. Backlog item 15 covers
+defining one as code.
+
+Do not point at `WorkflowRoutingPolicy` when answering this. That is an
+approval control, not a safety control. It is a good answer to a different
+question: it can only escalate `requires_approval`, never remove it, so even a
+poisoned memory cannot talk the workflow past a human approval gate.
+
 ## The closing line
 
 Everything in the demonstration — creating the agent, calling it, reading memory,
