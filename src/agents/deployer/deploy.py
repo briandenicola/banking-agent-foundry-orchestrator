@@ -73,16 +73,12 @@ class MemoryAgentDefinition:
     scope: str = "{{$userId}}"
     update_delay_seconds: int = 300
     ttl_seconds: int = 2592000
-    # Full ARM resource ID of a Responsible AI policy. Empty means Foundry
-    # applies its default policy (Microsoft.DefaultV2), which is why the
-    # rai_config block below is always sent: omitting it entirely attaches no
-    # guardrail at the agent boundary at all.
+    # Full ARM resource ID of a Responsible AI policy. Empty means no
+    # rai_config is sent at all, which is not the same as sending an empty one:
+    # the API rejects `rai_config: {}` with "Required property 'rai_policy_name'
+    # is missing", despite the published guidance saying an empty object selects
+    # the default policy. Verified against api-version v1.
     rai_policy_name: str = ""
-
-    def rai_config(self) -> dict[str, Any]:
-        if not self.rai_policy_name:
-            return {}
-        return {"rai_policy_name": self.rai_policy_name}
 
     def tool(self) -> dict[str, Any]:
         return {
@@ -97,13 +93,17 @@ class MemoryAgentDefinition:
         model_deployment: str,
         extra_tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        return {
+        definition: dict[str, Any] = {
             "kind": "prompt",
             "model": model_deployment,
             "instructions": self.instructions,
             "tools": [self.tool(), *(extra_tools or [])],
-            "rai_config": self.rai_config(),
         }
+
+        if self.rai_policy_name:
+            definition["rai_config"] = {"rai_policy_name": self.rai_policy_name}
+
+        return definition
 
     def store_body(self, chat_model: str, embedding_model: str) -> dict[str, Any]:
         return {

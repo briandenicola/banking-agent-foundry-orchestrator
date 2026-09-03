@@ -299,18 +299,20 @@ class MemoryAgentConfigTests(unittest.TestCase):
         self.assertEqual("{{$userId}}", agent.scope)
         self.assertEqual("{{$userId}}", agent.tool()["scope"])
 
-    def test_memory_agent_defaults_to_the_platform_guardrail(self):
-        """No configured policy must still attach a guardrail, not skip one.
+    def test_memory_agent_omits_rai_config_when_no_policy_is_configured(self):
+        """An empty rai_config is rejected, so the key must be absent entirely.
 
-        Omitting rai_config entirely leaves the agent with no content safety
-        screening at its own boundary, so the empty object is deliberate: it
-        tells Foundry to apply Microsoft.DefaultV2.
+        The published guidance says an empty rai_config selects the default
+        policy. It does not: api-version v1 answers "Required property
+        'rai_policy_name' is missing" and the whole agent deploy fails. Until a
+        policy ARM ID is supplied, the field is omitted and the agent relies on
+        the model deployment's own default content filter.
         """
         with patch.dict(os.environ, _MEMORY_ENV, clear=True):
             agent = _memory_agent()
 
         self.assertEqual("", agent.rai_policy_name)
-        self.assertEqual({}, agent.definition(_MODEL)["rai_config"])
+        self.assertNotIn("rai_config", agent.definition(_MODEL))
 
     def test_memory_agent_uses_a_configured_rai_policy(self):
         policy = "/subscriptions/x/resourceGroups/y/providers/Microsoft.CognitiveServices/accounts/z/raiPolicies/banking"

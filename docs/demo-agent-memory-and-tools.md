@@ -347,14 +347,17 @@ the orchestrator still calls Foundry as itself, and the orchestrator's own ingre
 is unauthenticated. This is a sound pattern — authenticate the user, then scope
 their data — not a finished authorisation story. Issue #40 tracks the rest.
 
-**"What stops it saying something harmful?"** Two layers, and it is worth
-separating them because they are often conflated. The model deployment applies
-Azure's default content filter to prompts and completions. Separately, the
-agent itself carries a content safety guardrail: `MemoryAgentDefinition` sends
-an `rai_config` on the agent definition, which screens at the agent boundary.
-Today that is Foundry's default policy rather than a policy the bank chose, and
-saying so is better than implying a bespoke one exists. Backlog item 15 covers
-defining one as code.
+**"What stops it saying something harmful?"** Azure's default content filter
+runs on the model deployment, screening both prompts and completions for hate,
+violence, sexual content and self-harm, plus prompt-injection detection on
+input. That applies to every agent here, because they all call Foundry models.
+
+Be precise about the second layer rather than implying it exists. Foundry also
+supports a guardrail attached to the *agent* itself, via `rai_config` on the
+agent definition, but it requires the ARM resource ID of a Responsible AI
+policy the bank has defined. No such policy exists in this deployment yet, so
+that field is deliberately omitted and the model-deployment filter is the whole
+story today. Backlog item 15 covers defining one as code.
 
 Do not point at `WorkflowRoutingPolicy` when answering this. That is an
 approval control, not a safety control. It is a good answer to a different

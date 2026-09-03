@@ -70,11 +70,19 @@ resource "azapi_resource" "webui_auth" {
       }
 
       login = {
-        # The token store is not used to call downstream services -- see the
-        # note at the top of this file -- but Easy Auth needs it to keep the
-        # session cookie working across the single replica.
+        # Deliberately off. The token store persists the provider's access and
+        # refresh tokens so they can be retrieved later via /.auth/me; enabling
+        # it on Container Apps requires a storage account and a SAS URL setting,
+        # and the API rejects the config outright without one.
+        #
+        # Nothing here needs those tokens. EasyAuthCustomerAccessor reads the
+        # X-MS-CLIENT-PRINCIPAL headers, which the platform injects on every
+        # authenticated request whether or not the store exists, and the
+        # application deliberately never calls Foundry as the user -- see the
+        # note at the top of this file. Sign-in and the session cookie work
+        # exactly the same with this disabled.
         tokenStore = {
-          enabled = true
+          enabled = false
         }
       }
     }
