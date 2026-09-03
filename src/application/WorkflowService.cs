@@ -11,6 +11,22 @@ public interface IWorkflowService
 {
     Task<WorkflowState> StartAsync(string userMessage, CancellationToken cancellationToken = default);
     Task<WorkflowState> StartDemoAsync(string scenarioId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Starts a workflow on behalf of an identified customer. Separate from
+    /// <see cref="StartAsync(string, CancellationToken)"/> so existing callers
+    /// that have no identity keep compiling and keep the null-customer
+    /// behaviour, rather than silently passing an empty identity.
+    /// </summary>
+    Task<WorkflowState> StartForCustomerAsync(
+        string userMessage,
+        string? customerId,
+        CancellationToken cancellationToken = default);
+
+    Task<WorkflowState> StartDemoForCustomerAsync(
+        string scenarioId,
+        string? customerId,
+        CancellationToken cancellationToken = default);
     Task<WorkflowState> RecoverAsync(Guid workflowId, CancellationToken cancellationToken = default);
     Task<WorkflowState> ApproveAsync(Guid workflowId, string decision, string reason, CancellationToken cancellationToken = default);
     Task<WorkflowState?> GetAsync(Guid workflowId, CancellationToken cancellationToken = default);
@@ -45,7 +61,8 @@ public sealed class WorkflowService : IWorkflowService
         IWorkflowRepository workflowRepository,
         IWorkflowActionRepository workflowActionRepository,
         IDemoScenarioPolicy? demoScenarioPolicy = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        ICustomerProfileClient? customerProfile = null)
     {
         _mcpClient = mcpClient;
         _logger = logger;
@@ -57,25 +74,42 @@ public sealed class WorkflowService : IWorkflowService
             loggerFactory?.CreateLogger<AgentFrameworkWorkflowOrchestrator>()
                 ?? NullLogger<AgentFrameworkWorkflowOrchestrator>.Instance,
             (toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken) =>
-                InvokeAgentAsync(toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken));
+                InvokeAgentAsync(toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken),
+            customerProfile);
     }
 
     public Task<WorkflowState> StartAsync(
         string userMessage,
         CancellationToken cancellationToken = default) =>
-        StartCoreAsync(userMessage, null, cancellationToken);
+        StartCoreAsync(userMessage, null, null, cancellationToken);
 
     public Task<WorkflowState> StartDemoAsync(
         string scenarioId,
         CancellationToken cancellationToken = default)
     {
         var scenario = _demoScenarioPolicy.Resolve(scenarioId);
-        return StartCoreAsync(scenario.UserMessage, scenario, cancellationToken);
+        return StartCoreAsync(scenario.UserMessage, scenario, null, cancellationToken);
+    }
+
+    public Task<WorkflowState> StartForCustomerAsync(
+        string userMessage,
+        string? customerId,
+        CancellationToken cancellationToken = default) =>
+        StartCoreAsync(userMessage, null, customerId, cancellationToken);
+
+    public Task<WorkflowState> StartDemoForCustomerAsync(
+        string scenarioId,
+        string? customerId,
+        CancellationToken cancellationToken = default)
+    {
+        var scenario = _demoScenarioPolicy.Resolve(scenarioId);
+        return StartCoreAsync(scenario.UserMessage, scenario, customerId, cancellationToken);
     }
 
     private async Task<WorkflowState> StartCoreAsync(
         string userMessage,
         DemoScenarioDefinition? demoScenario,
+        string? customerId,
         CancellationToken cancellationToken)
     {
         var workflowId = Guid.NewGuid();
@@ -114,7 +148,8 @@ public sealed class WorkflowService : IWorkflowService
             CreatedAt: createdAt,
             UpdatedAt: createdAt,
             Events: initialEvents,
-            Version: 0);
+            Version: 0,
+            CustomerId: string.IsNullOrWhiteSpace(customerId) ? null : customerId.Trim());
 
         await AddWorkflowAsync(draftState, cancellationToken);
         return draftState;

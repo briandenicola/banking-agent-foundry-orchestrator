@@ -89,8 +89,9 @@ public sealed class ProblemDetailsContractTests : IDisposable
     public async Task PostWorkflow_DependencyFailure_Returns502WithoutInternalMessage()
     {
         _workflowService
-            .Setup(service => service.StartAsync(
+            .Setup(service => service.StartForCustomerAsync(
                 It.IsAny<string>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("secret downstream endpoint"));
 
@@ -109,8 +110,9 @@ public sealed class ProblemDetailsContractTests : IDisposable
     public async Task PostWorkflow_DependencyTimeout_Returns504()
     {
         _workflowService
-            .Setup(service => service.StartAsync(
+            .Setup(service => service.StartForCustomerAsync(
                 It.IsAny<string>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new TimeoutException("Foundry timeout details"));
 
@@ -125,8 +127,9 @@ public sealed class ProblemDetailsContractTests : IDisposable
     public async Task PostWorkflow_UnexpectedFailure_ReturnsGeneric500WithoutStackTrace()
     {
         _workflowService
-            .Setup(service => service.StartAsync(
+            .Setup(service => service.StartForCustomerAsync(
                 It.IsAny<string>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("database password leaked"));
 

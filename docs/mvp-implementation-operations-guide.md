@@ -599,6 +599,46 @@ approve workflows. Anyone who can reach the Web UI can still drive the system.
 Internal ingress removes the public API, not the ability to use it. Do not
 describe this deployment as secured. Issue #40 tracks the remaining work.
 
+### Signing users in to the Web UI (Container Apps built-in authentication)
+
+The Web UI can be put behind Entra sign-in without the app registration that
+service authentication needs Terraform to create. The registration is created by
+hand and supplied as an input, so a tenant that denies `azuread_application`
+still supports this.
+
+1. Create an app registration in the portal, or with `az ad app create`. Add a
+   **Web** redirect URI of `https://<webui-fqdn>/.auth/login/aad/callback`; the
+   FQDN comes from `terraform -chdir=apps output`.
+2. Create a client secret on that registration.
+3. Supply both to Terraform out of band, so neither reaches the repository:
+
+   ```bash
+   export TF_VAR_webui_auth_client_id="<application (client) id>"
+   export TF_VAR_webui_auth_client_secret="<client secret value>"
+   ```
+
+4. Apply. `apps/webui-auth.tf` creates the `authConfigs/current` child resource
+   and the Web UI starts redirecting anonymous visitors to Entra.
+
+Leaving `webui_auth_client_id` empty keeps the historical behaviour: no
+authentication, Web UI public. Setting the client ID without the secret fails the
+plan on a precondition rather than deploying a login that cannot complete.
+
+The health probe paths are excluded from authentication in
+`local.webui_auth_excluded_paths`. Without that exclusion the platform's own
+probes receive a login redirect, the revision never becomes ready, and the
+deployment fails in a way that looks nothing like an authentication problem.
+
+**What this does and does not change.** It authenticates the person using the Web
+UI, which is the substance of issue #40. It does **not** let the application call
+Foundry as that person. Workflows execute in the background through the recovery
+worker, long after the sign-in token has expired, so carrying a user token into a
+workflow would mean persisting user credentials in the workflow store. The
+signed-in object identifier is instead recorded on the workflow
+(`WorkflowState.CustomerId`) and used as a memory scope the orchestrator asserts
+on the user's behalf. The orchestrator ingress itself remains unauthenticated;
+only the Web UI in front of it is protected.
+
 Two consequences worth knowing:
 
 - `ORCHESTRATOR_URL` is now the internal FQDN and is **not routable from an

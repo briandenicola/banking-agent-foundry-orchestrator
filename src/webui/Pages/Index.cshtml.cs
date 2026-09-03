@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using BankingAgent.Application;
+using BankingAgent.WebUi;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
@@ -10,12 +11,19 @@ public class IndexModel : PageModel
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<IndexModel> _logger;
+    private readonly ISignedInCustomerAccessor _signedInCustomer;
 
-    public IndexModel(IHttpClientFactory httpClientFactory, ILogger<IndexModel> logger)
+    public IndexModel(
+        IHttpClientFactory httpClientFactory,
+        ILogger<IndexModel> logger,
+        ISignedInCustomerAccessor signedInCustomer)
     {
         _httpClient = httpClientFactory.CreateClient("orchestrator");
         _logger = logger;
+        _signedInCustomer = signedInCustomer;
     }
+
+    public SignedInCustomer Customer => _signedInCustomer.Current;
 
     [BindProperty]
     public InputModel Input { get; set; } = new();
@@ -97,7 +105,11 @@ public class IndexModel : PageModel
                 {
                     userMessage = Input.UserMessage,
                     demoScenario = Input.DemoScenario,
-                    expectsEvidence = files.Count > 0
+                    expectsEvidence = files.Count > 0,
+                    // Taken from the platform-verified identity rather than
+                    // anything the browser submitted, so a customer cannot ask
+                    // for a workflow personalised with someone else's profile.
+                    customerId = Customer.IsAuthenticated ? Customer.Id : null
                 });
 
             if (!response.IsSuccessStatusCode)

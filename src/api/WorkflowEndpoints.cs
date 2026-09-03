@@ -24,8 +24,10 @@ public static class WorkflowEndpoints
         {
             ValidateWorkflowRequest(request);
             var workflow = string.IsNullOrWhiteSpace(request.DemoScenario)
-                ? await workflowService.StartAsync(request.UserMessage, cancellationToken)
-                : await workflowService.StartDemoAsync(request.DemoScenario, cancellationToken);
+                ? await workflowService.StartForCustomerAsync(
+                    request.UserMessage, request.CustomerId, cancellationToken)
+                : await workflowService.StartDemoForCustomerAsync(
+                    request.DemoScenario, request.CustomerId, cancellationToken);
 
             // Non-dispute workflows have no evidence — trigger immediately.
             // Dispute workflows trigger after the evidence upload endpoint completes.
@@ -157,6 +159,14 @@ public static class WorkflowEndpoints
         else if (request.UserMessage.Length > 4000)
         {
             errors["userMessage"] = ["A workflow message must be 4,000 characters or fewer."];
+        }
+
+        // Bounded because the value is used verbatim as a Foundry memory
+        // scope. An unbounded caller-supplied string there is both a rejected
+        // request downstream and an unnecessary amount of trust.
+        if (request.CustomerId is { Length: > 200 })
+        {
+            errors["customerId"] = ["A customer identifier must be 200 characters or fewer."];
         }
 
         if (errors.Count > 0)

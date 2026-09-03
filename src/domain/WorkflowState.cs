@@ -26,7 +26,16 @@ public sealed record WorkflowState(
     long Version = 0,
     int RecoveryAttemptCount = 0,
     DateTimeOffset? NextAttemptAt = null,
-    string? LastErrorCode = null);
+    string? LastErrorCode = null,
+    /// <summary>
+    /// Stable identifier for the person the workflow belongs to, captured when
+    /// the request was submitted. Workflows execute in the background long
+    /// after the submitting request has ended, so the identity has to be
+    /// carried on the workflow rather than read from an ambient context.
+    /// Null when the deployment runs without user authentication, in which case
+    /// personalisation is skipped rather than applied to the wrong customer.
+    /// </summary>
+    string? CustomerId = null);
 
 public sealed record WorkflowEvent(
     string Type,

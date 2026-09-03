@@ -10,7 +10,14 @@ public sealed record WorkflowRequest(
     /// evidence can be uploaded and persisted first. Set by the web UI for
     /// dispute workflows that include initial evidence files.
     /// </summary>
-    bool ExpectsEvidence = false);
+    bool ExpectsEvidence = false,
+    /// <summary>
+    /// Identifier of the signed-in person, supplied by the Web UI from the
+    /// platform authentication headers. Null when the deployment runs without
+    /// user authentication; the workflow then runs without personalisation
+    /// rather than borrowing somebody else's profile.
+    /// </summary>
+    string? CustomerId = null);
 
 public sealed record ApprovalRequest(string Decision, string Reason);
 

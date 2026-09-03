@@ -44,6 +44,12 @@ public sealed class WorkflowEntityConfiguration
         builder.Property(workflow => workflow.LastErrorCode)
             .HasColumnName("last_error_code")
             .HasMaxLength(128);
+        // An Entra object identifier is a GUID today, but the column is sized
+        // for a general subject claim so a different identity source does not
+        // require a migration.
+        builder.Property(workflow => workflow.CustomerId)
+            .HasColumnName("customer_id")
+            .HasMaxLength(200);
         builder.Property(workflow => workflow.Version)
             .HasColumnName("version")
             .IsConcurrencyToken();

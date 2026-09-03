@@ -68,20 +68,32 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
     public Task<ProfileReply> GetMemoriesAsync(CancellationToken cancellationToken) =>
         AskAsync(MemoryProbe, cancellationToken);
 
-    public async Task<ProfileReply> AskAsync(string message, CancellationToken cancellationToken)
+    public Task<ProfileReply> AskAsync(string message, CancellationToken cancellationToken) =>
+        AskAsync(message, null, cancellationToken);
+
+    public async Task<ProfileReply> AskAsync(
+        string message,
+        string? memoryScope,
+        CancellationToken cancellationToken)
     {
         EnsureConfigured();
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
 
+        var requestedScope = string.IsNullOrWhiteSpace(memoryScope) ? null : memoryScope.Trim();
+
         // No previous_response_id: every turn is independent, so anything the
         // agent recalls came out of the memory store and not the prompt.
+        object agentReference = requestedScope is null
+            ? new { type = "agent_reference", name = _options.AgentName }
+            : new { type = "agent_reference", name = _options.AgentName, scope = requestedScope };
+
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"{_endpoint}/openai/v1/responses")
         {
             Content = JsonContent.Create(new
             {
-                agent_reference = new { type = "agent_reference", name = _options.AgentName },
+                agent_reference = agentReference,
                 input = message
             })
         };
@@ -99,7 +111,41 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
                 $"The profile agent returned {(int)response.StatusCode}.");
         }
 
-        return Parse(body);
+        var reply = Parse(body);
+        if (requestedScope is null)
+        {
+            return reply;
+        }
+
+        var confined = EnforceScope(reply, requestedScope);
+        if (confined.Memories.Count < reply.Memories.Count)
+        {
+            // Foundry accepted the request but answered from a different scope.
+            // Treating that as "no memories" is the only safe reading: the
+            // alternative is personalising one customer's workflow with
+            // another customer's remembered details.
+            _logger.LogWarning(
+                "customer-profile returned {Returned} memories but only {Kept} were scoped to {Scope}; the rest were discarded. Per-customer memory scoping is not being honoured by the service.",
+                reply.Memories.Count,
+                confined.Memories.Count,
+                requestedScope);
+        }
+
+        return confined;
+    }
+
+    /// <summary>
+    /// Drops memories that came back under a scope other than the one asked
+    /// for. Exposed for testing because this is the guard that turns a silently
+    /// ignored scope into lost personalisation instead of a data leak.
+    /// </summary>
+    internal static ProfileReply EnforceScope(ProfileReply reply, string requestedScope)
+    {
+        var kept = reply.Memories
+            .Where(memory => string.Equals(memory.Scope, requestedScope, StringComparison.Ordinal))
+            .ToList();
+
+        return reply with { Memories = kept, Scope = requestedScope };
     }
 
     public async Task ClearMemoriesAsync(CancellationToken cancellationToken)

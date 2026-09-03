@@ -49,3 +49,16 @@ variable "enable_agent_toolbox" {
   type        = bool
   default     = false
 }
+
+variable "webui_auth_client_id" {
+  description = "Client ID of a hand-created Entra app registration used to sign users in to the Web UI. Empty disables Container Apps built-in authentication and leaves the Web UI public, which is the historical behaviour tracked by issue #40. The registration must list https://<webui-fqdn>/.auth/login/aad/callback as a redirect URI."
+  type        = string
+  default     = ""
+}
+
+variable "webui_auth_client_secret" {
+  description = "Client secret for webui_auth_client_id. Supply it out of band (for example TF_VAR_webui_auth_client_secret) so it is never committed. Required whenever webui_auth_client_id is set."
+  type        = string
+  default     = ""
+  sensitive   = true
+}

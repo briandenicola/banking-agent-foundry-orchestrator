@@ -319,6 +319,34 @@ retained.
 forgets an accessibility need is worse than useless. A conscious inclusion, not an
 oversight.
 
+**"Does this affect the actual banking workflow, or just this page?"** Both, now.
+A `profile` step runs ahead of the planner in `AgentFrameworkWorkflowOrchestrator`
+(`ExecuteProfileStepAsync`), and what it recalls is passed to the planner and into
+the specialist agent's `context` dictionary, so a stated contact or accessibility
+preference can shape the plan and the wording of the answer.
+
+Two properties are worth volunteering before anyone asks:
+
+- **It fails open.** If the profile agent is undeployed, unreachable, slow, or
+  scoped to somebody else, the workflow proceeds without personalisation. A
+  customer disputing a transaction gets an answer whether or not the memory
+  service is healthy. `ProfileStepFailOpenTests` pins this by running the whole
+  workflow with a profile client that throws.
+- **The scope is checked, not assumed.** The orchestrator calls Foundry with its
+  own managed identity, so the customer scope is asserted by the application
+  rather than derived from a user token. `CustomerProfileClient.EnforceScope`
+  discards any memory that comes back under a different scope than the one asked
+  for. If Foundry ever accepted the scope and quietly ignored it, the result is
+  lost personalisation rather than one customer seeing another's details.
+
+**"So is this multi-tenant safe?"** Be straight about this one. Sign-in is real —
+Container Apps built-in authentication puts Entra in front of the Web UI, and the
+signed-in object identifier travels on the workflow as `WorkflowState.CustomerId`
+because workflows run in the background, long after the sign-in token is gone. But
+the orchestrator still calls Foundry as itself, and the orchestrator's own ingress
+is unauthenticated. This is a sound pattern — authenticate the user, then scope
+their data — not a finished authorisation story. Issue #40 tracks the rest.
+
 ## The closing line
 
 Everything in the demonstration — creating the agent, calling it, reading memory,

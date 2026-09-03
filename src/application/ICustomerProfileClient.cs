@@ -34,6 +34,24 @@ public interface ICustomerProfileClient
     /// </summary>
     Task<ProfileReply> AskAsync(string message, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Sends one turn against a specific memory scope, so a workflow running in
+    /// the background can read the profile of the customer it belongs to rather
+    /// than the profile of the identity the orchestrator happens to run as.
+    /// </summary>
+    /// <param name="memoryScope">
+    /// The scope to read and write. Null falls back to the scope Foundry
+    /// derives from the caller's own token.
+    /// </param>
+    /// <remarks>
+    /// Implementations must discard any memory the service returns under a
+    /// different scope than the one requested. Foundry has been observed to
+    /// accept and silently ignore scope-like fields, and a silently ignored
+    /// scope would surface one customer's memories inside another customer's
+    /// workflow.
+    /// </remarks>
+    Task<ProfileReply> AskAsync(string message, string? memoryScope, CancellationToken cancellationToken);
+
     /// <summary>Reads what is currently retained for the caller's scope.</summary>
     Task<ProfileReply> GetMemoriesAsync(CancellationToken cancellationToken);
 

@@ -16,6 +16,16 @@ resource "azurerm_container_app" "webui" {
     identity = azurerm_user_assigned_identity.this["webui"].id
   }
 
+  # Easy Auth reads the client secret out of the container app's own secret
+  # store by name. Absent unless a registration was supplied; see webui-auth.tf.
+  dynamic "secret" {
+    for_each = local.webui_auth_enabled ? [1] : []
+    content {
+      name  = local.webui_auth_secret_name
+      value = var.webui_auth_client_secret
+    }
+  }
+
   ingress {
     allow_insecure_connections = false
     external_enabled           = true
@@ -99,6 +109,23 @@ resource "azurerm_container_app" "webui" {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         value = data.azurerm_application_insights.this.connection_string
       }
+
+      env {
+        name = "WEBUI_AUTH_ENABLED"
+        # Tells the application whether to trust the Easy Auth principal
+        # headers. Those headers are only trustworthy when the platform is
+        # actually terminating authentication in front of the container; if the
+        # app trusted them unconditionally, any caller could forge an identity
+        # and read another customer's memories.
+        value = tostring(local.webui_auth_enabled)
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.webui_auth_client_id == "" || var.webui_auth_client_secret != ""
+      error_message = "webui_auth_client_id is set but webui_auth_client_secret is empty. Easy Auth would redirect users to a login it cannot complete, so the Web UI would be unusable rather than merely unauthenticated. Supply the secret, for example with TF_VAR_webui_auth_client_secret."
     }
   }
 

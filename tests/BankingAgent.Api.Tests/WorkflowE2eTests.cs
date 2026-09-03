@@ -292,7 +292,8 @@ public sealed class WorkflowE2eTests : IDisposable
     {
         var model = new IndexModel(
             new TestHttpClientFactory(_client),
-            NullLogger<IndexModel>.Instance)
+            NullLogger<IndexModel>.Instance,
+            new StubSignedInCustomerAccessor())
         {
             PageContext = new PageContext
             {

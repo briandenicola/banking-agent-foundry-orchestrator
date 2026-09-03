@@ -175,7 +175,7 @@ public sealed class AuthenticationContractTests : IDisposable
     {
         // Auth passes; service mock throws to isolate auth from logic
         _workflowServiceMock
-            .Setup(s => s.StartAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(s => s.StartForCustomerAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("sentinel"));
 
         var token = _testHost.BuildBearerToken();

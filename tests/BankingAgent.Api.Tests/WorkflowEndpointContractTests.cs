@@ -347,7 +347,7 @@ public sealed class WorkflowEndpointContractTests : IDisposable
         var expectedId = Guid.NewGuid();
         var traceId = Guid.NewGuid().ToString("N");
         _workflowServiceMock
-            .Setup(s => s.StartAsync("Why is this transaction pending?", It.IsAny<CancellationToken>()))
+            .Setup(s => s.StartForCustomerAsync("Why is this transaction pending?", It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkflowState(
                 expectedId, traceId, "Why is this transaction pending?",
                 WorkflowStatus.Draft, null, false, null, null,
@@ -375,7 +375,7 @@ public sealed class WorkflowEndpointContractTests : IDisposable
     {
         var id = Guid.NewGuid();
         _workflowServiceMock
-            .Setup(s => s.StartAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(s => s.StartForCustomerAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkflowState(
                 id, "trace-abc", "Test request.",
                 WorkflowStatus.Draft, null, false, null, null,
@@ -398,7 +398,7 @@ public sealed class WorkflowEndpointContractTests : IDisposable
     {
         var id = Guid.NewGuid();
         _workflowServiceMock
-            .Setup(s => s.StartAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(s => s.StartForCustomerAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkflowState(
                 id, "t", "msg",
                 WorkflowStatus.Draft, null, false, null, null,
@@ -408,7 +408,7 @@ public sealed class WorkflowEndpointContractTests : IDisposable
 
         // StartAsync is called exactly once; planner/specialist execution is deferred
         _workflowServiceMock.Verify(
-            s => s.StartAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            s => s.StartForCustomerAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -417,8 +417,9 @@ public sealed class WorkflowEndpointContractTests : IDisposable
     {
         var expectedId = Guid.NewGuid();
         _workflowServiceMock
-            .Setup(service => service.StartDemoAsync(
+            .Setup(service => service.StartDemoForCustomerAsync(
                 "hosted-agent-failure",
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkflowState(
                 expectedId,
@@ -443,13 +444,15 @@ public sealed class WorkflowEndpointContractTests : IDisposable
 
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         _workflowServiceMock.Verify(
-            service => service.StartDemoAsync(
+            service => service.StartDemoForCustomerAsync(
                 "hosted-agent-failure",
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _workflowServiceMock.Verify(
-            service => service.StartAsync(
+            service => service.StartForCustomerAsync(
                 It.IsAny<string>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }

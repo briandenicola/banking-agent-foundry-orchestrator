@@ -357,6 +357,7 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
             RecoveryAttemptCount = workflow.RecoveryAttemptCount,
             NextAttemptAt = workflow.NextAttemptAt,
             LastErrorCode = workflow.LastErrorCode,
+            CustomerId = workflow.CustomerId,
             Version = workflow.Version
         };
 
@@ -401,7 +402,8 @@ public sealed class EfWorkflowRepository(BankingAgentDbContext context)
             Version: entity.Version,
             RecoveryAttemptCount: entity.RecoveryAttemptCount,
             NextAttemptAt: entity.NextAttemptAt,
-            LastErrorCode: entity.LastErrorCode);
+            LastErrorCode: entity.LastErrorCode,
+            CustomerId: entity.CustomerId);
     }
 
 }

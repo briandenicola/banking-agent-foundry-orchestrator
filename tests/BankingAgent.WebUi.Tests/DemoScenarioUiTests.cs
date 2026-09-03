@@ -32,7 +32,8 @@ public sealed class DemoScenarioUiTests
             });
         var model = new IndexModel(
             factory.Object,
-            NullLogger<IndexModel>.Instance);
+            NullLogger<IndexModel>.Instance,
+            new StubSignedInCustomerAccessor());
 
         Assert.Equal(
             DemoScenarioCatalog.All.Select(scenario => scenario.Id),
@@ -454,7 +455,7 @@ public sealed class DemoScenarioUiTests
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient("orchestrator")).Returns(httpClient);
 
-        var model = new IndexModel(factory.Object, NullLogger<IndexModel>.Instance)
+        var model = new IndexModel(factory.Object, NullLogger<IndexModel>.Instance, new StubSignedInCustomerAccessor())
         {
             PageContext = new PageContext
             {

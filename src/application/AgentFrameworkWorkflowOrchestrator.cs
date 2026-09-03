@@ -19,14 +19,23 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
     private readonly ILogger<AgentFrameworkWorkflowOrchestrator> _logger;
     private readonly Func<string, string, Guid, string, IDictionary<string, object?>, DemoScenarioFault, CancellationToken, Task<McpToolResult>> _invokeAgentAsync;
 
+    /// <summary>
+    /// Optional. When absent the workflow runs exactly as it did before
+    /// personalisation existed, which is also what happens when the profile
+    /// agent is deployed but unreachable.
+    /// </summary>
+    private readonly ICustomerProfileClient? _customerProfile;
+
     public AgentFrameworkWorkflowOrchestrator(
         IMcpClient mcpClient,
         ILogger<AgentFrameworkWorkflowOrchestrator> logger,
-        Func<string, string, Guid, string, IDictionary<string, object?>, DemoScenarioFault, CancellationToken, Task<McpToolResult>>? invokeAgentAsync = null)
+        Func<string, string, Guid, string, IDictionary<string, object?>, DemoScenarioFault, CancellationToken, Task<McpToolResult>>? invokeAgentAsync = null,
+        ICustomerProfileClient? customerProfile = null)
     {
         _mcpClient = mcpClient;
         _logger = logger;
         _invokeAgentAsync = invokeAgentAsync ?? DefaultInvokeAgentAsync;
+        _customerProfile = customerProfile;
     }
 
     public async Task<AgentFrameworkWorkflowExecution> ExecuteAsync(
@@ -93,6 +102,11 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
 
     private Workflow BuildWorkflow()
     {
+        var profileBinding = ((Func<WorkflowExecutionContext, IWorkflowContext, CancellationToken, ValueTask<WorkflowExecutionContext>>)(
+            async (context, workflowContext, cancellationToken) =>
+                await ExecuteProfileStepAsync(context, workflowContext, cancellationToken)))
+            .BindAsExecutor<WorkflowExecutionContext, WorkflowExecutionContext>("profile", null, false);
+
         var plannerBinding = ((Func<WorkflowExecutionContext, IWorkflowContext, CancellationToken, ValueTask<WorkflowExecutionContext>>)(
             async (context, workflowContext, cancellationToken) =>
                 await ExecutePlannerStepAsync(context, workflowContext, cancellationToken)))
@@ -113,7 +127,8 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
                 await ExecuteTerminalStepAsync(context, workflowContext, cancellationToken)))
             .BindAsExecutor<WorkflowExecutionContext, string>("terminal", null, false);
 
-        return new WorkflowBuilder(plannerBinding)
+        return new WorkflowBuilder(profileBinding)
+            .AddEdge(profileBinding, plannerBinding)
             .AddEdge(plannerBinding, routingBinding)
             .AddEdge(routingBinding, specialistBinding)
             .AddEdge(specialistBinding, terminalBinding)
@@ -121,6 +136,97 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             .WithName("banking-agent-routing")
             .Build();
     }
+
+    /// <summary>
+    /// Reads what Foundry remembers about this customer and carries it into the
+    /// rest of the workflow.
+    ///
+    /// This step is deliberately fail-open. A banking request must still be
+    /// planned and answered when the profile agent is undeployed, unreachable,
+    /// slow, or scoped to somebody else; losing personalisation is an
+    /// acceptable degradation, refusing the customer's request is not. Every
+    /// failure path therefore returns the context unchanged.
+    /// </summary>
+    private async Task<WorkflowExecutionContext> ExecuteProfileStepAsync(
+        WorkflowExecutionContext context,
+        IWorkflowContext workflowContext,
+        CancellationToken cancellationToken)
+    {
+        _ = workflowContext;
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (context.Failed)
+        {
+            return context;
+        }
+
+        var customerId = context.CurrentState.CustomerId;
+        if (string.IsNullOrWhiteSpace(customerId))
+        {
+            // No authenticated customer. Reading the profile here would return
+            // whatever scope the orchestrator's own identity maps to, which is
+            // shared by every caller, so it is skipped rather than guessed.
+            return context;
+        }
+
+        if (_customerProfile is null || !_customerProfile.IsConfigured)
+        {
+            return context;
+        }
+
+        using var activity = WorkflowTelemetry.StartActivity("workflow.profile", context.WorkflowId);
+        activity?.SetTag("workflow.trace_id", context.TraceId);
+
+        try
+        {
+            var reply = await _customerProfile.AskAsync(
+                ProfileRecallPrompt,
+                customerId,
+                cancellationToken);
+
+            var preferences = reply.Memories
+                .Select(memory => memory.Content)
+                .Where(content => !string.IsNullOrWhiteSpace(content))
+                .ToList();
+
+            activity?.SetTag("profile.memory_count", preferences.Count);
+
+            if (preferences.Count == 0)
+            {
+                return context;
+            }
+
+            _logger.LogInformation(
+                "Recalled {Count} remembered preferences for workflow {WorkflowId}.",
+                preferences.Count,
+                context.WorkflowId);
+
+            return context with { RememberedPreferencesOrNull = preferences };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // Deliberately swallowed: see the fail-open note above.
+            activity?.SetTag("profile.failed", true);
+            _logger.LogWarning(
+                exception,
+                "Could not read the customer profile for workflow {WorkflowId}; continuing without personalisation.",
+                context.WorkflowId);
+            return context;
+        }
+    }
+
+    /// <summary>
+    /// Asks only for retained preferences. The step consumes the memory tool's
+    /// own list rather than the model's prose, but the prompt still steers the
+    /// agent towards searching memory instead of answering conversationally.
+    /// </summary>
+    private const string ProfileRecallPrompt =
+        "What preferences and details do you remember about this customer? "
+        + "List only what is stored. If nothing is stored, say so.";
 
     private async Task<WorkflowExecutionContext> ExecutePlannerStepAsync(
         WorkflowExecutionContext context,
@@ -142,6 +248,11 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             ["workflow_status"] = "planning",
             ["correlation_id"] = WorkflowTelemetry.GetCorrelationId()
         };
+
+        if (context.RememberedPreferences.Count > 0)
+        {
+            plannerParameters["customer_preferences"] = context.RememberedPreferences;
+        }
 
         _logger.LogDebug(
             "Agent Framework planner step starting for workflow {WorkflowId}.",
@@ -263,6 +374,12 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
                 ["selected_agent"] = context.Route.Agent
             }
         });
+
+        if (context.RememberedPreferences.Count > 0
+            && specialistParameters["context"] is Dictionary<string, object?> specialistContext)
+        {
+            specialistContext["customer_preferences"] = context.RememberedPreferences;
+        }
 
         try
         {
@@ -539,4 +656,14 @@ internal sealed record WorkflowExecutionContext(
     bool FinalRequiresApproval = false,
     string? FinalIntent = null,
     string? FinalSummary = null,
-    string? SelectedAgent = null);
+    string? SelectedAgent = null,
+    /// <summary>
+    /// Preferences the profile agent recalled for this customer, in its own
+    /// words. Empty whenever there is no identified customer, no profile agent,
+    /// or the lookup failed -- all of which mean "proceed without
+    /// personalisation" rather than "stop".
+    /// </summary>
+    IReadOnlyList<string>? RememberedPreferencesOrNull = null)
+{
+    public IReadOnlyList<string> RememberedPreferences => RememberedPreferencesOrNull ?? [];
+}

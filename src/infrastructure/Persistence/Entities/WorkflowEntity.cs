@@ -17,6 +17,7 @@ public sealed class WorkflowEntity
     public int RecoveryAttemptCount { get; set; }
     public DateTimeOffset? NextAttemptAt { get; set; }
     public string? LastErrorCode { get; set; }
+    public string? CustomerId { get; set; }
     public long Version { get; set; }
     public ICollection<WorkflowEventEntity> Events { get; } = [];
     public ICollection<ApprovalDecisionEntity> Decisions { get; } = [];

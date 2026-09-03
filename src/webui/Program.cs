@@ -20,6 +20,7 @@ if (!Uri.TryCreate(orchestratorApiBaseUrl, UriKind.Absolute, out var orchestrato
 
 builder.Services.AddRazorPages();
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<ISignedInCustomerAccessor, EasyAuthCustomerAccessor>();
 builder.Services.AddHttpClient("orchestrator-health", client =>
 {
     client.BaseAddress = orchestratorApiBaseUri;

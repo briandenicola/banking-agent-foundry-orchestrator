@@ -13,7 +13,7 @@ This spec describes the target design. The following parts are **not yet** imple
 | Spec statement | Actual behaviour on `main` | Tracked |
 |---|---|---|
 | LangGraph agents resume mid-graph after failure | All four agents are multi-node graphs with conditional edges, but no agent uses a LangGraph checkpointer, so a failed invocation restarts from the first node rather than resuming. | [#41](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/41) |
-| Service-to-service calls are authenticated with Entra ID | The target tenant denies the app registration this requires, so deployments run with `ENABLE_SERVICE_AUTH=false`. The orchestrator is on internal ingress and is not publicly reachable, but the Web UI remains public and unauthenticated and can start and approve workflows. Exposure is reduced, not closed. | [#40](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/40) |
+| Service-to-service calls are authenticated with Entra ID | The target tenant denies the app registration this requires, so deployments run with `ENABLE_SERVICE_AUTH=false`. The orchestrator is on internal ingress and is not publicly reachable. The Web UI can now be put behind Entra sign-in with Container Apps built-in authentication using a hand-created app registration (`webui_auth_client_id`), which does not need the denied `azuread_application`; it stays public when that input is empty. The orchestrator ingress itself remains unauthenticated either way, so exposure is reduced, not closed. | [#40](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/40) |
 
 
 ## Primary user journey
