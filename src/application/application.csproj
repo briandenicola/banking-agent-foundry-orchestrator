@@ -11,6 +11,9 @@
     <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.0.0-rc3" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="BankingAgent.Application.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../domain/domain.csproj" />
   </ItemGroup>
 </Project>

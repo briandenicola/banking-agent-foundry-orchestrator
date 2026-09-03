@@ -123,6 +123,62 @@ public sealed class ProfileRecallAuditTests
         Assert.DoesNotContain(completed.Events, e => e.Type == RecallEventType);
     }
 
+    [Fact]
+    public async Task Conversation_summaries_are_left_out_of_the_recall()
+    {
+        // chat_summary entries restate the same preferences in paragraphs and
+        // narrate the previous conversation, so carrying them would repeat each
+        // preference to the planner and fill the audit trail with near-duplicates.
+        var completed = await RunWorkflowAsync(ProfileThatRemembers(
+            ("user_profile", "Prefers SMS only"),
+            ("chat_summary", "The user asked what is stored about them and was told they prefer SMS only.")));
+
+        var recall = completed.Events.Single(e => e.Type == RecallEventType);
+        Assert.Equal("Recalled 1 remembered preference", recall.Message);
+        Assert.DoesNotContain("asked what is stored", recall.Details);
+    }
+
+    [Fact]
+    public async Task A_repeated_preference_is_only_carried_once()
+    {
+        // Foundry writes a fresh entry per conversation, so the same preference
+        // recurs verbatim once a customer has been seen a few times.
+        var completed = await RunWorkflowAsync(ProfileThatRemembers(
+            ("user_profile", "Prefers SMS only"),
+            ("user_profile", "prefers sms only")));
+
+        var recall = completed.Events.Single(e => e.Type == RecallEventType);
+        Assert.Equal("Recalled 1 remembered preference", recall.Message);
+    }
+
+    [Fact]
+    public async Task Summaries_are_used_when_they_are_all_that_is_stored()
+    {
+        // Some personalisation beats none.
+        var completed = await RunWorkflowAsync(ProfileThatRemembers(
+            ("chat_summary", "The user mentioned they travel often.")));
+
+        var recall = completed.Events.Single(e => e.Type == RecallEventType);
+        Assert.Contains("travel often", recall.Details);
+    }
+
+    private static ICustomerProfileClient ProfileThatRemembers(params (string Kind, string Content)[] memories)
+    {
+        var profile = new Mock<ICustomerProfileClient>(MockBehavior.Loose);
+        profile.SetupGet(client => client.IsConfigured).Returns(true);
+        profile
+            .Setup(client => client.AskAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProfileReply(
+                "here is what I remember",
+                [],
+                [.. memories.Select(m => new ProfileMemory(m.Kind, m.Content, "customer-a"))],
+                "customer-a"));
+        return profile.Object;
+    }
+
     private static ICustomerProfileClient ProfileThatRecalls(params string[] preferences)
     {
         var profile = new Mock<ICustomerProfileClient>(MockBehavior.Loose);

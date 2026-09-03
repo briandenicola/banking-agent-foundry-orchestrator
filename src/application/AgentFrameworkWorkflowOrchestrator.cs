@@ -184,10 +184,7 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
                 customerId,
                 cancellationToken);
 
-            var preferences = reply.Memories
-                .Select(memory => memory.Content)
-                .Where(content => !string.IsNullOrWhiteSpace(content))
-                .ToList();
+            var preferences = SelectPreferences(reply.Memories);
 
             activity?.SetTag("profile.memory_count", preferences.Count);
 
@@ -231,6 +228,40 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
     private const string ProfileRecallPrompt =
         "What preferences and details do you remember about this customer? "
         + "List only what is stored. If nothing is stored, say so.";
+
+    /// <summary>
+    /// The memory store holds two kinds of entry. <c>user_profile</c> entries
+    /// are the durable servicing preferences this step exists to carry.
+    /// <c>chat_summary</c> entries are recaps of earlier conversations, which
+    /// restate those same preferences in several paragraphs and describe the
+    /// conversation itself ("the user asked what is stored about them").
+    ///
+    /// Passing both meant the planner and the specialist received the same
+    /// preference several times over, wrapped in narration about previous
+    /// sessions, and the audit trail rendered as a wall of near-duplicate text.
+    /// Summaries are therefore dropped -- unless they are all that is stored,
+    /// where some personalisation beats none.
+    /// </summary>
+    private const string ProfileMemoryKind = "user_profile";
+
+    private static List<string> SelectPreferences(IReadOnlyList<ProfileMemory> memories)
+    {
+        var stored = memories
+            .Where(memory => !string.IsNullOrWhiteSpace(memory.Content))
+            .ToList();
+
+        var profileEntries = stored
+            .Where(memory => string.Equals(memory.Kind, ProfileMemoryKind, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var selected = profileEntries.Count > 0 ? profileEntries : stored;
+
+        // Foundry writes a fresh entry per conversation, so the same preference
+        // recurs verbatim once a customer has been seen a few times.
+        return [.. selected
+            .Select(memory => memory.Content.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
 
     private async Task<WorkflowExecutionContext> ExecutePlannerStepAsync(
         WorkflowExecutionContext context,
@@ -554,7 +585,7 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
 
         if (!result.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
         {
-            error = $"Tool {result.ToolName} failed with status '{result.Status}': {result.Message}";
+            error = McpFailureDescription.Describe(result);
             return false;
         }
 

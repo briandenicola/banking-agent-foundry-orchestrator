@@ -264,9 +264,14 @@ public sealed class WorkflowService : IWorkflowService
 
         if (execution.Failed)
         {
+            // Keep whatever the run did accomplish before it failed. The profile
+            // step runs ahead of the planner, so discarding its event here is
+            // what left a failed workflow's timeline showing only "started" --
+            // no record that memory was read, and no way to tell how far the run
+            // got without reproducing it.
             return await PersistFailedAsync(
                 initialState,
-                [],
+                CreateProfileRecallEvents(execution.Context),
                 execution.ErrorMessage ?? "Workflow execution failed.",
                 cancellationToken);
         }
@@ -950,7 +955,7 @@ public sealed class WorkflowService : IWorkflowService
 
         if (!result.Status.Equals("ok", StringComparison.OrdinalIgnoreCase))
         {
-            error = $"Tool {result.ToolName} failed with status '{result.Status}': {result.Message}";
+            error = McpFailureDescription.Describe(result);
             return false;
         }
 
