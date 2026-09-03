@@ -58,9 +58,13 @@ memory tool; there is no image and no graph for it. It sits outside the
 workflow decision path and can neither approve nor action anything, so no
 audit-critical decision depends on remembered content.
 
-Memory is partitioned per end user via `scope = {{$userId}}`, retained for 30
-days, and constrained by an explicit `user_profile_details` redaction
-instruction that the deployer refuses to default. See
+Memory is partitioned per end user, retained for 30 days, and constrained by an
+explicit `user_profile_details` redaction instruction that the deployer refuses
+to default. The partitioning is not the `scope = {{$userId}}` template it looks
+like: Foundry resolves that from the caller's token, which is the orchestrator's
+managed identity, so it yields one scope shared by everyone. The application
+binds the scope explicitly instead, by sending the deployed definition inline —
+see `CustomerProfileClient.BuildScopedRequest` and
 [ADR 0003](decisions/0003-foundry-memory-prompt-agent.md).
 
 ### Foundry-managed tools

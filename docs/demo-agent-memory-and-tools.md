@@ -96,11 +96,32 @@ deployment serving the conversation. Two consequences that matter:
   batches before extracting, and its default of 300 seconds means a stated
   preference is not recallable for five minutes. It is set to `0` here.
 
-**Scoping.** The tool declares `"scope": "{{$userId}}"`, which Foundry substitutes
-from the caller's Entra token. There is no application code that could get this
-wrong, and no customer identifier is passed in the request — we probed this: a
-`user` field on the request is silently ignored, and the scope stays bound to the
-token. Per-user isolation is a template variable.
+**Scoping.** This is worth getting right, because the obvious answer is wrong and
+we have the probe to prove it.
+
+The tool declares `"scope": "{{$userId}}"`, which Foundry substitutes from *the
+caller's* Entra token. The caller here is the orchestrator's managed identity —
+not the customer — so on its own that template puts every customer in one shared
+scope. Foundry reports the scope it actually stored against, and it comes back as
+`<objectId>_<tenantId>` of whoever held the token.
+
+Passing a scope next to an agent reference does not fix it: Foundry accepts the
+field, returns `200`, and ignores it. Isolation has to be demonstrated rather
+than assumed, which is what
+[`verify-memory-scope.py`](../scripts/verify-memory-scope.py) does — it writes a
+fact under one scope and *requires* that a second scope cannot read it. Against
+the live project, `agent_reference` fails that test and `inline` passes.
+
+So per-customer memory comes from the application sending the agent's own
+definition inline with the scope replaced, which
+`CustomerProfileClient.BuildScopedRequest` does. The definition is read back from
+Foundry rather than restated, so Terraform stays the source of truth for the
+model, instructions, and tools.
+
+`CustomerProfileClient.EnforceScope` then discards any memory returned under a
+different scope than the one asked for. If the service ever ignores an inline
+scope too, the cost is lost personalisation and a warning — not one customer's
+details surfacing in another's workflow.
 
 **Forgetting.** Entries carry a 30-day TTL (`default_ttl_seconds`), so the store
 expires stale preferences without anyone running a cleanup job.
@@ -219,8 +240,15 @@ prompt assembly, no memory write. The client sends a message and reads a result.
   (**Cognitive Services User**, which covers the memory-store calls behind
   **Clear all memories**).
 
-That token is also what Foundry resolves `{{$userId}}` from, so these two files are
-where "memory is per-customer" is actually decided.
+That token is what Foundry resolves `{{$userId}}` from — so these two files decide
+the *fallback* scope, the one shared by every caller when no customer is known.
+
+Per-customer memory is decided elsewhere, and it is worth being able to point at
+the chain: Easy Auth establishes the person
+([`apps/webui-auth.tf`](../apps/webui-auth.tf)), `EasyAuthCustomerAccessor` reads
+their object ID out of the platform's headers, the Web UI passes it to the
+orchestrator, and `CustomerProfileClient` binds the memory tool to it. Sign in as
+someone else and the store answers differently.
 
 ### The tests worth showing
 
@@ -237,8 +265,13 @@ If someone asks how any of this is held in place:
   (`test_existing_store_is_not_recreated`).
 - **`MemoryAgentConfigTests`** pins that a missing or blank retention rule fails
   the deploy, and that the scope defaults to `{{$userId}}`
-  (`test_memory_agent_defaults_to_per_user_scope`) — the per-customer isolation
-  claim, held in place by a test rather than by convention.
+  (`test_memory_agent_defaults_to_per_user_scope`).
+- **`CustomerProfileInlineScopeTests`** and **`CustomerProfileEndpointScopeTests`**
+  hold the per-customer claim itself: that the request Foundry receives is bound
+  to the requested scope, that the code interpreter survives being sent inline,
+  and that the signed-in customer is carried all the way from the page to the
+  agent. The last one matters most — a turn written to the wrong scope fails
+  silently, since the write succeeds and simply lands where nothing reads.
 
 ## Before you start
 
