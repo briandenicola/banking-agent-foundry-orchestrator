@@ -32,8 +32,12 @@ MAX_TOOL_CALLS = 4
 class ToolboxUnavailableError(RuntimeError):
     """Raised when a toolbox is configured but cannot be loaded.
 
-    Configured-but-broken must fail loudly rather than silently returning no
-    tools, which would look like a healthy agent giving a worse answer.
+    Configured-but-broken must be visible rather than silently returning no
+    tools, which would look like a healthy agent giving a worse answer. This
+    still raises for that reason; what changed is who handles it.
+    ``model.tool_findings`` catches it, logs it, and records it as evidence, so
+    the failure reaches the audit trail without taking down an invocation the
+    model could otherwise have answered. Do not catch it and return ``[]``.
     """
 
 
@@ -71,7 +75,22 @@ async def load_tools() -> list[Any]:
             "installed in this image."
         ) from error
 
-    toolbox = AzureAIProjectToolbox(toolbox_name=name)
+    # The endpoint is passed explicitly rather than left to the library's own
+    # environment discovery, which looks for AZURE_AI_PROJECT_ENDPOINT or
+    # FOUNDRY_PROJECT_ENDPOINT. Foundry reserves the FOUNDRY_* prefix and
+    # rejects any agent definition that sets it, so this deployment carries the
+    # endpoint in BANKING_AGENT_PROJECT_ENDPOINT and has to hand it over here.
+    # Without this the toolbox resolved to an empty endpoint and every call to
+    # get_tools() raised, taking the whole agent invocation down with it.
+    from app.model import project_endpoint
+
+    endpoint = project_endpoint()
+    if endpoint is None:
+        raise ToolboxUnavailableError(
+            f"{TOOLBOX_NAME_ENV_VAR} is set but no project endpoint is configured."
+        )
+
+    toolbox = AzureAIProjectToolbox(toolbox_name=name, project_endpoint=endpoint)
     return await toolbox.get_tools()
 
 

@@ -6,6 +6,7 @@ from app.agents.transaction_explanation import TransactionReference, explain_tra
 from app.contracts import AgentRequest
 from app.toolbox import (
     MAX_TOOL_CALLS,
+    ToolboxUnavailableError,
     TOOLBOX_NAME_ENV_VAR,
     gather_findings,
     load_tools,
@@ -188,3 +189,125 @@ class ExplanationNodeToolIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolboxFailureContainmentTests(unittest.IsolatedAsyncioTestCase):
+    """A broken toolbox must degrade the answer, not destroy it.
+
+    This is the regression that produced JSON-RPC -32603 "Agent invocation
+    failed." on every `transaction.explain` call in a deployment with the
+    toolbox enabled. `gather_findings` already treated a failing *tool* as an
+    observation, but loading the toolbox and binding it to the model sat outside
+    that protection, so the same class of fault had opposite outcomes and the
+    exception escaped the graph entirely.
+
+    `transaction_explanation` is the only agent that calls `tool_findings`,
+    which is why it was the only tool that failed.
+    """
+
+    def setUp(self):
+        self._env = patch.dict(os.environ, {TOOLBOX_NAME_ENV_VAR: "banking-toolbox"})
+        self._env.start()
+        self.addCleanup(self._env.stop)
+
+    async def test_a_toolbox_that_cannot_load_does_not_raise(self):
+        from app.model import tool_findings
+
+        with patch("app.model._model", return_value=FakeModel([])), \
+             patch("app.toolbox.load_tools", side_effect=ToolboxUnavailableError("boom")):
+            findings = await tool_findings("instructions", _request())
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("toolbox was unavailable", findings[0])
+
+    async def test_a_failure_binding_tools_to_the_model_does_not_raise(self):
+        from app.model import tool_findings
+
+        class ExplodingModel:
+            def bind_tools(self, tools):
+                raise RuntimeError("bind_tools exploded")
+
+        with patch("app.model._model", return_value=ExplodingModel()), \
+             patch("app.toolbox.load_tools", return_value=[FakeTool("spend.sum")]):
+            findings = await tool_findings("instructions", _request())
+
+        self.assertEqual(1, len(findings))
+        self.assertIn("toolbox was unavailable", findings[0])
+
+    async def test_the_failure_never_leaks_the_underlying_error_text(self):
+        """Toolbox errors carry endpoints and tokens; evidence is persisted and shown."""
+        from app.model import tool_findings
+
+        secret = "https://internal.endpoint/?sig=SECRETTOKEN"
+        with patch("app.model._model", return_value=FakeModel([])), \
+             patch("app.toolbox.load_tools", side_effect=ToolboxUnavailableError(secret)):
+            findings = await tool_findings("instructions", _request())
+
+        self.assertNotIn("SECRETTOKEN", findings[0])
+        self.assertNotIn("internal.endpoint", findings[0])
+
+    async def test_the_customer_still_gets_an_explanation(self):
+        """The whole point: the graph node completes and returns a result."""
+        state = {
+            "request": _request(),
+            "reference": TransactionReference(merchant="ACME", amount="$47.32"),
+        }
+
+        with patch("app.model._model", return_value=FakeModel([])), \
+             patch("app.toolbox.load_tools", side_effect=ToolboxUnavailableError("boom")), \
+             patch(
+                 "app.agents.transaction_explanation.structured_step",
+                 return_value=None,
+             ):
+            output = await explain_transaction(state)
+
+        result = output["result"]
+        self.assertEqual("transaction_explanation", result.intent)
+        self.assertFalse(result.requires_approval)
+        # The failure is in the audit trail rather than swallowed.
+        self.assertTrue(
+            any("toolbox was unavailable" in item for item in result.evidence),
+            f"toolbox failure missing from evidence: {result.evidence}",
+        )
+
+
+class ToolboxEndpointWiringTests(unittest.IsolatedAsyncioTestCase):
+    """The toolbox must be handed the project endpoint explicitly.
+
+    `AzureAIProjectToolbox` discovers its endpoint from AZURE_AI_PROJECT_ENDPOINT
+    or FOUNDRY_PROJECT_ENDPOINT. Foundry reserves the FOUNDRY_* prefix and
+    rejects any agent definition that sets it, so neither name exists in this
+    deployment and discovery silently produced an empty endpoint. That is what
+    made every `transaction.explain` call fail in Azure.
+    """
+
+    async def test_the_configured_endpoint_is_passed_to_the_toolbox(self):
+        captured = {}
+
+        class FakeToolbox:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            async def get_tools(self):
+                return [FakeTool("spend.sum")]
+
+        env = {
+            TOOLBOX_NAME_ENV_VAR: "banking-toolbox",
+            "BANKING_AGENT_PROJECT_ENDPOINT": "https://foundry.example/api/projects/p",
+        }
+        with patch.dict(os.environ, env, clear=True), \
+             patch("langchain_azure_ai.tools.AzureAIProjectToolbox", FakeToolbox):
+            tools = await load_tools()
+
+        self.assertEqual(1, len(tools))
+        self.assertEqual("banking-toolbox", captured.get("toolbox_name"))
+        self.assertEqual(
+            "https://foundry.example/api/projects/p",
+            captured.get("project_endpoint"),
+            "the toolbox was left to discover an endpoint that cannot exist here",
+        )
+
+    async def test_a_toolbox_without_an_endpoint_fails_loudly(self):
+        with patch.dict(os.environ, {TOOLBOX_NAME_ENV_VAR: "banking-toolbox"}, clear=True):
+            with self.assertRaises(ToolboxUnavailableError):
+                await load_tools()

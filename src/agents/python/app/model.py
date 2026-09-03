@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
@@ -10,6 +11,8 @@ from pydantic import BaseModel
 
 from app.contracts import CONTRACT_VERSION, AgentName, AgentRequest, AgentResult
 
+
+logger = logging.getLogger(__name__)
 
 StructuredReasoner = Callable[[AgentName, str, AgentRequest], Awaitable[AgentResult]]
 TStep = TypeVar("TStep", bound=BaseModel)
@@ -43,18 +46,30 @@ def _fallback_allowed() -> bool:
     return raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
+def project_endpoint() -> str | None:
+    """The Foundry project endpoint this container was deployed with.
+
+    Shared with the toolbox because Foundry reserves the ``FOUNDRY_*`` and
+    ``AGENT_*`` prefixes, so this deployment cannot use the variable names the
+    Azure SDKs discover on their own. Anything needing the endpoint has to be
+    handed it explicitly from here.
+    """
+    raw = os.getenv(PROJECT_ENDPOINT_ENV_VAR) or os.getenv(LEGACY_PROJECT_ENDPOINT_ENV_VAR)
+    return raw.strip() or None if raw else None
+
+
 def _model() -> AzureChatOpenAI | ChatOpenAI | None:
-    project_endpoint = os.getenv(PROJECT_ENDPOINT_ENV_VAR) or os.getenv(LEGACY_PROJECT_ENDPOINT_ENV_VAR)
+    foundry_endpoint = project_endpoint()
     deployment = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini")
     credential = DefaultAzureCredential()
 
-    if project_endpoint:
+    if foundry_endpoint:
         token_provider = get_bearer_token_provider(
             credential,
             "https://ai.azure.com/.default",
         )
         return ChatOpenAI(
-            base_url=f"{project_endpoint.rstrip('/')}/openai/v1/",
+            base_url=f"{foundry_endpoint.rstrip('/')}/openai/v1/",
             model=deployment,
             api_key=token_provider,
         )
@@ -124,6 +139,19 @@ async def tool_findings(instructions: str, request: AgentRequest) -> list[str]:
 
     Kept here so nodes depend on a single model-layer entry point rather than
     constructing a chat client themselves.
+
+    A toolbox failure degrades this agent's answer; it does not destroy it.
+    That boundary is the point of this try, and it is drawn to match what
+    ``gather_findings`` already does for an individual tool that raises: the
+    failure becomes an observation in the audit trail rather than an exception.
+    Loading the toolbox and binding it to the model previously sat outside that
+    protection, so a broken toolbox took down the whole agent invocation while a
+    broken *tool* did not -- the same class of fault with opposite outcomes.
+
+    Failing loudly is still the requirement, and it is still met: the failure is
+    logged at error level and returned as evidence, so it reaches the workflow's
+    audit trail and the operator. What it no longer does is deny the customer an
+    explanation that the model was perfectly capable of producing without tools.
     """
     from app.toolbox import gather_findings, load_tools, toolbox_enabled
 
@@ -134,7 +162,22 @@ async def tool_findings(instructions: str, request: AgentRequest) -> list[str]:
     if model is None:
         return []
 
-    return await gather_findings(model, await load_tools(), instructions, request)
+    try:
+        tools = await load_tools()
+        return await gather_findings(model, tools, instructions, request)
+    except Exception as error:  # noqa: BLE001 - see the docstring
+        # The type is logged rather than the message because a toolbox error can
+        # carry endpoint and token detail, and this text is persisted as
+        # evidence and shown in the UI.
+        logger.error(
+            "Toolbox round failed with error type %s (trace_id=%s)",
+            type(error).__name__,
+            request.trace_id,
+        )
+        return [
+            "The toolbox was unavailable for this request, so the answer was "
+            "produced without tool assistance."
+        ]
 
 
 async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> AgentResult:
