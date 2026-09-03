@@ -215,6 +215,25 @@ resource "azurerm_container_app" "orchestrator" {
         name  = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         value = data.azurerm_application_insights.this.connection_string
       }
+
+      # On-behalf-of. When enabled the orchestrator validates a user token from
+      # the sign-in tenant instead of a service token, so it is mutually
+      # exclusive with service authentication; the precondition below and a
+      # matching startup guard both enforce that.
+      env {
+        name  = "OBO_ENABLED"
+        value = tostring(local.obo_enabled)
+      }
+
+      env {
+        name  = "OBO_TENANT_ID"
+        value = local.obo_enabled ? local.webui_auth_tenant_id : ""
+      }
+
+      env {
+        name  = "OBO_APP_ID"
+        value = local.obo_enabled ? var.obo_app_id : ""
+      }
     }
   }
 
@@ -222,6 +241,16 @@ resource "azurerm_container_app" "orchestrator" {
     precondition {
       condition     = var.enable_service_auth || var.allow_insecure_service_auth
       error_message = "enable_service_auth=false requires allow_insecure_service_auth=true. Disabling service authentication leaves workflow endpoints open to any caller that can reach the ingress, so it must be acknowledged explicitly. The orchestrator enforces the same rule at startup and will refuse to boot otherwise."
+    }
+
+    precondition {
+      condition     = !local.obo_enabled || !var.enable_service_auth
+      error_message = "enable_obo and enable_service_auth cannot both be true. Both configure the same JWT bearer scheme, with different issuers and audiences, so the orchestrator would reject one set of callers whichever won. The orchestrator refuses to start in this combination."
+    }
+
+    precondition {
+      condition     = !var.enable_obo || local.obo_enabled
+      error_message = "enable_obo=true also requires webui_auth_client_id and obo_app_id. On-behalf-of exchanges the signed-in user's token, so without Easy Auth there is no user token to exchange, and without obo_app_id there is no orchestrator audience to exchange it for."
     }
   }
 

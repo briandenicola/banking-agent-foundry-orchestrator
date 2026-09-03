@@ -26,6 +26,16 @@ resource "azurerm_container_app" "webui" {
     }
   }
 
+  # Easy Auth resolves the token store's SAS URL through a setting name, which
+  # on Container Apps means a secret on the app itself. See webui-obo.tf.
+  dynamic "secret" {
+    for_each = local.obo_enabled ? [1] : []
+    content {
+      name  = local.token_store_secret_name
+      value = "${azurerm_storage_account.token_store[0].primary_blob_endpoint}${local.token_store_container_name}${data.azurerm_storage_account_blob_container_sas.token_store[0].sas}"
+    }
+  }
+
   ingress {
     allow_insecure_connections = false
     external_enabled           = true
@@ -118,6 +128,46 @@ resource "azurerm_container_app" "webui" {
         # app trusted them unconditionally, any caller could forge an identity
         # and read another customer's memories.
         value = tostring(local.webui_auth_enabled)
+      }
+
+      # On-behalf-of. Every value below is empty and inert unless enable_obo is
+      # set; the application reads OBO_ENABLED first and ignores the rest when
+      # it is false.
+      env {
+        name  = "OBO_ENABLED"
+        value = tostring(local.obo_enabled)
+      }
+
+      env {
+        name  = "ORCHESTRATOR_OBO_SCOPE"
+        value = local.orchestrator_obo_scope
+      }
+
+      dynamic "env" {
+        for_each = local.obo_enabled ? [1] : []
+        content {
+          name  = "WEBUI_AUTH_CLIENT_ID"
+          value = var.webui_auth_client_id
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.obo_enabled ? [1] : []
+        content {
+          name  = "WEBUI_AUTH_TENANT_ID"
+          value = local.webui_auth_tenant_id
+        }
+      }
+
+      # The exchange is a confidential-client call, so it needs the same secret
+      # Easy Auth uses. Passed by reference so the value never appears in the
+      # container app's environment definition.
+      dynamic "env" {
+        for_each = local.obo_enabled ? [1] : []
+        content {
+          name        = "WEBUI_AUTH_CLIENT_SECRET"
+          secret_name = local.webui_auth_secret_name
+        }
       }
     }
   }

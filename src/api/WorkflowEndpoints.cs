@@ -19,10 +19,17 @@ public static class WorkflowEndpoints
         app.MapPost("/api/v1/workflows", async (
             [FromBody] WorkflowRequest request,
             IWorkflowService workflowService,
+            ICustomerAssertionGuard customerGuard,
             [FromServices] IWorkflowExecutionTrigger? trigger,
             CancellationToken cancellationToken) =>
         {
             ValidateWorkflowRequest(request);
+
+            if (customerGuard.Validate(request.CustomerId) is { } rejected)
+            {
+                return rejected;
+            }
+
             var workflow = string.IsNullOrWhiteSpace(request.DemoScenario)
                 ? await workflowService.StartForCustomerAsync(
                     request.UserMessage, request.CustomerId, cancellationToken)

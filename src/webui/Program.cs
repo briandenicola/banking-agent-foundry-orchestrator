@@ -5,6 +5,7 @@ using BankingAgent.WebUi;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Identity.Client;
 using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -54,7 +55,46 @@ builder.Services.AddAntiforgery(options =>
 var orchestratorTokenScope = builder.Configuration["ORCHESTRATOR_TOKEN_SCOPE"];
 var azureClientId = builder.Configuration["AZURE_CLIENT_ID"];
 
-if (!string.IsNullOrWhiteSpace(orchestratorTokenScope))
+// On-behalf-of: call the orchestrator as the signed-in customer rather than as
+// the application. Off by default, so every existing deployment keeps the
+// behaviour it has.
+var oboEnabled = builder.Configuration.GetValue<bool?>("OBO_ENABLED") ?? false;
+
+if (oboEnabled)
+{
+    var oboScope = builder.Configuration["ORCHESTRATOR_OBO_SCOPE"];
+    var oboClientId = builder.Configuration["WEBUI_AUTH_CLIENT_ID"];
+    var oboClientSecret = builder.Configuration["WEBUI_AUTH_CLIENT_SECRET"];
+    var oboTenantId = builder.Configuration["WEBUI_AUTH_TENANT_ID"];
+
+    ArgumentException.ThrowIfNullOrWhiteSpace(oboScope, "ORCHESTRATOR_OBO_SCOPE");
+    ArgumentException.ThrowIfNullOrWhiteSpace(oboClientId, "WEBUI_AUTH_CLIENT_ID");
+    ArgumentException.ThrowIfNullOrWhiteSpace(oboClientSecret, "WEBUI_AUTH_CLIENT_SECRET");
+    ArgumentException.ThrowIfNullOrWhiteSpace(oboTenantId, "WEBUI_AUTH_TENANT_ID");
+
+    // Registered as a singleton for its token cache: the exchange is a network
+    // round trip to Entra, and a per-request client would repeat it on every
+    // page load and invite throttling.
+    builder.Services.AddSingleton(_ => ConfidentialClientApplicationBuilder
+        .Create(oboClientId)
+        .WithClientSecret(oboClientSecret)
+        .WithAuthority($"https://login.microsoftonline.com/{oboTenantId}")
+        .Build());
+
+    builder.Services.AddTransient(sp => new OnBehalfOfTokenHandler(
+        sp.GetRequiredService<IConfidentialClientApplication>(),
+        sp.GetRequiredService<IHttpContextAccessor>(),
+        oboScope,
+        sp.GetRequiredService<ILogger<OnBehalfOfTokenHandler>>()));
+
+    builder.Services.AddHttpClient("orchestrator", client =>
+    {
+        client.BaseAddress = orchestratorApiBaseUri;
+    })
+        .AddHttpMessageHandler<CorrelationIdHandler>()
+        .AddHttpMessageHandler<OnBehalfOfTokenHandler>();
+}
+else if (!string.IsNullOrWhiteSpace(orchestratorTokenScope))
 {
     if (!builder.Environment.IsDevelopment())
     {

@@ -36,6 +36,7 @@ public class CustomerProfileEndpointScopeTests : IDisposable
                 {
                     services.AddRouting();
                     services.AddSingleton<ICustomerProfileClient>(_client);
+                    services.AddSingleton<ICustomerAssertionGuard>(new DisabledCustomerAssertionGuard());
                     services.AddAuthorization(options =>
                         options.AddPolicy("WorkflowInvoke", policy =>
                             policy.RequireAssertion(_ => true)));

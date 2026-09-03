@@ -18,6 +18,7 @@ public static class CustomerProfileEndpoints
         app.MapPost("/api/v1/profile/messages", async (
             [FromBody] ProfileMessageRequest request,
             ICustomerProfileClient client,
+            ICustomerAssertionGuard customerGuard,
             CancellationToken cancellationToken) =>
         {
             if (string.IsNullOrWhiteSpace(request?.Message))
@@ -32,6 +33,11 @@ public static class CustomerProfileEndpoints
                 return Results.Problem(
                     title: "A customer identifier must be 200 characters or fewer.",
                     statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            if (customerGuard.Validate(request.CustomerId) is { } rejected)
+            {
+                return rejected;
             }
 
             if (!client.IsConfigured)
@@ -50,6 +56,7 @@ public static class CustomerProfileEndpoints
 
         app.MapGet("/api/v1/profile/memories", async (
             ICustomerProfileClient client,
+            ICustomerAssertionGuard customerGuard,
             CancellationToken cancellationToken,
             [FromQuery] string? customerId = null) =>
         {
@@ -58,6 +65,11 @@ public static class CustomerProfileEndpoints
                 return Results.Problem(
                     title: "A customer identifier must be 200 characters or fewer.",
                     statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            if (customerGuard.Validate(customerId) is { } rejected)
+            {
+                return rejected;
             }
 
             if (!client.IsConfigured)

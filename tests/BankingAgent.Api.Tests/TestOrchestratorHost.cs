@@ -105,6 +105,11 @@ public sealed class TestOrchestratorHost : IDisposable
         services.AddSingleton(workflowService);
         services.AddSingleton(evidenceService);
 
+        // On-behalf-of is off in these tests, matching the default deployment.
+        // The endpoints resolve the guard from DI, so it has to be present even
+        // when it does nothing.
+        services.AddSingleton<ICustomerAssertionGuard>(new DisabledCustomerAssertionGuard());
+
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SigningKeySecret));
 
         services

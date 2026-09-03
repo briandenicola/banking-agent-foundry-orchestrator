@@ -82,20 +82,25 @@ resource "azapi_resource" "webui_auth" {
       }
 
       login = {
-        # Deliberately off. The token store persists the provider's access and
-        # refresh tokens so they can be retrieved later via /.auth/me; enabling
-        # it on Container Apps requires a storage account and a SAS URL setting,
-        # and the API rejects the config outright without one.
+        # The token store persists the provider's access and refresh tokens so
+        # they can be retrieved later, and Container Apps only injects
+        # X-MS-TOKEN-AAD-ACCESS-TOKEN when it is on. On-behalf-of has nothing to
+        # exchange without that header, so the store follows the OBO flag.
         #
-        # Nothing here needs those tokens. EasyAuthCustomerAccessor reads the
-        # X-MS-CLIENT-PRINCIPAL headers, which the platform injects on every
-        # authenticated request whether or not the store exists, and the
-        # application deliberately never calls Foundry as the user -- see the
-        # note at the top of this file. Sign-in and the session cookie work
-        # exactly the same with this disabled.
-        tokenStore = {
-          enabled = false
-        }
+        # It stays off otherwise. Enabling it on Container Apps requires a
+        # storage account and a SAS URL setting, and the API rejects the config
+        # outright without one -- a real cost for no benefit, because
+        # EasyAuthCustomerAccessor reads only the X-MS-CLIENT-PRINCIPAL headers
+        # and those are injected on every authenticated request whether or not
+        # the store exists. Sign-in and the session cookie are unaffected.
+        tokenStore = merge(
+          { enabled = local.obo_enabled },
+          local.obo_enabled ? {
+            azureBlobStorage = {
+              sasUrlSettingName = local.token_store_secret_name
+            }
+          } : {},
+        )
       }
     }
   }

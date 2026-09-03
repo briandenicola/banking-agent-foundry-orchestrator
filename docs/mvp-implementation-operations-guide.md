@@ -615,8 +615,8 @@ still supports this.
    Easy Auth uses the hybrid flow and requests `response_type=id_token`. Without
    this the redirect to Entra succeeds and the callback fails with
    `AADSTS700054: response_type 'id_token' is not enabled for the application`,
-   which surfaces to the user as a bare `401` from the Web UI. Leave access
-   tokens off; nothing here calls a downstream API as the user.
+   which surfaces to the user as a bare `401` from the Web UI. Access tokens are
+   only needed with `enable_obo`; see the on-behalf-of section below.
 3. Create a client secret on that registration.
 4. Add these to `.env`, which is gitignored and already loaded by every `task`
    command:
@@ -640,6 +640,66 @@ still supports this.
 
 5. Run `task app:apply`. `apps/webui-auth.tf` creates the `authConfigs/current`
    child resource and the Web UI starts redirecting anonymous visitors to Entra.
+
+#### Calling the orchestrator as the signed-in user (on-behalf-of)
+
+With sign-in working, `enable_obo` makes the Web UI exchange the user's token for
+one addressed to the orchestrator, so the orchestrator can *verify* which
+customer a request is for rather than take the Web UI's word for it. It is off by
+default and every deployment without it behaves exactly as before.
+
+This needs a **second** app registration. The existing one is the *client* — the
+Web UI, which users sign in to. The new one is the *resource* — the orchestrator
+API, which the exchanged token is addressed to. One registration cannot be both,
+because OBO is by definition a swap between two audiences.
+
+1. Create a second app registration in the same sign-in tenant. It needs no
+   redirect URI; nothing signs in to it.
+2. Set its identifier URI to `api://<orchestrator-app-id>` and expose a scope
+   named `user_impersonation` on it.
+3. Pre-authorize the Web UI's client ID for that scope, so the exchange needs no
+   per-user consent prompt.
+4. Verify all three landed:
+
+   ```bash
+   az ad app show --id <orchestrator-app-id> \
+     --query "{uris:identifierUris, scopes:api.oauth2PermissionScopes[].value, preauth:api.preAuthorizedApplications[].appId}" -o json
+   ```
+
+   `preauth` must contain the value of `TF_VAR_webui_auth_client_id`.
+5. Add to `.env`:
+
+   ```bash
+   TF_VAR_enable_obo=true
+   TF_VAR_obo_app_id=<orchestrator application (client) id>
+   ```
+
+6. Run `task app:apply`.
+
+`enable_obo` also switches on the Easy Auth **token store**, because Container
+Apps only injects `X-MS-TOKEN-AAD-ACCESS-TOKEN` when the store is enabled and
+there is nothing to exchange without that header. The store is backed by blob
+storage and configured with a SAS URL, so the apply provisions a storage account
+(`apps/webui-obo.tf`). That SAS, and the client secret the exchange reuses, are
+both keys at rest; [ADR 0005](decisions/0005-on-behalf-of-client-secret.md)
+records why they are accepted and when they should go.
+
+Three things fail the plan rather than the deployment:
+
+- `enable_obo` with `enable_service_auth` — both configure the same JWT bearer
+  scheme with different issuers and audiences, so one set of callers would be
+  rejected whichever won. The orchestrator refuses to start in this combination
+  too.
+- `enable_obo` without `webui_auth_client_id` — no sign-in means no user token to
+  exchange.
+- `enable_obo` without `obo_app_id` — no audience to exchange the token for.
+
+**What it covers.** The interactive path only. The recovery worker resumes
+workflows in the background long after any user token has expired, so it keeps
+asserting the customer identifier recorded on the workflow. OBO also stops at the
+orchestrator: Foundry calls still use the orchestrator's managed identity with the
+customer's object ID asserted as a memory scope, because Foundry's data plane
+authorises on Azure RBAC and a bank's customers are not principals in its tenant.
 
 #### Signing in users from a different tenant
 

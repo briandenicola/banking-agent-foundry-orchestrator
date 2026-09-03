@@ -129,6 +129,63 @@ if (serviceAuthEnabled)
         });
 }
 
+// On-behalf-of authentication for the interactive path.
+//
+// Distinct from service authentication above, and deliberately so. Service auth
+// proves that *the Web UI* is calling; OBO proves *which customer* it is calling
+// for. They also fail for different reasons: service auth needs an api://
+// identifier URI in the deployment's own tenant, which some tenants deny (issue
+// #30), whereas OBO uses the Web UI's own credential and so can be pointed at a
+// tenant the operator controls.
+//
+// This covers the interactive path only. Workflows resume through the recovery
+// worker long after any user token has expired, so the background path stays on
+// the managed identity and cannot be secured this way.
+var oboEnabled = builder.Configuration.GetValue<bool?>("OBO_ENABLED") ?? false;
+var oboTenantId = builder.Configuration["OBO_TENANT_ID"];
+var oboAppId = builder.Configuration["OBO_APP_ID"];
+
+if (oboEnabled && serviceAuthEnabled)
+{
+    throw new InvalidOperationException(
+        "OBO_ENABLED and SERVICE_AUTH_ENABLED cannot both be true. They register different "
+        + "issuers and audiences on the same bearer scheme, so enabling both would leave which "
+        + "token is accepted dependent on registration order.");
+}
+
+if (oboEnabled)
+{
+    ArgumentException.ThrowIfNullOrWhiteSpace(oboTenantId, "OBO_TENANT_ID");
+    ArgumentException.ThrowIfNullOrWhiteSpace(oboAppId, "OBO_APP_ID");
+
+    var oboIssuer = $"https://login.microsoftonline.com/{oboTenantId}/v2.0";
+    var oboAudience = $"api://{oboAppId}";
+
+    builder.Services
+        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.Authority = oboIssuer;
+            options.Audience = oboAudience;
+            // Keep the raw claim names. The customer guard compares against
+            // "oid", and inbound claim mapping would rename it to the long
+            // WS-Federation URI and silently break that comparison.
+            options.MapInboundClaims = false;
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = oboIssuer,
+                ValidateAudience = true,
+                // Both forms are accepted: which one appears depends on how the
+                // client requested the scope.
+                ValidAudiences = [oboAudience, oboAppId!],
+                ValidateLifetime = true,
+                NameClaimType = "name",
+                ClockSkew = TimeSpan.FromMinutes(1)
+            };
+        });
+}
+
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("WorkflowInvoke", policy =>
@@ -136,6 +193,14 @@ builder.Services.AddAuthorization(options =>
         if (serviceAuthEnabled)
         {
             policy.RequireRole("Workflow.Invoke");
+        }
+        else if (oboEnabled)
+        {
+            // A delegated token carries no application role, so requiring one
+            // would reject every real customer. The identity itself is the
+            // credential here, and CustomerAssertionGuard checks it names the
+            // customer the request claims to act for.
+            policy.RequireAuthenticatedUser();
         }
         else
         {
@@ -149,6 +214,11 @@ builder.Services.AddAuthorization(options =>
 // IWorkflowService is Scoped because it depends on scoped BankingAgentDbContext
 // via the repository chain.
 // -----------------------------------------------------------------------
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<ICustomerAssertionGuard>(sp => oboEnabled
+    ? new CustomerAssertionGuard(sp.GetRequiredService<IHttpContextAccessor>(), enabled: true)
+    : new DisabledCustomerAssertionGuard());
+
 builder.Services.AddBankingAgentProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
