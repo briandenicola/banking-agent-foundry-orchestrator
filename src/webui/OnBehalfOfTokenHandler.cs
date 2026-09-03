@@ -43,10 +43,18 @@ public sealed class OnBehalfOfTokenHandler(
             // A request sent without the exchanged token would be refused by the
             // orchestrator as a plain 401, which looks like a sign-in problem
             // and sends anyone debugging it towards the wrong half of the system.
+            //
+            // Two things produce this, and the second is the likelier one because
+            // sign-in keeps working while it is wrong: the token store is off, or
+            // the session predates the login parameters that request an access
+            // token. A session established before those were configured carries
+            // no access token and never will, so signing out and back in is what
+            // fixes it.
             throw new InvalidOperationException(
                 $"On-behalf-of is enabled but the request carried no {AccessTokenHeader} header. "
-                + "Easy Auth only injects it when the token store is enabled, so check "
-                + "login.tokenStore on the Web UI's auth configuration.");
+                + "Check that login.tokenStore is enabled on the Web UI's auth configuration and that "
+                + "loginParameters request the Web UI's own api:// scope; then sign out and back in, "
+                + "because a session established before either change holds no access token.");
         }
 
         AuthenticationResult result;

@@ -56,6 +56,27 @@ Three properties make this narrower than it sounds:
 3. **It is off unless a deployment asks for it.** With `enable_obo = false` the
    secret is used only by Easy Auth, exactly as before this ADR.
 
+## Alternative rejected: request the orchestrator's scope at sign-in
+
+Easy Auth can be told to request any scope at login. Pointing `loginParameters`
+straight at `api://<orchestrator>/user_impersonation` would put an
+orchestrator-audience token in the token store, and the Web UI could forward it
+verbatim. No exchange, no MSAL, no confidential-client call — the client secret
+would go back to being Easy Auth's business alone.
+
+It was rejected because it is not on-behalf-of, and the difference is the point
+of the feature. Forwarding hands the browser's own token through unchanged: the
+Web UI becomes a pipe rather than a party to the transaction, and there is no
+step at which the middle tier authenticates itself. The exchange is what makes
+the identity chain demonstrable — the orchestrator's token was issued *to the
+Web UI, for this user*, and Entra can say so.
+
+The cost of doing it properly is one more piece of configuration: the Web UI has
+to expose an API of its own (`api://<webui-client-id>/access_as_user`) and
+request that scope at sign-in, because OBO requires an assertion whose audience
+is the middle tier and Entra will not issue an access token for an application
+that exposes no scope.
+
 ## Consequences
 
 **A second key at rest appears with the feature.** Enabling OBO also enables the

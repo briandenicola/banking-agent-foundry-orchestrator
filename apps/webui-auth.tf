@@ -78,6 +78,29 @@ resource "azapi_resource" "webui_auth" {
           validation = {
             allowedAudiences = [var.webui_auth_client_id]
           }
+
+          # Without this, Easy Auth requests `response_type=id_token` and stores
+          # no access token at all, so X-MS-TOKEN-AAD-ACCESS-TOKEN is absent even
+          # with the token store enabled.
+          #
+          # The requested scope is the Web UI's *own* API, not the
+          # orchestrator's. That is what makes this a real on-behalf-of flow: the
+          # exchange requires an assertion whose audience is the middle tier, and
+          # Entra will not issue one for an application that exposes no API.
+          # Asking Easy Auth for the orchestrator scope directly would skip the
+          # exchange entirely and hand the browser's token straight through.
+          login = merge(
+            {},
+            local.obo_enabled ? {
+              loginParameters = [
+                # The hybrid flow: the id_token arrives on the redirect and the
+                # code is redeemed server-side for the access and refresh tokens
+                # that land in the token store.
+                "response_type=code id_token",
+                "scope=openid profile offline_access ${local.webui_api_scope}",
+              ]
+            } : {},
+          )
         }
       }
 

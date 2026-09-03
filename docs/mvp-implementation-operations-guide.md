@@ -648,33 +648,52 @@ one addressed to the orchestrator, so the orchestrator can *verify* which
 customer a request is for rather than take the Web UI's word for it. It is off by
 default and every deployment without it behaves exactly as before.
 
-This needs a **second** app registration. The existing one is the *client* — the
-Web UI, which users sign in to. The new one is the *resource* — the orchestrator
-API, which the exchanged token is addressed to. One registration cannot be both,
-because OBO is by definition a swap between two audiences.
+This needs a **second** app registration, and one addition to the first. The
+existing registration is the *client* — the Web UI, which users sign in to. The
+new one is the *resource* — the orchestrator API, which the exchanged token is
+addressed to. One registration cannot be both, because OBO is by definition a
+swap between two audiences.
 
-1. Create a second app registration in the same sign-in tenant. It needs no
-   redirect URI; nothing signs in to it.
-2. Set its identifier URI to `api://<orchestrator-app-id>` and expose a scope
+The addition to the Web UI's registration is less obvious and is the step that
+is easy to miss: **the Web UI must expose an API of its own.** The exchange
+requires an assertion whose audience is the middle tier, and Entra will not
+issue an access token for an application that exposes no scope. Without it,
+sign-in still works perfectly and `X-MS-TOKEN-AAD-ACCESS-TOKEN` is simply never
+present, which surfaces as a 500 from the Web UI with no hint that the cause is
+an app registration.
+
+1. On the **Web UI** registration, set the identifier URI to
+   `api://<webui-client-id>` and expose a scope named exactly `access_as_user`.
+   Terraform builds the login scope from that name by convention.
+2. Create the **orchestrator** registration in the same sign-in tenant. It needs
+   no redirect URI; nothing signs in to it.
+3. Set its identifier URI to `api://<orchestrator-app-id>` and expose a scope
    named `user_impersonation` on it.
-3. Pre-authorize the Web UI's client ID for that scope, so the exchange needs no
+4. Pre-authorize the Web UI's client ID for that scope, so the exchange needs no
    per-user consent prompt.
-4. Verify all three landed:
+5. Verify both registrations:
 
    ```bash
    az ad app show --id <orchestrator-app-id> \
      --query "{uris:identifierUris, scopes:api.oauth2PermissionScopes[].value, preauth:api.preAuthorizedApplications[].appId}" -o json
+   az ad app show --id <webui-client-id> \
+     --query "{uris:identifierUris, scopes:api.oauth2PermissionScopes[].value}" -o json
    ```
 
-   `preauth` must contain the value of `TF_VAR_webui_auth_client_id`.
-5. Add to `.env`:
+   The orchestrator's `preauth` must contain the Web UI's client ID, and the Web
+   UI's `scopes` must contain `access_as_user`.
+6. Add to `.env`:
 
    ```bash
    TF_VAR_enable_obo=true
    TF_VAR_obo_app_id=<orchestrator application (client) id>
    ```
 
-6. Run `task app:apply`.
+7. Run `task app:apply`.
+8. **Sign out and sign back in.** Enabling OBO changes the login parameters so
+   Easy Auth requests an access token; a session established before the change
+   carries none and never will. Until you do this the Web UI returns 500 on
+   every request that reaches the orchestrator.
 
 `enable_obo` also switches on the Easy Auth **token store**, because Container
 Apps only injects `X-MS-TOKEN-AAD-ACCESS-TOKEN` when the store is enabled and
@@ -683,6 +702,13 @@ storage and configured with a SAS URL, so the apply provisions a storage account
 (`apps/webui-obo.tf`). That SAS, and the client secret the exchange reuses, are
 both keys at rest; [ADR 0005](decisions/0005-on-behalf-of-client-secret.md)
 records why they are accepted and when they should go.
+
+The token store is necessary but not sufficient: the store can only hold an
+access token if the login asked for one. `apps/webui-auth.tf` therefore also sets
+`loginParameters` to `response_type=code id_token` with the Web UI's own
+`access_as_user` scope. Both halves have to be right, and neither failure mode
+disturbs sign-in, which is why the setup steps above insist on verifying the
+registrations.
 
 Three things fail the plan rather than the deployment:
 

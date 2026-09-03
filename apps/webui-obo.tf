@@ -21,6 +21,12 @@ locals {
   token_store_secret_name    = "token-store-sas-url"
   token_store_container_name = "easyauth-tokens"
 
+  # The scope the Web UI exposes on its own registration, requested at sign-in
+  # so the token store holds an assertion the on-behalf-of exchange can use. The
+  # name is a convention rather than an input; the operations guide instructs the
+  # operator to create it with exactly this name.
+  webui_api_scope = "api://${var.webui_auth_client_id}/access_as_user"
+
   # Storage account names allow only lowercase alphanumerics, and cap at 24
   # characters.
   token_store_account_name = substr("${replace(var.app_name, "-", "")}tokens", 0, 24)
