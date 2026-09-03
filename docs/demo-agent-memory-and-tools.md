@@ -132,6 +132,114 @@ clearing memories from the page recreates the store rather than deleting rows.
 and you do not size it. What you control is the definition: which memory types are
 on, what may be retained, and for how long.
 
+## Where memory lives in this repository
+
+Follow the four questions an engineer in the audience will actually ask. Symbols
+are named rather than line numbers, because line anchors in this repository have
+drifted to unrelated code within a few releases.
+
+### 1. How is the memory store created?
+
+Not by Terraform. A Foundry memory store is a **data-plane** object, so the
+agent-deployer container creates it over the REST API.
+
+- **`MemoryAgentDefinition.store_body`** in [`deploy.py`](../src/agents/deployer/deploy.py)
+  builds the store: `kind: default`, the chat and embedding deployments, and the
+  `options` block that turns on `user_profile_enabled` and `chat_summary_enabled`
+  and sets `default_ttl_seconds`.
+- **`FoundryClient.ensure_memory_store`** does a `GET` first and only `POST`s on a
+  404, so re-running the deployer never destroys accumulated memories. Worth
+  knowing before a demonstration: **redeploying does not reset the store.** Only
+  **Clear all memories** does.
+- **`_memory_agent`** builds the definition from environment variables and returns
+  `None` when `MEMORY_STORE_NAME` is empty, so an environment without an embedding
+  deployment still deploys the four hosted agents.
+
+That last function also refuses to start when `MEMORY_USER_PROFILE_DETAILS` is
+missing. Extraction is model-driven, so shipping without a retention rule would
+mean whatever the model considered interesting — in a banking transcript, exactly
+the wrong thing.
+
+### 2. How does the agent get the memory tool?
+
+- **`MemoryAgentDefinition.tool`** returns the `memory_search_preview` entry: the
+  store name, `scope: "{{$userId}}"`, and `update_delay`.
+- **`MemoryAgentDefinition.definition`** puts that tool first and appends the rest,
+  producing the `kind: prompt` definition Foundry stores.
+- **`_memory_agent_tools`** reads `MEMORY_AGENT_TOOLS` and **rejects any `mcp`
+  entry**, with the reason in the error text. That guard exists because attaching
+  the toolbox here is what made the agent return `tool_user_error` on every call.
+- **`FoundryClient.deploy_prompt_agent`** and **`_find_matching_prompt_version`**
+  compare kind, model, instructions and tools against the existing versions and
+  skip the write when they match, so an unchanged apply does not pile up versions.
+
+The values come from Terraform: `memory_agent_tools`, `memory_user_profile_details`
+and `memory_agent_instructions` in [`apps/main.tf`](../apps/main.tf), passed as
+environment variables in [`apps/agent-deployer.tf`](../apps/agent-deployer.tf).
+
+### 3. How does the application call it?
+
+- **`ICustomerProfileClient`** in
+  [`ICustomerProfileClient.cs`](../src/application/ICustomerProfileClient.cs) is the
+  application-layer contract, with `ProfileReply` and `ProfileMemory`. The
+  interface lives in Application and the implementation in Infrastructure, so
+  nothing above the boundary knows about Foundry.
+- **`CustomerProfileClient.AskAsync`** in
+  [`CustomerProfileClient.cs`](../src/infrastructure/CustomerProfileClient.cs) posts
+  to `/openai/v1/responses` with `agent_reference`. **There is no
+  `previous_response_id`** — that omission is what makes act 2 evidence rather than
+  theatre, so it is worth pointing at directly.
+- **`CustomerProfileClient.Parse`** reads the reply text, the tool types, and the
+  memories **from the `memory_search_call` item** rather than from the model's
+  prose. This is the single most important method for the talk: it is why the list
+  on screen is the store's account of itself.
+- **`CustomerProfileClient.ClearMemoriesAsync`** deletes and recreates the store,
+  because per-item deletion is rejected by the preview API for the identifiers
+  memory search returns.
+- **`CustomerProfileEndpoints.MapCustomerProfileEndpoints`** in
+  [`CustomerProfileEndpoints.cs`](../src/api/CustomerProfileEndpoints.cs) exposes
+  the three `/api/v1/profile/...` routes and returns 503 when the agent is not
+  configured.
+- **`ProfileModel`** in [`Profile.cshtml.cs`](../src/webui/Pages/Profile.cshtml.cs)
+  forwards to those routes; its `Prompts` collection is the four acts.
+
+Notice what is *not* in this list: no retrieval code, no embedding call, no
+prompt assembly, no memory write. The client sends a message and reads a result.
+
+### 4. Where is the authentication?
+
+- **`CustomerProfileClient.AuthorizeAsync`** acquires a token for
+  `https://ai.azure.com/.default` from `DefaultAzureCredential` and sends it as a
+  bearer header. No key, and no connection string.
+- The identity is the orchestrator's user-assigned managed identity, configured by
+  `AZURE_CLIENT_ID` in [`apps/orchestrator.tf`](../apps/orchestrator.tf).
+- Its two role assignments are in [`apps/roles.tf`](../apps/roles.tf):
+  `orchestrator_agent_consumer` (**Foundry Agent Consumer**, which grants only
+  `endpoints/interact/action` — enough to invoke) and `cognitive_services_user`
+  (**Cognitive Services User**, which covers the memory-store calls behind
+  **Clear all memories**).
+
+That token is also what Foundry resolves `{{$userId}}` from, so these two files are
+where "memory is per-customer" is actually decided.
+
+### The tests worth showing
+
+If someone asks how any of this is held in place:
+
+- **`CustomerProfileClientParsingTests`** in
+  [the Infrastructure tests](../tests/BankingAgent.Infrastructure.Tests/CustomerProfileClientParsingTests.cs)
+  pins that memories are read from the tool call and not the message, and that
+  `message` is not reported as a tool.
+- **`MemoryAgentToolTests`** in
+  [`test_deploy.py`](../src/agents/deployer/test_deploy.py) pins the `mcp`
+  rejection.
+- **`MemoryStoreProvisioningTests`** pins the create-once behaviour
+  (`test_existing_store_is_not_recreated`).
+- **`MemoryAgentConfigTests`** pins that a missing or blank retention rule fails
+  the deploy, and that the scope defaults to `{{$userId}}`
+  (`test_memory_agent_defaults_to_per_user_scope`) — the per-customer isolation
+  claim, held in place by a test rather than by convention.
+
 ## Before you start
 
 Press **Clear all memories**, or `task app:demo-customer-profile -- --reset`.
