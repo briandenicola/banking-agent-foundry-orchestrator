@@ -12,6 +12,14 @@ public sealed record SignedInCustomer(string Id, string? DisplayName)
     /// <summary>Nobody is signed in, or the deployment has no authentication.</summary>
     public static readonly SignedInCustomer Anonymous = new(string.Empty, null);
 
+    /// <summary>
+    /// First name, for greeting the person by name. Null when the token
+    /// carried nothing suitable, in which case callers should greet generically
+    /// rather than fall back to the UPN: "Hello brdenico@contoso.com" reads as
+    /// a bug.
+    /// </summary>
+    public string? GivenName { get; init; }
+
     public bool IsAuthenticated => Id.Length > 0;
 }
 
@@ -70,15 +78,21 @@ public sealed class EasyAuthCustomerAccessor : ISignedInCustomerAccessor
 
             var id = headers[PrincipalIdHeader].ToString();
             var name = headers[PrincipalNameHeader].ToString();
+            var encoded = headers[PrincipalHeader].ToString();
 
             if (string.IsNullOrWhiteSpace(id))
             {
-                (id, name) = ReadEncodedPrincipal(headers[PrincipalHeader].ToString());
+                (id, name) = ReadEncodedPrincipal(encoded);
             }
 
+            // Always read the blob for the given name. The convenience header
+            // carries the UPN, which is not a name to greet somebody by.
             return string.IsNullOrWhiteSpace(id)
                 ? SignedInCustomer.Anonymous
-                : new SignedInCustomer(id.Trim(), string.IsNullOrWhiteSpace(name) ? null : name.Trim());
+                : new SignedInCustomer(id.Trim(), string.IsNullOrWhiteSpace(name) ? null : name.Trim())
+                {
+                    GivenName = ReadGivenName(encoded),
+                };
         }
     }
 
@@ -89,9 +103,82 @@ public sealed class EasyAuthCustomerAccessor : ISignedInCustomerAccessor
     /// </summary>
     internal static (string Id, string? Name) ReadEncodedPrincipal(string? encoded)
     {
-        if (string.IsNullOrWhiteSpace(encoded))
+        if (ParseClaims(encoded) is not { } claims)
         {
             return (string.Empty, null);
+        }
+
+        string id = string.Empty;
+        string? name = null;
+        foreach (var (type, value) in claims)
+        {
+            switch (type)
+            {
+                case "http://schemas.microsoft.com/identity/claims/objectidentifier":
+                case "oid":
+                    id = value;
+                    break;
+                case "preferred_username":
+                case "name":
+                    name ??= value;
+                    break;
+            }
+        }
+
+        return (id, name);
+    }
+
+    /// <summary>
+    /// A first name to greet the user by, or null when the token offers none.
+    /// Prefers the <c>given_name</c> claim and falls back to the first word of
+    /// the display name. Never falls back to the UPN, which is an address
+    /// rather than a name.
+    /// </summary>
+    internal static string? ReadGivenName(string? encoded)
+    {
+        if (ParseClaims(encoded) is not { } claims)
+        {
+            return null;
+        }
+
+        string? displayName = null;
+        foreach (var (type, value) in claims)
+        {
+            switch (type)
+            {
+                case "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname":
+                case "given_name":
+                    return Clean(value);
+                case "name":
+                    displayName ??= value;
+                    break;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(displayName) || displayName.Contains('@'))
+        {
+            return null;
+        }
+
+        return Clean(displayName.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]);
+
+        static string? Clean(string candidate)
+        {
+            var trimmed = candidate.Trim();
+            return trimmed.Length == 0 ? null : trimmed;
+        }
+    }
+
+    /// <summary>
+    /// Decodes the principal blob into its claim pairs. Malformed input yields
+    /// nothing: a request that cannot be attributed with confidence is treated
+    /// as anonymous rather than guessed at.
+    /// </summary>
+    private static List<(string Type, string Value)>? ParseClaims(string? encoded)
+    {
+        if (string.IsNullOrWhiteSpace(encoded))
+        {
+            return null;
         }
 
         JsonElement root;
@@ -102,18 +189,17 @@ public sealed class EasyAuthCustomerAccessor : ISignedInCustomerAccessor
         }
         catch (Exception exception) when (exception is FormatException or JsonException or DecoderFallbackException)
         {
-            return (string.Empty, null);
+            return null;
         }
 
         if (root.ValueKind != JsonValueKind.Object ||
             !root.TryGetProperty("claims", out var claims) ||
             claims.ValueKind != JsonValueKind.Array)
         {
-            return (string.Empty, null);
+            return null;
         }
 
-        string id = string.Empty;
-        string? name = null;
+        var parsed = new List<(string Type, string Value)>();
         foreach (var claim in claims.EnumerateArray())
         {
             if (claim.ValueKind != JsonValueKind.Object ||
@@ -125,19 +211,12 @@ public sealed class EasyAuthCustomerAccessor : ISignedInCustomerAccessor
                 continue;
             }
 
-            switch (type.GetString())
+            if (type.GetString() is { } typeText && value.GetString() is { } valueText)
             {
-                case "http://schemas.microsoft.com/identity/claims/objectidentifier":
-                case "oid":
-                    id = value.GetString() ?? string.Empty;
-                    break;
-                case "preferred_username":
-                case "name":
-                    name ??= value.GetString();
-                    break;
+                parsed.Add((typeText, valueText));
             }
         }
 
-        return (id, name);
+        return parsed;
     }
 }

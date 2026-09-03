@@ -338,3 +338,78 @@ class TestParseArgs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWebuiRequiresSignin(unittest.TestCase):
+    """The sign-in probe decides whether two checks may stand down.
+
+    It must recognise authentication, and must not mistake a broken Web UI for
+    a protected one, or the smoke run would report success while covering
+    nothing.
+    """
+
+    def _probe(self, opener):
+        with patch.object(smoke, "urlopen", opener):
+            return smoke.webui_requires_signin("https://webui.test", 5)
+
+    def test_401_means_authentication_is_enabled(self):
+        from urllib.error import HTTPError
+
+        def opener(request, timeout=None):
+            raise HTTPError("https://webui.test/", 401, "Unauthorized", {}, None)
+
+        self.assertTrue(self._probe(opener))
+
+    def test_redirect_to_entra_means_authentication_is_enabled(self):
+        class Response:
+            headers = {"Location": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        self.assertTrue(self._probe(lambda request, timeout=None: Response()))
+
+    def test_a_server_error_is_not_treated_as_authentication(self):
+        """A 500 must fail the run, not excuse it."""
+        from urllib.error import HTTPError
+
+        def opener(request, timeout=None):
+            raise HTTPError("https://webui.test/", 500, "Server Error", {}, None)
+
+        self.assertFalse(self._probe(opener))
+
+    def test_an_unreachable_webui_is_not_treated_as_authentication(self):
+        def opener(request, timeout=None):
+            raise OSError("connection refused")
+
+        self.assertFalse(self._probe(opener))
+
+    def test_a_healthy_anonymous_webui_is_not_treated_as_authentication(self):
+        class Response:
+            headers: dict[str, str] = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        self.assertFalse(self._probe(lambda request, timeout=None: Response()))
+
+
+class TestSkippedCheck(unittest.TestCase):
+    def test_a_skipped_check_is_marked_and_carries_a_reason(self):
+        """Skipped must never be indistinguishable from passed in the evidence."""
+        result = smoke.skipped_check("webui-form", "sign-in required")
+
+        self.assertTrue(result.skipped)
+        self.assertEqual("sign-in required", result.details["skipped"])
+
+    def test_a_real_check_is_not_marked_skipped(self):
+        result = smoke.run_check("something", lambda: {"ok": True})
+
+        self.assertFalse(result.skipped)
+        self.assertTrue(result.passed)

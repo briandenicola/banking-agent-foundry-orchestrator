@@ -189,16 +189,23 @@ def latest_definition(endpoint: str) -> dict[str, Any]:
 
 
 def scoped_definition(definition: dict[str, Any], scope: str) -> dict[str, Any]:
-    """The deployed definition with only the memory tool's scope replaced."""
+    """The deployed definition with only the memory tool's scope replaced.
+
+    Tools other than the memory tool are dropped. This probe is about memory
+    isolation, and carrying the rest across costs a false negative: sent inline,
+    `code_interpreter` requires a `container` field it does not need on a
+    deployed agent, and the request is rejected before the scope is ever tested.
+    """
     body = json.loads(json.dumps(definition))
     tools = body.get("tools") or []
-    replaced = False
-    for tool in tools:
-        if tool.get("type") == "memory_search_preview":
-            tool["scope"] = scope
-            replaced = True
-    if not replaced:
+    kept = [tool for tool in tools if tool.get("type") == "memory_search_preview"]
+    if not kept:
         raise ProbeError("no memory_search_preview tool found on the deployed agent")
+
+    for tool in kept:
+        tool["scope"] = scope
+
+    body["tools"] = kept
     body.pop("kind", None)
     return body
 

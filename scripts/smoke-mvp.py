@@ -56,6 +56,9 @@ class CheckResult:
     passed: bool
     duration_ms: int
     details: dict[str, Any]
+    # A check that could not run at all, as opposed to one that ran and passed.
+    # Counted separately everywhere so it can never read as evidence.
+    skipped: bool = False
 
 
 class SmokeFailure(RuntimeError):
@@ -165,6 +168,39 @@ def run_check(name: str, operation) -> CheckResult:
             duration_ms=round((time.monotonic() - started) * 1000),
             details={"error": str(error)},
         )
+
+
+def skipped_check(name: str, reason: str) -> CheckResult:
+    return CheckResult(
+        name=name,
+        passed=True,
+        duration_ms=0,
+        details={"skipped": reason},
+        skipped=True,
+    )
+
+
+def webui_requires_signin(webui_url: str, timeout: int) -> bool:
+    """Whether Easy Auth stands in front of the Web UI.
+
+    Deliberately narrow. Only an explicit 401 or a redirect to the Microsoft
+    sign-in endpoint counts, because this decides whether two checks are
+    allowed to stand down. Any other response -- including a connection error
+    or a 500 -- returns False, so a genuinely broken Web UI still fails the run
+    instead of being written off as "protected".
+    """
+
+    request = Request(webui_url.rstrip("/") + "/", method="GET")
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            location = response.headers.get("Location", "")
+            return "login.microsoftonline.com" in location
+    except HTTPError as error:
+        if error.code == 401:
+            return True
+        return "login.microsoftonline.com" in (error.headers.get("Location", "") if error.headers else "")
+    except Exception:
+        return False
 
 
 def collect_container_app_logs(
@@ -1148,6 +1184,19 @@ def main() -> int:
     orchestrator_scope = optional_setting("ORCHESTRATOR_TOKEN_SCOPE", "apps", "ORCHESTRATOR_TOKEN_SCOPE")
     orchestrator_token = os.environ.get("ORCHESTRATOR_ACCESS_TOKEN", "").strip() or None
 
+    # Easy Auth guards the Web UI, and these checks drive it anonymously. They
+    # are stood down rather than failed, because a 401 here is authentication
+    # working, not the application being broken. Nothing else is affected: the
+    # orchestrator is internal-ingress, so there is no unauthenticated route to
+    # the workflow API from here either. See issue #40.
+    signin_required = webui_requires_signin(webui_url, args.timeout)
+    signin_skip_reason = (
+        "The Web UI requires interactive sign-in, and this check drives it "
+        "anonymously. Sign-in cannot be automated here: the tenant forbids the "
+        "service principal that would be needed, which is the same constraint "
+        "behind enable_service_auth=false. Verify this path by hand in a browser."
+    )
+
     checks = [
         run_check("orchestrator-health", lambda: check_health(orchestrator_url, webui_url, args.timeout)),
         run_check("webui-readiness", lambda: check_webui_readiness(webui_url, args.timeout)),
@@ -1158,7 +1207,9 @@ def main() -> int:
                 (orchestrator_url, webui_url),
             ),
         ),
-        run_check(
+        skipped_check("webui-form", signin_skip_reason)
+        if signin_required
+        else run_check(
             "webui-form",
             lambda: check_webui(webui_url, args.timeout, args.poll_timeout),
         ),
@@ -1171,7 +1222,9 @@ def main() -> int:
                 bool(orchestrator_scope),
             ),
         ),
-        run_check(
+        skipped_check("workflow-routing-and-approval", signin_skip_reason)
+        if signin_required and orchestrator_is_internal(orchestrator_url)
+        else run_check(
             "workflow-routing-and-approval",
             lambda: (
                 check_workflows(
@@ -1199,6 +1252,7 @@ def main() -> int:
 
     evidence = {
         "status": "passed" if all(check.passed for check in checks) else "failed",
+        "skipped_checks": [check.name for check in checks if check.skipped],
         "orchestrator_url": orchestrator_url,
         "webui_url": webui_url,
         "foundry_project_endpoint": foundry_endpoint,
@@ -1213,11 +1267,18 @@ def main() -> int:
             )
         }
 
-    passed_checks = sum(1 for check in checks if check.passed)
+    skipped_checks = sum(1 for check in checks if check.skipped)
+    passed_checks = sum(1 for check in checks if check.passed and not check.skipped)
     total_checks = len(checks)
     summary_line = (
-        f"Smoke summary: {passed_checks}/{total_checks} checks passed; overall status={evidence['status']}"
+        f"Smoke summary: {passed_checks}/{total_checks} checks passed; "
+        f"overall status={evidence['status']}"
     )
+    if skipped_checks:
+        summary_line += (
+            f" ({skipped_checks} skipped because the Web UI requires sign-in; "
+            "those paths are NOT verified)"
+        )
     print(summary_line)
     rendered = json.dumps(evidence, indent=2, sort_keys=True)
     print(rendered)

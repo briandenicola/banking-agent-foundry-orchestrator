@@ -109,6 +109,13 @@ h1, h2, h3, .brand {
   color: #cbd5d6;
 }
 
+.signed-in-greeting {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #cbd5d6;
+  white-space: nowrap;
+}
+
 .environment-badge span,
 .live-indicator span {
   width: 7px;

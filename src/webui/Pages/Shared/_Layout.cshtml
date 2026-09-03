@@ -1,3 +1,4 @@
+@inject BankingAgent.WebUi.ISignedInCustomerAccessor SignedIn
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -16,6 +17,10 @@
                 <span><strong>Northstar</strong><small>Banking operations</small></span>
             </a>
             <div class="d-flex align-items-center gap-3">
+                @if (SignedIn.Current.IsAuthenticated)
+                {
+                    <span class="signed-in-greeting">Hello @(SignedIn.Current.GivenName ?? "there")</span>
+                }
                 <a class="btn btn-sm btn-outline-light" asp-page="/Profile">Customer profile agent</a>
                 <div class="environment-badge"><span></span> Secure workspace</div>
             </div>

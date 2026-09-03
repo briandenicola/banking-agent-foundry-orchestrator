@@ -110,4 +110,41 @@ public class EasyAuthCustomerAccessorTests
 
         Assert.Equal(string.Empty, id);
     }
+
+    [Fact]
+    public void Given_name_claim_is_preferred_for_the_greeting()
+    {
+        var principal = """{"claims":[{"typ":"given_name","val":"Brian"},{"typ":"name","val":"Brian Denicola"}]}""";
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(principal));
+
+        Assert.Equal("Brian", EasyAuthCustomerAccessor.ReadGivenName(encoded));
+    }
+
+    [Fact]
+    public void Display_name_falls_back_to_its_first_word()
+    {
+        var principal = """{"claims":[{"typ":"name","val":"Brian Denicola"}]}""";
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(principal));
+
+        Assert.Equal("Brian", EasyAuthCustomerAccessor.ReadGivenName(encoded));
+    }
+
+    [Theory]
+    [InlineData("""{"claims":[{"typ":"name","val":"brdenico@contoso.com"}]}""")]
+    [InlineData("""{"claims":[{"typ":"preferred_username","val":"brdenico@contoso.com"}]}""")]
+    [InlineData("""{"claims":[]}""")]
+    public void A_upn_is_never_used_as_a_greeting_name(string principal)
+    {
+        // "Hello brdenico@contoso.com" reads as a bug. Better to greet
+        // generically than to greet somebody by their email address.
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(principal));
+
+        Assert.Null(EasyAuthCustomerAccessor.ReadGivenName(encoded));
+    }
+
+    [Fact]
+    public void Malformed_principal_yields_no_greeting_name()
+    {
+        Assert.Null(EasyAuthCustomerAccessor.ReadGivenName("not-base64!!"));
+    }
 }
