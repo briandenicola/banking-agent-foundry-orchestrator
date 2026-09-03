@@ -222,3 +222,63 @@ class AllAgentsMcpTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GraphFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    """A failing graph must name the exception type in its JSON-RPC error.
+
+    A hosted agent runs in Foundry's own compute rather than in the Container
+    Apps Environment, so its logs are not in the workspace the orchestrator's
+    logs land in. When this returned a bare "Agent invocation failed." the only
+    signal a caller ever received was the -32603 code, which is what made a
+    toolbox misconfiguration take days to place. The type name crosses the wire;
+    the message deliberately does not, because Azure SDK errors carry endpoints,
+    request IDs, and occasionally token fragments, and this string is persisted
+    as audit evidence and rendered in the UI.
+    """
+
+    async def _call_with_graph_error(self, error):
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(side_effect=error)
+        with (
+            patch.object(hosted_module, "agent_name", AgentName.TRANSACTION_EXPLANATION),
+            patch.object(hosted_module, "graph", graph),
+        ):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=hosted_module.app),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": "call-err",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "transaction.explain",
+                            "arguments": {
+                                "user_message": "Why is this pending?",
+                                "trace_id": "trace-1",
+                                "workflow_id": "wf-1",
+                            },
+                        },
+                    },
+                )
+        return response.json()
+
+    async def test_the_error_type_is_reported_to_the_caller(self):
+        class ToolboxUnavailableError(RuntimeError):
+            pass
+
+        body = await self._call_with_graph_error(ToolboxUnavailableError("boom"))
+
+        self.assertEqual(-32603, body["error"]["code"])
+        self.assertIn("ToolboxUnavailableError", body["error"]["message"])
+
+    async def test_the_underlying_message_never_crosses_the_wire(self):
+        secret = "https://internal.endpoint/?sig=SECRETTOKEN"
+        body = await self._call_with_graph_error(RuntimeError(secret))
+
+        self.assertIn("RuntimeError", body["error"]["message"])
+        self.assertNotIn("SECRETTOKEN", body["error"]["message"])
+        self.assertNotIn("internal.endpoint", body["error"]["message"])

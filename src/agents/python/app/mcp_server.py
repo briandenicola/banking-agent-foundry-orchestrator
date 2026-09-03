@@ -198,8 +198,19 @@ async def handle_mcp_request(
     except asyncio.TimeoutError:
         return _error(INTERNAL_ERROR, f"Agent did not respond within {invoke_timeout}s", request_id)
     except Exception as exc:  # noqa: BLE001
+        # The exception *type* travels back to the caller because a hosted agent
+        # runs in Foundry's compute, not in this Container Apps Environment, so
+        # its logs are not in the workspace the orchestrator's own logs land in.
+        # A bare "Agent invocation failed." left the caller with nothing to act
+        # on. The type name is safe to return where the message is not: messages
+        # from Azure SDK errors carry endpoints, request IDs, and occasionally
+        # token fragments, and this string reaches the audit trail and the UI.
         logger.error("MCP tool call failed with error type %s", type(exc).__name__)
-        return _error(INTERNAL_ERROR, "Agent invocation failed.", request_id)
+        return _error(
+            INTERNAL_ERROR,
+            f"Agent invocation failed ({type(exc).__name__}).",
+            request_id,
+        )
 
     return _result(
         {
