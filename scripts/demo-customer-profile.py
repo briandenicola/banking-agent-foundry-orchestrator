@@ -49,6 +49,12 @@ MEMORY_STORE_NAME = "customer_profile_memory"
 # `POST /memory_stores/{name}:delete_scope?api-version=v1`.
 DELETE_SCOPE_API_VERSION = "v1"
 
+# Memory store operations are behind an opt-in preview flag. Without this header
+# the service answers 403 `preview_feature_required` and names the flag it wants.
+# `Azure.AI.Projects` sends it for us, so the C# client needs nothing; this
+# script talks to the REST API directly and has to send it itself.
+FOUNDRY_FEATURES_MEMORY_STORES = "MemoryStores=V1Preview"
+
 # Foundry extracts memories asynchronously after a turn. The deployment sets
 # `memory_update_delay_seconds = 0`, but extraction is still a background step,
 # so a short settle keeps the live demonstration deterministic.
@@ -365,6 +371,7 @@ def reset(endpoint: str) -> int:
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "Foundry-Features": FOUNDRY_FEATURES_MEMORY_STORES,
         },
     )
     try:

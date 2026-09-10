@@ -184,6 +184,13 @@ other people's memories. `DELETE /api/v1/profile/memories` therefore takes a
 `customerId`, validates it through `ICustomerAssertionGuard` exactly like the
 read and write paths, and returns 400 without one.
 
+Memory store operations are behind an **opt-in preview flag**. A request without
+the `Foundry-Features: MemoryStores=V1Preview` header is answered `403
+preview_feature_required`, which names the flag it wants. `Azure.AI.Projects`
+sends the header itself, so `CustomerProfileClient` needs nothing; anything
+talking to the REST API by hand has to send it, which
+`scripts/demo-customer-profile.py` now does.
+
 > **This used to be much blunter.** Per-item deletion is rejected by the preview
 > API for the identifiers memory search returns, so the original implementation
 > deleted the entire store and recreated it from its own definition — meaning
