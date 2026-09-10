@@ -1113,14 +1113,22 @@ def check_authentication_baseline(
     orchestrator_url: str,
     timeout: int,
     authentication_expected: bool,
+    webui_signin_required: bool = False,
 ) -> dict[str, Any]:
     """Record the deployment's actual authentication posture, honestly.
 
     This check exists to prove the exposure, so it must never quietly stop
     testing. With internal ingress the control is network reachability rather
     than identity, so it asserts the approval endpoint cannot be reached from
-    the public internet -- and still reports that no authentication is enforced,
-    because internal ingress is a reduction in exposure, not a fix.
+    the public internet -- and still reports that no authentication is enforced
+    on the orchestrator itself, because internal ingress is a reduction in
+    exposure, not a fix.
+
+    The residual exposure depends on whether the Web UI is signed in front of,
+    since the Web UI is the way to drive the workflow API from outside. Stating
+    it unconditionally outlived the truth once already: the report claimed the
+    Web UI was public and unauthenticated in the same run where two checks stood
+    down because it demanded sign-in.
     """
     approval_url = (
         f"{orchestrator_url}/api/v1/workflows/00000000-0000-0000-0000-000000000001/approval"
@@ -1132,10 +1140,16 @@ def check_authentication_baseline(
             "control": "internal-ingress",
             "anonymous_reachable_from_internet": False,
             "authentication_required": False,
+            "webui_signin_required": webui_signin_required,
             "residual_exposure": (
-                "The Web UI remains public and unauthenticated, and can start and "
-                "approve workflows. Internal ingress removes the public API, not the "
-                "ability to drive it. See issue #40."
+                "The Web UI requires sign-in, so driving the workflow API from "
+                "outside needs an account in the tenant. The orchestrator itself "
+                "still enforces no identity check: the control is network "
+                "reachability. See issue #40."
+                if webui_signin_required
+                else "The Web UI remains public and unauthenticated, and can start "
+                "and approve workflows. Internal ingress removes the public API, "
+                "not the ability to drive it. See issue #40."
             ),
         }
 
@@ -1241,6 +1255,7 @@ def main() -> int:
                 orchestrator_url,
                 args.timeout,
                 bool(orchestrator_scope),
+                signin_required,
             ),
         ),
         skipped_check("workflow-routing-and-approval", signin_skip_reason)

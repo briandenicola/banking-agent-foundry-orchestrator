@@ -215,6 +215,22 @@ class AuthenticationBaselineTests(unittest.TestCase):
         self.assertFalse(details["authentication_required"])
         self.assertIn("Web UI remains public", details["residual_exposure"])
 
+    def test_a_signed_in_webui_is_not_reported_as_public(self):
+        """The exposure text must follow the deployment, not a past one.
+
+        The report claimed the Web UI was public and unauthenticated in the
+        same run where two checks stood down because it demanded sign-in.
+        """
+
+        with patch.object(smoke, "urlopen", _unreachable):
+            details = smoke.check_authentication_baseline(INTERNAL_URL, 5, False, True)
+
+        self.assertTrue(details["webui_signin_required"])
+        self.assertNotIn("remains public", details["residual_exposure"])
+        self.assertIn("requires sign-in", details["residual_exposure"])
+        # The orchestrator still enforces no identity check of its own.
+        self.assertFalse(details["authentication_required"])
+
     def test_internal_ingress_fails_if_the_approval_endpoint_answers(self):
         with patch.object(smoke, "urlopen", lambda *a, **k: _Response(200)):
             with self.assertRaises(SmokeFailure):
