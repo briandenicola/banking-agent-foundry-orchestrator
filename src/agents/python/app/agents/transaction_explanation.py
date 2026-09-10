@@ -26,7 +26,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from app.contracts import CONTRACT_VERSION, AgentName, AgentRequest, AgentResult
-from app.model import structured_step, tool_findings
+from app.model import apply_contact_channel_note, structured_step, tool_findings
 
 AGENT = AgentName.TRANSACTION_EXPLANATION
 
@@ -218,7 +218,7 @@ def _result(
     model nor a later prompt edit can make it request an approval gate.
     """
     used_fallback = bool(state.get("used_fallback")) or fallback
-    return AgentResult(
+    result = AgentResult(
         agent=AGENT,
         trace_id=state["request"].trace_id,
         contract_version=CONTRACT_VERSION,
@@ -231,6 +231,10 @@ def _result(
         next_step="respond_to_user",
         evidence=narrative.evidence,
     )
+
+    # A remembered contact preference the deployment cannot service still has
+    # to be answered when no model ran to answer it.
+    return apply_contact_channel_note(result, state["request"])
 
 
 def _evidence(

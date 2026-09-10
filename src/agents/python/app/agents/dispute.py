@@ -23,7 +23,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from app.contracts import CONTRACT_VERSION, AgentName, AgentRequest, AgentResult
-from app.model import structured_step
+from app.model import apply_contact_channel_note, structured_step
 
 AGENT = AgentName.DISPUTE_PLANNING
 
@@ -226,7 +226,7 @@ def _result(
     gate must not depend on model output.
     """
     used_fallback = bool(state.get("used_fallback")) or fallback
-    return AgentResult(
+    result = AgentResult(
         agent=AGENT,
         trace_id=state["request"].trace_id,
         contract_version=CONTRACT_VERSION,
@@ -239,6 +239,10 @@ def _result(
         next_step=next_step,
         evidence=narrative.evidence,
     )
+
+    # A remembered contact preference the deployment cannot service still has
+    # to be answered when no model ran to answer it.
+    return apply_contact_channel_note(result, state["request"])
 
 
 async def request_more_info(state: DisputeState) -> dict:

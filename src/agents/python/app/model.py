@@ -208,7 +208,7 @@ async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> 
                 "No model endpoint is configured and deterministic fallback "
                 "is disabled (ALLOW_FALLBACK=false)."
             )
-        return _apply_contact_channel_note(_local_result(agent, request), request)
+        return apply_contact_channel_note(_local_result(agent, request), request)
 
     structured_model = model.with_structured_output(AgentResult)
     context = request.specialist_context
@@ -236,7 +236,7 @@ async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> 
     )
 
 
-def _apply_contact_channel_note(result: AgentResult, request: AgentRequest) -> AgentResult:
+def apply_contact_channel_note(result: AgentResult, request: AgentRequest) -> AgentResult:
     """Keep the honesty when there is no model to be honest for us.
 
     Fallback answers are canned, so the guidance written for the model has
@@ -244,7 +244,14 @@ def _apply_contact_channel_note(result: AgentResult, request: AgentRequest) -> A
     deterministic path is what runs during an outage, and a customer whose
     preference is unserviceable should still be told so rather than left to
     assume their stored choice was honoured.
+
+    Only fallback answers are touched. When a model ran it was given the
+    guidance as an instruction and has already worded the refusal itself;
+    appending a canned sentence would say the same thing twice, worse.
     """
+    if result.execution_mode != "fallback":
+        return result
+
     context = request.specialist_context
     if not isinstance(context, dict):
         return result

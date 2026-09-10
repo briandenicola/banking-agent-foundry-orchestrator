@@ -388,10 +388,16 @@ Four outcomes:
 
 Resolution lives in C# rather than in the agents so that identity and scoping
 stay where they already are, four specialists cannot disagree about what the
-bank can do, and — most importantly — the behaviour survives fallback mode. When
-no model is configured, `_apply_contact_channel_note` appends the same plain
-statement to the canned answer. The deterministic path is what runs during an
-outage, which is exactly when a silently dropped preference matters most.
+bank can do, and — most importantly — the behaviour survives fallback mode.
+
+Each specialist runs as a graph whose terminal node assembles its own
+`AgentResult`, so `apply_contact_channel_note` is applied there, at the point the
+contract is built. It touches fallback answers only: when a model ran it was
+given the guidance as an instruction and has already worded the refusal, and a
+canned sentence on top would say the same thing twice. The deterministic path is
+what runs during an outage, which is exactly when a silently dropped preference
+matters most, so `test_contact_channel.py` exercises the graphs themselves with
+no model configured rather than the wrapper the graphs do not use.
 
 - **It changes wording and the audit trail, nothing else.** An unmet preference
   raises `workflow.contact_channel_unavailable` so an operator can see how often

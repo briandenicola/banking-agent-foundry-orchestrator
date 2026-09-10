@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.contracts import AgentName, AgentRequest
-from app.model import contact_channel_directive, reason
+from app.model import apply_contact_channel_note, contact_channel_directive, reason
 
 
 class ContactChannelDirectiveTests(unittest.TestCase):
@@ -70,6 +70,93 @@ class ContactChannelPromptTests(unittest.IsolatedAsyncioTestCase):
         user_message = captured["messages"][1][1]
         self.assertIn("Contact channel requirement", user_message)
         self.assertIn("Do not promise SMS.", user_message)
+
+
+class ContactChannelGraphFallbackTests(unittest.IsolatedAsyncioTestCase):
+    """The path that actually runs in production.
+
+    Specialists execute as graphs whose terminal nodes assemble their own
+    ``AgentResult``; they never call :func:`reason`. A fix applied only to
+    ``reason`` would be dead code, so this exercises the graph itself with no
+    model configured.
+    """
+
+    async def test_a_specialist_graph_with_no_model_still_refuses_the_channel(self):
+        from app.agents import get_agent_graph
+
+        request = AgentRequest(
+            message="Why is this charge pending?",
+            trace_id="t-1",
+            context={
+                "contact_channel": "sms",
+                "contact_channel_status": "known_unavailable",
+                "contact_channel_guidance": "Do not promise SMS.",
+            },
+        )
+
+        with patch("app.model._model", return_value=None), patch(
+            "app.model._fallback_allowed", return_value=True
+        ):
+            graph = get_agent_graph(AgentName.TRANSACTION_EXPLANATION)
+            state = await graph.ainvoke({"request": request, "result": None})
+
+        result = state["result"]
+        self.assertEqual(result.execution_mode, "fallback")
+        self.assertIn("cannot send", result.summary)
+
+    async def test_a_dispute_graph_with_no_model_still_refuses_the_channel(self):
+        from app.agents import get_agent_graph
+
+        request = AgentRequest(
+            message="I want to dispute a charge of 40 dollars at Acme on 3 May.",
+            trace_id="t-2",
+            context={
+                "contact_channel": "sms",
+                "contact_channel_status": "known_unavailable",
+                "contact_channel_guidance": "Do not promise SMS.",
+            },
+        )
+
+        with patch("app.model._model", return_value=None), patch(
+            "app.model._fallback_allowed", return_value=True
+        ):
+            graph = get_agent_graph(AgentName.DISPUTE_PLANNING)
+            state = await graph.ainvoke({"request": request, "result": None})
+
+        result = state["result"]
+        self.assertIn("cannot send", result.summary)
+        # The refusal is wording only. A dispute still demands a human.
+        self.assertTrue(result.requires_approval)
+
+    async def test_a_model_backed_answer_is_not_given_a_second_canned_refusal(self):
+        from app.contracts import CONTRACT_VERSION, AgentResult
+
+        request = AgentRequest(
+            message="Why is this charge pending?",
+            trace_id="t-1",
+            context={
+                "contact_channel": "sms",
+                "contact_channel_status": "known_unavailable",
+                "contact_channel_guidance": "Do not promise SMS.",
+            },
+        )
+        model_answer = AgentResult(
+            agent=AgentName.TRANSACTION_EXPLANATION,
+            trace_id="t-1",
+            contract_version=CONTRACT_VERSION,
+            execution_mode="model",
+            intent="transaction_explanation",
+            summary="I cannot text you, so updates will appear here.",
+            risk_level="low",
+            requires_approval=False,
+            recommended_action="Explain it.",
+            next_step="respond_to_user",
+            evidence=[],
+        )
+
+        unchanged = apply_contact_channel_note(model_answer, request)
+
+        self.assertEqual(unchanged.summary, model_answer.summary)
 
 
 class ContactChannelFallbackTests(unittest.IsolatedAsyncioTestCase):
