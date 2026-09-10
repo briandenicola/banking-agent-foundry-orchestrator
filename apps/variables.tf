@@ -33,6 +33,12 @@ variable "enable_agent_memory" {
   default     = false
 }
 
+variable "contact_channels" {
+  description = "JSON array overriding which contact channels this deployment can service, for example [{\"channel\":\"sms\",\"status\":\"Supported\",\"aliases\":[\"sms\",\"text message\"]}]. Empty keeps the conservative built-in list. This is deployment fact rather than something an agent may infer, because a model asked whether the bank can send an SMS will say yes."
+  type        = string
+  default     = ""
+}
+
 variable "memory_update_delay_seconds" {
   description = "How long Foundry waits after a turn before extracting memories from it. Zero makes a preference recallable on the next turn, which is what a demonstration needs and what makes the behaviour observable. Raise it to batch extraction if turn volume ever justifies the delay."
   type        = number

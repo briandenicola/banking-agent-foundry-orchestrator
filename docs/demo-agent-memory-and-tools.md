@@ -344,6 +344,66 @@ plan and the wording of the answer.
   `requires_approval`, never remove it, so even a poisoned memory cannot talk
   the workflow past a human approval gate.
 
+### Recall is not enough: a preference has to be answerable
+
+Passing a remembered preference to an agent as bare text is worse than not
+recalling it. An agent that reads "only contact me by SMS" has no reason to
+doubt it, so it agrees — and the service has no way to send an SMS. The failure
+is not a bad answer; it is a promise to a customer that nothing will keep.
+
+`ContactChannelPolicy` closes that gap by resolving the preference in C#, before
+the specialist is called, and putting the answer in the specialist `context` as
+`contact_channel`, `contact_channel_status`, and `contact_channel_guidance`.
+
+Two things are kept deliberately apart, because they have different standards of
+correctness:
+
+| | What it is | How it is decided | If it is wrong |
+| --- | --- | --- | --- |
+| Recognising that a preference names a channel | Language | A maintained alias list, matched whole-word | The preference reads as "none stated" and the workflow behaves exactly as it does today |
+| Deciding whether the channel can be serviced | Deployment fact | A configuration lookup, never a model inference | A customer is promised something that will not happen |
+
+Only the second must be deterministic. A model asked whether the bank can send
+an SMS will confidently say yes, which is precisely the failure being removed,
+so capability is never inferred. The first is a heuristic and will never be
+complete — that is accepted, because its failure mode is chosen: an unrecognised
+preference degrades to today's behaviour, which makes no promise. Matching is
+whole-word for the same reason: "post" sits inside "postal code" and "text"
+inside "context", and substring matching would refuse a customer something they
+never asked for.
+
+Four outcomes:
+
+- **`supported`** — the deployment can use it. Confirm it briefly.
+- **`known_unavailable`** — a channel a bank would ordinarily offer that this
+  deployment has not wired up. The honest answer is "not yet", and the agent is
+  told to say what happens instead.
+- **`unsupported`** — a channel no bank offers. The customer said something
+  specific, so it is answered rather than ignored. One light,
+  self-deprecating clause about the assistant's own limits is permitted, never
+  at the customer's expense — and it is **suppressed on dispute and
+  suspicious-activity flows**, where a person out of pocket or frightened is
+  owed a plain answer.
+- **`none_stated`** — nothing is added to the context at all.
+
+Resolution lives in C# rather than in the agents so that identity and scoping
+stay where they already are, four specialists cannot disagree about what the
+bank can do, and — most importantly — the behaviour survives fallback mode. When
+no model is configured, `_apply_contact_channel_note` appends the same plain
+statement to the canned answer. The deterministic path is what runs during an
+outage, which is exactly when a silently dropped preference matters most.
+
+- **It changes wording and the audit trail, nothing else.** An unmet preference
+  raises `workflow.contact_channel_unavailable` so an operator can see how often
+  it happens and which channel people keep asking for. It never alters
+  `requires_approval` or which agent handles the request;
+  `ContactChannelWorkflowTests` pins both directions of that invariant.
+- **The deployment declares its own capability.** `CONTACT_CHANNELS` (Terraform
+  `contact_channels`) takes a JSON array of `{channel, status, aliases}`. Bad
+  configuration logs a warning and falls back to the conservative built-in list
+  rather than failing the orchestrator or making an unavailable channel look
+  available.
+
 ## Tool calling
 
 The hosted LangGraph agents are reached as MCP tools over ordinary JSON-RPC 2.0
@@ -426,6 +486,7 @@ never remove it.
 | `MEMORY_AGENT_NAME`, `MEMORY_STORE_NAME` | `apps/orchestrator.tf` | What the profile page needs to reach the agent. Empty when memory is disabled, which makes the page report "not configured" rather than fail obscurely |
 | `user_profile_enabled`, `chat_summary_enabled` | [`deploy.py`](../src/agents/deployer/deploy.py) | Which memory types the store keeps. Both on; there is no procedural memory option |
 | `default_ttl_seconds` | `deploy.py` | 30 days |
+| `contact_channels` / `CONTACT_CHANNELS` | `apps/variables.tf`, `apps/orchestrator.tf` | Which contact channels this deployment can service. Empty keeps the conservative built-in list. Deployment fact, never inferred by a model |
 | `MEMORY_AGENT_RAI_POLICY` | Read by [`deploy.py`](../src/agents/deployer/deploy.py); not set by Terraform | Unset. See [Guardrails](#guardrails) |
 
 ## The tests that hold this in place

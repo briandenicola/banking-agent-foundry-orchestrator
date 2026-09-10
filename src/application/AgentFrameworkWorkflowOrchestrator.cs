@@ -26,16 +26,26 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
     /// </summary>
     private readonly ICustomerProfileClient? _customerProfile;
 
+    /// <summary>
+    /// What the deployment can do about a remembered contact channel. Never
+    /// null: an absent configuration falls back to a conservative default
+    /// rather than disabling the check, because the failure this exists to
+    /// prevent is promising a channel that does not work.
+    /// </summary>
+    private readonly ContactChannelPolicy _contactChannels;
+
     public AgentFrameworkWorkflowOrchestrator(
         IMcpClient mcpClient,
         ILogger<AgentFrameworkWorkflowOrchestrator> logger,
         Func<string, string, Guid, string, IDictionary<string, object?>, DemoScenarioFault, CancellationToken, Task<McpToolResult>>? invokeAgentAsync = null,
-        ICustomerProfileClient? customerProfile = null)
+        ICustomerProfileClient? customerProfile = null,
+        ContactChannelPolicy? contactChannels = null)
     {
         _mcpClient = mcpClient;
         _logger = logger;
         _invokeAgentAsync = invokeAgentAsync ?? DefaultInvokeAgentAsync;
         _customerProfile = customerProfile;
+        _contactChannels = contactChannels ?? ContactChannelPolicy.Default;
     }
 
     public async Task<AgentFrameworkWorkflowExecution> ExecuteAsync(
@@ -410,10 +420,25 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             }
         });
 
+        var contactChannel = _contactChannels.Assess(
+            context.RememberedPreferences,
+            SuppressLightTone(context.Route.Agent));
+
         if (context.RememberedPreferences.Count > 0
             && specialistParameters["context"] is Dictionary<string, object?> specialistContext)
         {
             specialistContext["customer_preferences"] = context.RememberedPreferences;
+
+            if (contactChannel.HasGuidance)
+            {
+                // The preference text already travels above. This says what to
+                // do about it, which is the part the agents were missing: a
+                // preference arriving as bare text left them free to promise a
+                // channel nothing can deliver.
+                specialistContext["contact_channel"] = contactChannel.Channel;
+                specialistContext["contact_channel_status"] = contactChannel.Status.ToWireValue();
+                specialistContext["contact_channel_guidance"] = contactChannel.Guidance;
+            }
         }
 
         try
@@ -432,7 +457,8 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
                 {
                     Failed = true,
                     ErrorMessage = error,
-                    SpecialistResult = specialistResult
+                    SpecialistResult = specialistResult,
+                    ContactChannel = contactChannel
                 };
             }
 
@@ -442,7 +468,11 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
                 SpecialistDecision = specialistDecision,
                 Intent = specialistDecision.Intent,
                 Summary = specialistDecision.Summary,
-                RequiresApproval = specialistDecision.RequiresApproval || context.RequiresApproval
+                // Deliberately not touched by the contact channel. What the
+                // service can and cannot deliver is a matter of wording; it is
+                // not a reason to gate, or to stop gating, on a human.
+                RequiresApproval = specialistDecision.RequiresApproval || context.RequiresApproval,
+                ContactChannel = contactChannel
             };
         }
         catch (Exception ex) when (ex is HttpRequestException or TimeoutException)
@@ -451,7 +481,8 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
             return context with
             {
                 Failed = true,
-                ErrorMessage = "Specialist invocation failed."
+                ErrorMessage = "Specialist invocation failed.",
+                ContactChannel = contactChannel
             };
         }
     }
@@ -545,6 +576,15 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
 
         return Task.FromResult<AgentFrameworkWorkflowExecution?>(null);
     }
+
+    /// <summary>
+    /// Whether to drop the lighter wording for an unserviceable channel. A
+    /// customer raising a dispute or reporting suspected fraud is owed a plain
+    /// answer; wit about the assistant's own limits reads as flippancy when the
+    /// person is out of pocket or frightened.
+    /// </summary>
+    private static bool SuppressLightTone(string agentName) =>
+        agentName is "dispute-planning" or "suspicious-activity";
 
     private static string? ResolveSpecialistToolName(string agentName) => agentName switch
     {
@@ -704,7 +744,13 @@ internal sealed record WorkflowExecutionContext(
     /// stamped with the time of the recall itself rather than the time the
     /// events were later assembled, which would sort it after the planner.
     /// </summary>
-    DateTimeOffset? ProfileRecalledAt = null)
+    DateTimeOffset? ProfileRecalledAt = null,
+    /// <summary>
+    /// What the deployment can do about the contact channel those preferences
+    /// name, if they name one. Resolved at the specialist step, because the
+    /// wording depends on the route and the route is not known any earlier.
+    /// </summary>
+    ContactChannelAssessment? ContactChannel = null)
 {
     public IReadOnlyList<string> RememberedPreferences => RememberedPreferencesOrNull ?? [];
 }

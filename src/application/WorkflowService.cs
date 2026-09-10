@@ -62,7 +62,8 @@ public sealed class WorkflowService : IWorkflowService
         IWorkflowActionRepository workflowActionRepository,
         IDemoScenarioPolicy? demoScenarioPolicy = null,
         ILoggerFactory? loggerFactory = null,
-        ICustomerProfileClient? customerProfile = null)
+        ICustomerProfileClient? customerProfile = null,
+        ContactChannelPolicy? contactChannels = null)
     {
         _mcpClient = mcpClient;
         _logger = logger;
@@ -75,7 +76,8 @@ public sealed class WorkflowService : IWorkflowService
                 ?? NullLogger<AgentFrameworkWorkflowOrchestrator>.Instance,
             (toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken) =>
                 InvokeAgentAsync(toolName, agentName, workflowId, traceId, parameters, demoFault, cancellationToken),
-            customerProfile);
+            customerProfile,
+            contactChannels);
     }
 
     public Task<WorkflowState> StartAsync(
@@ -307,6 +309,8 @@ public sealed class WorkflowService : IWorkflowService
                 cancellationToken);
         }
 
+        var contactChannelEvents = CreateContactChannelEvents(execution.Context);
+
         var routeAuditEvents = CreateRouteAuditEvents(
             plannerDecision,
             policyRoute,
@@ -319,7 +323,10 @@ public sealed class WorkflowService : IWorkflowService
             "system",
             $"Approval required: {route.RequiresApproval}");
 
-        current = await AdvanceAndPersistAsync(current, [.. routeAuditEvents, routeEvent], cancellationToken);
+        current = await AdvanceAndPersistAsync(
+            current,
+            [.. routeAuditEvents, routeEvent, .. contactChannelEvents],
+            cancellationToken);
 
         var specialistResult = execution.Context.SpecialistResult;
         if (specialistResult is null)
@@ -812,6 +819,44 @@ public sealed class WorkflowService : IWorkflowService
                 context.ProfileRecalledAt ?? DateTimeOffset.UtcNow,
                 "customer-profile",
                 string.Join(" · ", preferences))
+        ];
+    }
+
+    /// <summary>
+    /// Records that a remembered contact preference could not be honoured.
+    ///
+    /// Saying it in the answer is not enough. The customer asked for something
+    /// the service cannot do, and that belongs in the audit trail and the
+    /// timeline -- both so an operator can see how often it happens and which
+    /// channel people keep asking for, and so there is evidence that the
+    /// request was recognised rather than ignored.
+    ///
+    /// A channel that can be serviced is not an event: nothing went unmet.
+    /// </summary>
+    private static WorkflowEvent[] CreateContactChannelEvents(WorkflowExecutionContext context)
+    {
+        var assessment = context.ContactChannel;
+        if (assessment is null
+            || assessment.Status is ContactChannelStatus.NoneStated or ContactChannelStatus.Supported)
+        {
+            return [];
+        }
+
+        var channel = assessment.Channel ?? "an unsupported channel";
+        var detail = assessment.Status == ContactChannelStatus.KnownUnavailable
+            ? $"The customer asked to be contacted by {channel}, which this service does not send. "
+              + "Updates stay in the workflow instead."
+            : "The customer asked to be contacted by a channel this service does not offer. "
+              + "Updates stay in the workflow instead.";
+
+        return
+        [
+            new WorkflowEvent(
+                "workflow.contact_channel_unavailable",
+                $"Cannot honour the remembered contact preference ({channel})",
+                DateTimeOffset.UtcNow,
+                "system",
+                detail)
         ];
     }
 

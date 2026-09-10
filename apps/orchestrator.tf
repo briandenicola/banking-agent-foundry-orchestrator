@@ -163,6 +163,13 @@ resource "azurerm_container_app" "orchestrator" {
         value = local.memory_store_name
       }
 
+      # What this deployment can actually deliver, so an agent that reads a
+      # remembered "contact me by SMS" refuses it rather than agreeing to it.
+      env {
+        name  = "CONTACT_CHANNELS"
+        value = var.contact_channels
+      }
+
       env {
         name  = "FOUNDRY_SCOPE"
         value = "https://ai.azure.com/.default"

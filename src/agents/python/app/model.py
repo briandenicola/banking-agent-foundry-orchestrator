@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
@@ -90,6 +90,25 @@ def _model() -> AzureChatOpenAI | ChatOpenAI | None:
     )
 
 
+# The orchestrator resolves what the deployment can do about a remembered
+# contact channel and puts the answer in the specialist context. Left in the
+# context dictionary it is just another key in a stringified dict, which is how
+# an agent ends up cheerfully promising to text a customer that nothing can
+# text. Hoisting it into its own directive is what makes it operative.
+CONTACT_CHANNEL_GUIDANCE_KEY = "contact_channel_guidance"
+
+
+def contact_channel_directive(context: dict[str, Any]) -> str:
+    """Render the contact-channel guidance as an instruction, or "" if absent."""
+    guidance = context.get(CONTACT_CHANNEL_GUIDANCE_KEY) if isinstance(context, dict) else None
+    if not isinstance(guidance, str) or not guidance.strip():
+        return ""
+    return (
+        "\n\nContact channel requirement (follow this exactly, it overrides any "
+        f"assumption about how updates are sent):\n{guidance.strip()}"
+    )
+
+
 async def structured_step(
     instructions: str,
     request: AgentRequest,
@@ -123,6 +142,7 @@ async def structured_step(
         f"Customer request: {request.message}\n"
         f"Context: {request.specialist_context}"
     )
+    user_content += contact_channel_directive(request.specialist_context)
     if step_context:
         user_content += f"\n\nEarlier steps established:\n{step_context}"
 
@@ -188,7 +208,7 @@ async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> 
                 "No model endpoint is configured and deterministic fallback "
                 "is disabled (ALLOW_FALLBACK=false)."
             )
-        return _local_result(agent, request)
+        return _apply_contact_channel_note(_local_result(agent, request), request)
 
     structured_model = model.with_structured_output(AgentResult)
     context = request.specialist_context
@@ -199,7 +219,7 @@ async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> 
                 "user",
                 f"Trace ID: {request.trace_id}\n"
                 f"Customer request: {request.message}\n"
-                f"Context: {context}",
+                f"Context: {context}" + contact_channel_directive(context),
             ),
         ]
     )
@@ -214,6 +234,35 @@ async def reason(agent: AgentName, instructions: str, request: AgentRequest) -> 
             "execution_mode": "model",
         }
     )
+
+
+def _apply_contact_channel_note(result: AgentResult, request: AgentRequest) -> AgentResult:
+    """Keep the honesty when there is no model to be honest for us.
+
+    Fallback answers are canned, so the guidance written for the model has
+    nowhere to land. This is exactly when a silent omission matters most: the
+    deterministic path is what runs during an outage, and a customer whose
+    preference is unserviceable should still be told so rather than left to
+    assume their stored choice was honoured.
+    """
+    context = request.specialist_context
+    if not isinstance(context, dict):
+        return result
+
+    status = context.get("contact_channel_status")
+    if status not in ("known_unavailable", "unsupported"):
+        return result
+
+    channel = context.get("contact_channel")
+    note = (
+        f"You asked to be contacted by {channel}, which this service cannot send; "
+        "updates will appear here instead."
+        if isinstance(channel, str) and channel
+        else "Your stored contact preference is not a channel this service can use; "
+        "updates will appear here instead."
+    )
+
+    return result.model_copy(update={"summary": f"{result.summary} {note}"})
 
 
 def _local_result(agent: AgentName, request: AgentRequest) -> AgentResult:

@@ -244,6 +244,25 @@ builder.Services.Configure<CustomerProfileClientOptions>(options =>
     options.Scope = builder.Configuration["FOUNDRY_SCOPE"] ?? "https://ai.azure.com/.default";
 });
 builder.Services.AddHttpClient<ICustomerProfileClient, CustomerProfileClient>();
+// Which contact channels this deployment can actually service. A model must
+// never infer this: asked whether the bank can send an SMS, it will say yes.
+builder.Services.AddSingleton(sp =>
+{
+    var policy = ContactChannelPolicy.FromConfiguration(
+        builder.Configuration["CONTACT_CHANNELS"],
+        out var configurationError);
+
+    if (configurationError is not null)
+    {
+        sp.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("ContactChannels")
+            .LogWarning(
+                "Falling back to the default contact channel policy: {Reason}",
+                configurationError);
+    }
+
+    return policy;
+});
 builder.Services.AddScoped<IWorkflowService, WorkflowService>();
 builder.Services.Configure<WorkflowRecoveryOptions>(options =>
 {
