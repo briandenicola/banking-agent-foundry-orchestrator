@@ -142,6 +142,28 @@ public class CustomerProfileEndpointScopeTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    [Fact]
+    public async Task Clearing_deletes_only_the_supplied_customers_scope()
+    {
+        var response = await Client.DeleteAsync(
+            "/api/v1/profile/memories?customerId=customer-a");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal("customer-a", _client.ClearedScope);
+    }
+
+    [Fact]
+    public async Task Clearing_without_a_customer_is_refused()
+    {
+        // Clearing is per-scope. With no customer there is no scope to clear,
+        // and the old behaviour -- wiping the entire store -- would delete
+        // every other customer's memories.
+        var response = await Client.DeleteAsync("/api/v1/profile/memories");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(_client.ClearedScope);
+    }
+
     private sealed class RecordingProfileClient : ICustomerProfileClient
     {
         public string? LastScope { get; private set; }
@@ -165,7 +187,13 @@ public class CustomerProfileEndpointScopeTests : IDisposable
         public Task<ProfileReply> GetMemoriesAsync(CancellationToken cancellationToken) =>
             Task.FromResult(Empty);
 
-        public Task ClearMemoriesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public string? ClearedScope { get; private set; }
+
+        public Task ClearMemoriesAsync(string memoryScope, CancellationToken cancellationToken)
+        {
+            ClearedScope = memoryScope;
+            return Task.CompletedTask;
+        }
 
         private static ProfileReply Empty => new(string.Empty, [], [], null);
     }

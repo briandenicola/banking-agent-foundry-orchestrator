@@ -42,7 +42,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TOKEN_SCOPE = "https://ai.azure.com/.default"
 AGENT_NAME = "customer-profile"
 MEMORY_STORE_NAME = "customer_profile_memory"
-MEMORY_API_VERSION = "2025-11-15-preview"
+
+# `:delete_scope` is served under v1 alongside the agents API, not under the
+# memory store's own preview api-version. Verified against the SDK:
+# Azure.AI.Projects 2.0.0-beta.2 sends
+# `POST /memory_stores/{name}:delete_scope?api-version=v1`.
+DELETE_SCOPE_API_VERSION = "v1"
 
 # Foundry extracts memories asynchronously after a turn. The deployment sets
 # `memory_update_delay_seconds = 0`, but extraction is still a background step,
@@ -324,53 +329,57 @@ def show_memories(endpoint: str) -> int:
 
 
 def reset(endpoint: str) -> int:
-    """Clear the memory store so a rehearsal starts from nothing.
+    """Forget this identity's memories, leaving every other scope intact.
 
-    The whole store is deleted and recreated from its own definition, rather
-    than deleting memories one by one: the preview API rejects the `memory_id`
-    values that memory search returns, so per-item deletion is not available.
-    That makes this a blunt instrument -- it clears every scope, not just the
-    caller's -- which is fine for a demonstration environment and wrong for a
-    shared one. `task app:deploy-hosted-agents` recreates the store too, so
-    nothing here is unrecoverable.
+    This used to delete the whole memory store and recreate it from its own
+    definition, because the preview API rejects the `memory_id` values that
+    memory search returns, so per-item deletion was not available. That was a
+    blunt instrument: it cleared every scope, not the caller's, so one person
+    rehearsing wiped everybody.
+
+    `:delete_scope` replaced it. The scope is discovered from a probe turn
+    rather than derived from the token, because Foundry decides what the scope
+    is -- it reports `<objectId>_<tenantId>` of whoever holds the token -- and
+    reconstructing that here would be a guess that fails silently.
     """
 
+    probe = ask(endpoint, "What do you remember about me?")
+    scope = memory_scope(probe)
+    if not scope:
+        raise DemoFailure(
+            "The agent did not report a memory scope, so there is nothing safe "
+            "to delete. Check that the memory tool is attached to the agent."
+        )
+
     token = azure_token(TOKEN_SCOPE)
-    base = f"{endpoint.rstrip('/')}/memory_stores"
-
-    def call(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        payload = json.dumps(body).encode("utf-8") if body is not None else None
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        if payload is not None:
-            headers["Content-Type"] = "application/json"
-        http_request = Request(f"{path}", data=payload, method=method, headers=headers)
-        try:
-            with urlopen(http_request, timeout=60) as response:
-                return json.loads(response.read().decode("utf-8") or "{}")
-        except HTTPError as error:
-            detail = ""
-            stream = getattr(error, "fp", None)
-            if stream is not None:
-                detail = error.read().decode("utf-8", errors="replace")
-            raise DemoFailure(f"{method} {path} returned {error.code}: {detail}") from error
-
-    store_url = f"{base}/{MEMORY_STORE_NAME}?api-version={MEMORY_API_VERSION}"
-    store = call("GET", store_url)
-    definition = store.get("definition")
-    if not definition:
-        raise DemoFailure(f"Memory store {MEMORY_STORE_NAME} has no definition to restore.")
-
-    call("DELETE", store_url)
-    call(
-        "POST",
-        f"{base}?api-version={MEMORY_API_VERSION}",
-        {
-            "name": store.get("name", MEMORY_STORE_NAME),
-            "description": store.get("description", ""),
-            "definition": definition,
+    url = (
+        f"{endpoint.rstrip('/')}/memory_stores/{MEMORY_STORE_NAME}"
+        f":delete_scope?api-version={DELETE_SCOPE_API_VERSION}"
+    )
+    payload = json.dumps({"scope": scope}).encode("utf-8")
+    http_request = Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
         },
     )
-    print(f"Memory store {MEMORY_STORE_NAME} recreated. All memories cleared.")
+    try:
+        with urlopen(http_request, timeout=60) as response:
+            response.read()
+    except HTTPError as error:
+        detail = ""
+        stream = getattr(error, "fp", None)
+        if stream is not None:
+            detail = error.read().decode("utf-8", errors="replace")
+        raise DemoFailure(
+            f"POST {url} returned {error.code}: {detail}"
+        ) from error
+
+    print(f"Memories cleared for scope {scope}. Other scopes are untouched.")
     return 0
 
 

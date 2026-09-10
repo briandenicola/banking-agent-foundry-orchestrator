@@ -50,7 +50,58 @@ Consequences of note:
   remembered content.
 - **Memory is not in the workflow decision path.** `customer-profile` is a
   servicing/guidance agent. It cannot approve or action anything.
-- **No custom memory client code.** Foundry runs the model loop and the tool.
+- **Little custom memory client code.** Foundry runs the model loop and the
+  tool, so there is no retrieval, embedding, or prompt-assembly code.
+
+> **Correction (later).** "No custom memory client code", as this ADR first
+> put it, did not survive contact with the service.
+> `CustomerProfileClient` hand-writes `BuildScopedRequest` and `EnforceScope`
+> to work around scope being ignored next to an `agent_reference`, and `Parse`
+> to read memories out of the `memory_search_call` item. What it no longer
+> hand-writes is the memory *store* calls: those moved to
+> `Azure.AI.Projects` (see "Rejected: Agent Framework's memory abstractions"
+> below).
+
+### Rejected: Agent Framework's memory abstractions
+
+Agent Framework is the orchestration library for this project, so its memory
+surface is the obvious first candidate and is worth explaining rather than
+passing over.
+
+In C# (`Microsoft.Agents.AI` 1.0.0-rc5) that surface is `AgentSession`,
+`InMemoryChatHistoryProvider`, `ChatHistoryMemoryProvider`, and
+`AIContextProvider`. All four are **client-side conversation history and
+context injection**: they persist and replay the messages of a thread, and let
+you push extra instructions into a run. Foundry memory is a different thing —
+**server-side semantic extraction**, where a second model pass decides what is
+worth keeping, embeds it, and reconciles it with what is already stored. One is
+not a substitute for the other, and adopting Agent Framework's would mean
+building the extraction, embedding, redaction, and expiry ourselves.
+
+Two further reasons, either of which would be decisive alone:
+
+- **No hook for the scope override.** Agent Framework composes the outbound
+  request, and exposes no per-request seam to rewrite the memory tool's
+  `scope`. Since that rewrite is the only thing that makes memory per-customer
+  here, adopting the abstraction would silently return the system to a single
+  shared scope — and the failure is invisible, because the write succeeds and
+  simply lands where nothing reads.
+- **`AgentSession` introduces thread continuity**, which would destroy the
+  property that makes recall demonstrable at all: no turn carries
+  `previous_response_id`, so anything the agent recalls provably came from the
+  store rather than from the prompt.
+
+What *was* adopted is the Azure SDK rather than the framework.
+`Azure.AI.Projects` 2.0.0-beta.2 — already in the dependency graph beneath
+`Microsoft.Agents.AI.AzureAI` — exposes `AIProjectClient.MemoryStores`, and
+`DeleteScopeAsync` on it removes a genuine defect: clearing memories used to
+delete and recreate the whole store, wiping every customer's scope, because
+per-item deletion is rejected for the identifiers memory search returns. The
+Responses call stays hand-written, because `MemorySearchPreviewTool` exists in
+2.0.0-beta.1 and is **absent** from 2.0.0-beta.2, leaving no typed way to
+attach or rewrite the memory tool on a definition. These types are also marked
+experimental (`AAIP001`), which `src/infrastructure/infrastructure.csproj`
+suppresses deliberately.
 
 ### Rejected: memory on `suspicious-activity`
 

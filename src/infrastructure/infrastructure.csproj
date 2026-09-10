@@ -3,8 +3,15 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The Foundry memory store APIs in Azure.AI.Projects are marked
+         experimental (AAIP001). They are preview features either way; see
+         ADR 0003. -->
+    <NoWarn>$(NoWarn);AAIP001</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Already in the graph transitively via Microsoft.Agents.AI.AzureAI;
+         referenced directly for AIProjectClient.MemoryStores. -->
+    <PackageReference Include="Azure.AI.Projects" Version="2.0.0-beta.2" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.Agents.AI.AzureAI" Version="1.0.0-rc5" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.11" />

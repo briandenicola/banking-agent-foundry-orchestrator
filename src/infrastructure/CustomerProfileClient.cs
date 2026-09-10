@@ -1,13 +1,14 @@
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Azure.AI.Projects;
 using Azure.Core;
 using Azure.Identity;
 using BankingAgent.Application;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.ClientModel;
 
 namespace BankingAgent.Infrastructure;
 
@@ -45,7 +46,6 @@ public sealed class CustomerProfileClientOptions
 /// </summary>
 public sealed class CustomerProfileClient : ICustomerProfileClient
 {
-    private const string MemoryApiVersion = "2025-11-15-preview";
     private const string AgentsApiVersion = "v1";
     private const string MemoryToolType = "memory_search_preview";
     private const string MemoryProbe =
@@ -61,6 +61,12 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
     // restarts this process, so it is read once and reused.
     private readonly SemaphoreSlim _definitionLock = new(1, 1);
     private JsonObject? _cachedDefinition;
+
+    // Created on first use so an unconfigured client can still be constructed.
+    // Injectable because AIProjectMemoryStoresOperations is designed to be
+    // subclassed for tests: its methods are virtual and it has a protected
+    // parameterless constructor.
+    private AIProjectMemoryStoresOperations? _memoryStores;
 
     public CustomerProfileClient(
         HttpClient httpClient,
@@ -79,6 +85,17 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
         _endpoint = _options.ProjectEndpoint?.TrimEnd('/');
         _httpClient.Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
     }
+
+    /// <summary>
+    /// Substitutes the memory store operations. Internal rather than a
+    /// constructor parameter so the experimental <c>AAIP001</c> type stays out
+    /// of this class's public surface.
+    /// </summary>
+    internal void UseMemoryStores(AIProjectMemoryStoresOperations memoryStores) =>
+        _memoryStores = memoryStores;
+
+    private AIProjectMemoryStoresOperations MemoryStores =>
+        _memoryStores ??= new AIProjectClient(new Uri(_endpoint!), _credential).MemoryStores;
 
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(_endpoint)
@@ -329,71 +346,34 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
         return reply with { Memories = kept, Scope = requestedScope };
     }
 
-    public async Task ClearMemoriesAsync(CancellationToken cancellationToken)
+    public async Task ClearMemoriesAsync(string memoryScope, CancellationToken cancellationToken)
     {
         EnsureConfigured();
+        ArgumentException.ThrowIfNullOrWhiteSpace(memoryScope);
 
-        // Per-item deletion is rejected by the preview API for the identifiers
-        // memory search returns, so the store is deleted and recreated from its
-        // own definition. This clears every scope, not just the caller's.
-        var storeUrl =
-            $"{_endpoint}/memory_stores/{_options.MemoryStoreName}?api-version={MemoryApiVersion}";
-        var store = await SendMemoryStoreAsync(HttpMethod.Get, storeUrl, null, cancellationToken);
-
-        using var document = JsonDocument.Parse(store);
-        var root = document.RootElement;
-        if (!root.TryGetProperty("definition", out var definition))
+        // Deleting the scope is surgical: it removes this customer's memories
+        // and leaves every other customer's alone. Until the SDK exposed this,
+        // the store was deleted and recreated from its own definition, because
+        // per-item deletion is rejected by the preview API for the identifiers
+        // memory search returns -- which meant clearing one customer wiped
+        // every customer.
+        try
         {
-            throw new CustomerProfileException(
-                $"Memory store {_options.MemoryStoreName} has no definition to restore.");
+            await MemoryStores.DeleteScopeAsync(
+                _options.MemoryStoreName!,
+                memoryScope.Trim(),
+                cancellationToken);
         }
-
-        var payload = new
-        {
-            name = root.TryGetProperty("name", out var name)
-                ? name.GetString()
-                : _options.MemoryStoreName,
-            description = root.TryGetProperty("description", out var description)
-                ? description.GetString() ?? string.Empty
-                : string.Empty,
-            definition = JsonSerializer.Deserialize<JsonElement>(definition.GetRawText())
-        };
-
-        await SendMemoryStoreAsync(HttpMethod.Delete, storeUrl, null, cancellationToken);
-        await SendMemoryStoreAsync(
-            HttpMethod.Post,
-            $"{_endpoint}/memory_stores?api-version={MemoryApiVersion}",
-            payload,
-            cancellationToken);
-    }
-
-    private async Task<string> SendMemoryStoreAsync(
-        HttpMethod method,
-        string url,
-        object? payload,
-        CancellationToken cancellationToken)
-    {
-        using var request = new HttpRequestMessage(method, url);
-        if (payload is not null)
-        {
-            request.Content = JsonContent.Create(payload);
-        }
-
-        await AuthorizeAsync(request, cancellationToken);
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        catch (ClientResultException exception)
         {
             _logger.LogError(
-                "Memory store call {Method} returned {StatusCode}: {Body}",
-                method,
-                (int)response.StatusCode,
-                body);
+                exception,
+                "Deleting memory scope from store {Store} returned {Status}",
+                _options.MemoryStoreName,
+                exception.Status);
             throw new CustomerProfileException(
-                $"The memory store returned {(int)response.StatusCode}.");
+                $"The memory store returned {exception.Status}.");
         }
-
-        return body;
     }
 
     private async Task AuthorizeAsync(

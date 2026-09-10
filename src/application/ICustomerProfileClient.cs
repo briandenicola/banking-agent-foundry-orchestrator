@@ -60,5 +60,14 @@ public interface ICustomerProfileClient
     /// rejected by the preview API for the identifiers memory search returns,
     /// so this is deliberately blunt: it clears every scope, not just this one.
     /// </summary>
-    Task ClearMemoriesAsync(CancellationToken cancellationToken);
+    /// <summary>
+    /// Forgets everything retained under one memory scope, leaving every other
+    /// scope intact.
+    /// </summary>
+    /// <param name="memoryScope">
+    /// The scope to clear. Required: there is no "clear whatever the caller
+    /// happens to share" option, because in a multi-customer store that is a
+    /// request to delete other people's memories.
+    /// </param>
+    Task ClearMemoriesAsync(string memoryScope, CancellationToken cancellationToken);
 }

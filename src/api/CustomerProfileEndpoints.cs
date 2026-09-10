@@ -85,14 +85,39 @@ public static class CustomerProfileEndpoints
 
         app.MapDelete("/api/v1/profile/memories", async (
             ICustomerProfileClient client,
-            CancellationToken cancellationToken) =>
+            ICustomerAssertionGuard customerGuard,
+            CancellationToken cancellationToken,
+            [FromQuery] string? customerId = null) =>
         {
+            if (customerId is { Length: > 200 })
+            {
+                return Results.Problem(
+                    title: "A customer identifier must be 200 characters or fewer.",
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            // Guarded like the read and write paths. Clearing is per-scope now,
+            // so without this an authenticated caller could name somebody else
+            // and delete their memories.
+            if (customerGuard.Validate(customerId) is { } rejected)
+            {
+                return rejected;
+            }
+
+            if (string.IsNullOrWhiteSpace(customerId))
+            {
+                return Results.Problem(
+                    title: "A customer is required to clear memories.",
+                    detail: "Memories are cleared one scope at a time. Sign in so the scope to clear is known.",
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
             if (!client.IsConfigured)
             {
                 return NotConfigured();
             }
 
-            await client.ClearMemoriesAsync(cancellationToken);
+            await client.ClearMemoriesAsync(customerId, cancellationToken);
             return Results.NoContent();
         }).RequireAuthorization("WorkflowInvoke");
     }

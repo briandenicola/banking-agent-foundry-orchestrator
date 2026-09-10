@@ -88,9 +88,14 @@ public class ProfileModel : PageModel
                 : $"/api/v1/profile/memories?customerId={Uri.EscapeDataString(CustomerId)}"),
         "The memory store could not be read.");
 
-    public Task<IActionResult> OnPostClearAsync() => ForwardAsync(
-        () => _httpClient.DeleteAsync("/api/v1/profile/memories"),
-        "The memory store could not be cleared.");
+    public Task<IActionResult> OnPostClearAsync() => CustomerId is null
+        ? Task.FromResult<IActionResult>(Problem(
+            "Sign in to clear memories. Memories are cleared one customer at a time.",
+            400))
+        : ForwardAsync(
+            () => _httpClient.DeleteAsync(
+                $"/api/v1/profile/memories?customerId={Uri.EscapeDataString(CustomerId)}"),
+            "The memory store could not be cleared.");
 
     private async Task<IActionResult> ForwardAsync(
         Func<Task<HttpResponseMessage>> send,
