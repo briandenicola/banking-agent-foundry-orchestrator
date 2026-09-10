@@ -372,6 +372,59 @@ class TestWebuiRequiresSignin(unittest.TestCase):
 
         self.assertTrue(self._probe(lambda request, timeout=None: Response()))
 
+    def test_a_followed_redirect_to_entra_means_authentication_is_enabled(self):
+        """What actually happens against a deployed Web UI.
+
+        `urlopen` follows redirects, so Easy Auth's 302 is never visible as a
+        Location header: the probe gets a 200 from the sign-in page instead.
+        Reading only the header made the probe report "no authentication" and
+        the two anonymous checks failed rather than standing down.
+        """
+
+        class Response:
+            headers: dict[str, str] = {}
+            url = (
+                "https://login.microsoftonline.com/b2108b29-ea40-4fee-b229-e3100835667e"
+                "/oauth2/v2.0/authorize?client_id=98e842bf-169c-4588-944c-a38f390eda5d"
+            )
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        self.assertTrue(self._probe(lambda request, timeout=None: Response()))
+
+    def test_a_redirect_surfaced_as_an_http_error_is_authentication(self):
+        from urllib.error import HTTPError
+
+        def opener(request, timeout=None):
+            raise HTTPError(
+                "https://webui.test/",
+                302,
+                "Found",
+                {"Location": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"},
+                None,
+            )
+
+        self.assertTrue(self._probe(opener))
+
+    def test_a_url_merely_mentioning_entra_is_not_authentication(self):
+        """The host must be the sign-in endpoint, not just named in the URL."""
+
+        class Response:
+            headers: dict[str, str] = {}
+            url = "https://webui.test/?return=https%3A%2F%2Flogin.microsoftonline.com%2F"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        self.assertFalse(self._probe(lambda request, timeout=None: Response()))
+
     def test_a_server_error_is_not_treated_as_authentication(self):
         """A 500 must fail the run, not excuse it."""
         from urllib.error import HTTPError

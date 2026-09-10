@@ -183,24 +183,45 @@ def skipped_check(name: str, reason: str) -> CheckResult:
 def webui_requires_signin(webui_url: str, timeout: int) -> bool:
     """Whether Easy Auth stands in front of the Web UI.
 
-    Deliberately narrow. Only an explicit 401 or a redirect to the Microsoft
-    sign-in endpoint counts, because this decides whether two checks are
+    Deliberately narrow. Only an explicit 401, or arriving at the Microsoft
+    sign-in endpoint, counts -- because this decides whether two checks are
     allowed to stand down. Any other response -- including a connection error
     or a 500 -- returns False, so a genuinely broken Web UI still fails the run
     instead of being written off as "protected".
+
+    `urlopen` follows redirects, so a 302 to Entra is never visible as a
+    `Location` header on the response we get back: it arrives as a 200 from
+    login.microsoftonline.com. Both are treated as evidence, because the header
+    is still the signal when a redirect surfaces as an HTTPError.
     """
 
     request = Request(webui_url.rstrip("/") + "/", method="GET")
     try:
         with urlopen(request, timeout=timeout) as response:
-            location = response.headers.get("Location", "")
-            return "login.microsoftonline.com" in location
+            return is_entra_signin_url(
+                response.headers.get("Location", "")
+            ) or is_entra_signin_url(getattr(response, "url", "") or "")
     except HTTPError as error:
         if error.code == 401:
             return True
-        return "login.microsoftonline.com" in (error.headers.get("Location", "") if error.headers else "")
+        location = error.headers.get("Location", "") if error.headers else ""
+        return is_entra_signin_url(location)
     except Exception:
         return False
+
+
+def is_entra_signin_url(url: str) -> bool:
+    """Whether a URL points at the Microsoft sign-in endpoint.
+
+    Compares the host rather than searching the string, so a URL that merely
+    mentions the sign-in endpoint -- in a query parameter, say -- cannot excuse
+    a check from running.
+    """
+
+    if not url:
+        return False
+
+    return urlparse(url).hostname == "login.microsoftonline.com"
 
 
 def collect_container_app_logs(
