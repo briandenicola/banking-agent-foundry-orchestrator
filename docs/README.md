@@ -40,7 +40,7 @@ This index organizes the banking-agent documentation by audience and task.
 | [Terraform remote state](remote-state.md) | Covers Azure Blob state, OIDC authentication, environment separation, bootstrap, and migration. |
 | [Diagrams](diagrams/) | Excalidraw diagram of the deployed Azure topology, generated from a script so it can be kept in step with the Terraform. |
 | [Demo scenarios](demo-scenarios.md) | Documents synthetic non-PII scenarios and their expected workflow outcomes. |
-| [Agent memory and Foundry-managed tools](demo-agent-memory-and-tools.md) | How the `customer-profile` prompt agent works: Foundry-managed memory, per-customer scoping, PII exclusion, clearing, and the code interpreter. The demonstration walkthrough is Appendix A. |
+| [Agent memory and Foundry-managed tools](demo-agent-memory-and-tools.md) | How the `customer-profile` prompt agent works: Foundry-managed memory, per-customer scoping, PII exclusion, clearing, the code interpreter, and how a remembered contact preference becomes something the workflow can answer rather than only repeat. The demonstration walkthrough is Appendix A. |
 
 ## Architecture decisions
 

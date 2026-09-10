@@ -53,6 +53,22 @@ Consequences of note:
 - **Little custom memory client code.** Foundry runs the model loop and the
   tool, so there is no retrieval, embedding, or prompt-assembly code.
 
+> **Amendment (later).** "The four hosted agents are unchanged" and
+> "memory-free" were true when written and are now too strong. Remembered
+> content does reach the specialists: a stored contact preference is resolved
+> against what the deployment can service and arrives in the specialist context
+> as `contact_channel_guidance`, and the fallback path was changed so the same
+> refusal survives an outage. This was necessary because a recalled preference
+> that only travels as text is worse than no recall at all — an agent that reads
+> "only contact me by SMS" agrees to it, and nothing can send an SMS.
+>
+> The claim that actually matters is unchanged and is now pinned by a test
+> rather than asserted in prose: contact capability affects wording and one
+> audit event, never `requires_approval` and never the route.
+> `ContactChannelWorkflowTests` asserts that in both directions, because a
+> policy that could only escalate approval would still have broken the property
+> this ADR is defending.
+
 > **Correction (later).** "No custom memory client code", as this ADR first
 > put it, did not survive contact with the service.
 > `CustomerProfileClient` hand-writes `BuildScopedRequest` and `EnforceScope`

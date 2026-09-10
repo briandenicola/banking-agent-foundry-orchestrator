@@ -58,6 +58,23 @@ memory tool; there is no image and no graph for it. It sits outside the
 workflow decision path and can neither approve nor action anything, so no
 audit-critical decision depends on remembered content.
 
+Remembered content does, however, reach the specialists. A stored contact
+preference is resolved in C# against what the deployment can actually service
+and arrives in the specialist context as `contact_channel`,
+`contact_channel_status`, and `contact_channel_guidance` — see
+[Agent memory and Foundry-managed tools](demo-agent-memory-and-tools.md#recall-is-not-enough-a-preference-has-to-be-answerable).
+Passing the preference as bare text was the defect: an agent reading "only
+contact me by SMS" has no reason to doubt it, so it agrees, and nothing in this
+service can send an SMS.
+
+The boundary is what keeps this safe, and it is narrow on purpose. **Whether a
+channel can be serviced is never a model inference** — a model asked whether the
+bank can send an SMS will say yes — so capability is a configuration lookup.
+And capability changes wording and one audit event
+(`workflow.contact_channel_unavailable`) and nothing else: it cannot alter
+`requires_approval` or the selected route. `ContactChannelWorkflowTests` pins
+that in both directions.
+
 Memory is partitioned per end user, retained for 30 days, and constrained by an
 explicit `user_profile_details` redaction instruction that the deployer refuses
 to default. The partitioning is not the `scope = {{$userId}}` template it looks
@@ -665,6 +682,7 @@ missing evidence or any fallback result fails the smoke run.
 | Planner model context | Planner request only | No |
 | Specialist model context | Specialist request only | No |
 | Cross-agent memory | Not implemented | No |
+| Remembered contact preference and what the deployment can service | Foundry memory store, resolved in the C# orchestrator | Wording and `workflow.contact_channel_unavailable` only; never approval or route |
 | LangGraph checkpoint/thread | Not configured | No |
 
 For the proposed Agent Framework, MCP, shared-artifact, outbox, and Agent Host

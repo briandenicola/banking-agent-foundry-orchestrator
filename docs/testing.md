@@ -41,6 +41,8 @@ Service-layer tests with in-memory fakes. Cover:
 
 - `WorkflowService`: not-found (`WorkflowNotFoundException`), invalid transition (`InvalidTransitionException`), idempotent approval (same decision → no write), conflicting decision (`ConflictingDecisionException`), `GetAsync` delegation.
 - Repository and action-repository interface contracts.
+- `ContactChannelPolicyTests`: that a channel is recognised whole-word only, so "post" inside "postal code" and "text" inside "context" do not become contact preferences; that capability comes from configuration; and that malformed configuration falls back to the conservative default rather than failing the orchestrator or making an unavailable channel look available.
+- `ContactChannelWorkflowTests`: that guidance reaches the specialist context, that an unmet preference is recorded as `workflow.contact_channel_unavailable`, and — in **both** directions — that neither `requires_approval` nor the invoked tools differ between a workflow carrying an unserviceable preference and one carrying none. A policy that only ever escalated approval would still be wrong, so both are asserted.
 
 ### Category C — API contract tests (`BankingAgent.Api.Tests`)
 
@@ -115,6 +117,7 @@ whole directory:
 | `test_mcp_server.py` | The MCP server surface the hosted agents expose |
 | `test_mcp_interop.py` | `initialize`, `tools/list`, and `tools/call` interoperability against the boundary |
 | `test_toolbox.py` | Toolbox tool implementations |
+| `test_contact_channel.py` | That a remembered contact preference reaches the model as a labelled instruction rather than a key in a stringified dictionary, and that a specialist **graph** running with no model still refuses an unserviceable channel. The graphs are driven directly here on purpose: they assemble their own `AgentResult` and never call `reason()`, so a fix applied to the wrapper would be dead code in production |
 
 ### Category PH — Python hosted-agent contract tests (`src/agents/python/tests/test_hosted.py`)
 

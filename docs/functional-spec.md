@@ -47,6 +47,8 @@ This spec describes the target design. The following parts are **not yet** imple
 - Sensitive actions must require explicit approval before execution.
 - The system must return a trace identifier that links the request, agent decisions, approval steps, and outcome.
 - The system must store workflow metadata and audit events for later review.
+- The system must not promise the user something it cannot deliver. Where a remembered preference asks for a contact channel the deployment cannot service, the response must acknowledge the preference, refuse it explicitly, and say what happens instead. Whether a channel can be serviced must be configuration rather than something an agent infers, and the answer must not depend on a model being available.
+- Personalisation must not reach the approval decision or the choice of agent. It may change wording and the audit trail only.
 - Protected API endpoints must require Microsoft Entra ID authentication and reject requests that do not satisfy the policy.
 - The system must return standardized ProblemDetails responses for invalid input, policy rejection, and execution failures.
 - The system must emit structured diagnostics for every request and agent step without logging secrets or PII.

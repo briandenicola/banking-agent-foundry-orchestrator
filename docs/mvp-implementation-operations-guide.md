@@ -425,6 +425,8 @@ sequenceDiagram
         ORCH->>Profile: AskAsync scoped to CustomerId
         Profile-->>ORCH: Remembered preferences
         Note over ORCH,Profile: Fails open. A profile error leaves the workflow unpersonalised, not failed
+        ORCH->>ORCH: ContactChannelPolicy.Assess
+        Note over ORCH: Whether a channel can be serviced is a config lookup, never a model inference
     end
 
     ORCH->>FClient: Invoke workflow.plan
@@ -436,9 +438,13 @@ sequenceDiagram
     Note over ORCH: WorkflowRoutingPolicy matched no dispute or suspicion term, so it adds no approval
     SVC->>DB: Append workflow.route_selected
 
-    ORCH->>FClient: Invoke transaction.explain with planner context and customer_preferences
+    ORCH->>FClient: Invoke transaction.explain with planner context, customer_preferences, and contact_channel_guidance
     FClient->>Foundry: POST transaction-explanation invocation
     Foundry-->>FClient: Specialist AgentResult, requires_approval false
+    opt Preference names a channel this deployment cannot service
+        SVC->>DB: Append workflow.contact_channel_unavailable
+        Note over SVC,DB: Wording and audit only. The route and requires_approval are untouched
+    end
     SVC->>DB: Set Completed and append events
     UI->>API: GET /workflows/{id}
     API-->>UI: Completed with explanation and evidence
@@ -467,7 +473,7 @@ sequenceDiagram
     Foundry-->>FClient: Planner AgentResult
     SVC->>DB: Append workflow.plan
 
-    Note over ORCH: Planner selected suspicious-activity; the policy would fall back to it anyway
+    Note over ORCH: Planner selected suspicious-activity, and the policy would fall back to it anyway
 
     alt Policy matched a sensitive action term
         Note over ORCH: RequiresApproval escalated to true
@@ -1131,6 +1137,14 @@ Notes before enabling:
   [ADR 0003](decisions/0003-foundry-memory-prompt-agent.md).
 - Memory requires the embedding deployment created by the infrastructure stack.
   If `infrastructure/` predates that deployment, re-apply it first.
+- **Enabling memory makes contact preferences answerable, not just recalled.**
+  A stored preference naming a channel this deployment cannot service is
+  refused explicitly rather than agreed to. Which channels can be serviced is
+  set by `contact_channels` (`CONTACT_CHANNELS`); empty keeps a conservative
+  built-in list where only secure message and email are available. If this
+  deployment later gains a real SMS route, change that variable — the agents
+  must never be left to infer it. See
+  [Recall is not enough](demo-agent-memory-and-tools.md#recall-is-not-enough-a-preference-has-to-be-answerable).
 - Only `transaction-explanation` calls toolbox tools, and it cannot require
   approval by construction, so tool output never reaches an approval decision.
   See [ADR 0004](decisions/0004-foundry-toolbox-tools.md).

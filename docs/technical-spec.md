@@ -33,10 +33,11 @@ The reference implementation is now a C# workflow orchestrator that uses an Agen
 5. The orchestrator invokes the planner and every specialist through MCP JSON-RPC, since `FOUNDRY_MCP_TOOL_ENDPOINTS` carries an endpoint for all four tools. A tool omitted from that map falls back to the typed envelope.
 6. Routing authority is hybrid: a valid planner `selected_agent` chooses the specialist, while `WorkflowRoutingPolicy` validates as a guardrail that can only escalate `requires_approval` and never swaps the selected agent or de-escalates approval.
 7. Planner/policy disagreements persist `workflow.route_disagreement` events with both agents, both approval decisions, and the winner. Missing or unrecognized planner routes fall back to the policy and persist `workflow.route_fallback` events with the reason and winning route.
-8. If sensitive, the orchestrator sets `WaitingForApproval` and persists. The UI polls until this state is observed, then shows the approval form.
-9. After approval, the orchestrator executes the bounded action, creates a support case (if applicable), and persists the audit trail.
-10. All model calls are made by the hosted agents directly against Microsoft Foundry. There is no gateway in the request path.
-11. The UI polls `GET /api/v1/workflows/{id}` with exponential backoff until a terminal status (`Completed`, `Failed`, `Rejected`, `WaitingForApproval`) is observed.
+8. When a remembered contact preference names a channel this deployment cannot service, `ContactChannelPolicy` resolves it before the specialist runs and passes the resulting instruction in the specialist context, so the agent refuses the channel rather than agreeing to it. Capability is a configuration lookup (`CONTACT_CHANNELS`), never a model inference. It affects wording and a `workflow.contact_channel_unavailable` event only: it can change neither `requires_approval` nor the selected agent.
+9. If sensitive, the orchestrator sets `WaitingForApproval` and persists. The UI polls until this state is observed, then shows the approval form.
+10. After approval, the orchestrator executes the bounded action, creates a support case (if applicable), and persists the audit trail.
+11. All model calls are made by the hosted agents directly against Microsoft Foundry. There is no gateway in the request path.
+12. The UI polls `GET /api/v1/workflows/{id}` with exponential backoff until a terminal status (`Completed`, `Failed`, `Rejected`, `WaitingForApproval`) is observed.
 
 ### Recovery and failure behavior
 - `RecoverAsync` returns the current state without error if the workflow is already terminal (idempotent for concurrent replicas).

@@ -98,6 +98,39 @@ var kept = reply.Memories
     .ToList();
 ```
 
+### A remembered preference the workflow can answer
+
+Recalling a preference and passing it to an agent as bare text is worse than not
+recalling it. An agent that reads *"only contact me by SMS"* has no reason to
+doubt it, so it agrees — and nothing here can send an SMS. The failure is a
+promise to a customer, not a bad answer.
+
+`ContactChannelPolicy` splits the problem in two, because the halves have
+different standards of correctness. Recognising that a preference *names* a
+channel is language, and stays a maintained alias list that is allowed to miss.
+Deciding whether the channel can be *serviced* is deployment fact, and is a
+configuration lookup — never a model inference, because a model asked whether
+the bank can send an SMS will say yes:
+
+```csharp
+// Whole-word containment. Substring matching would find "post" inside
+// "postal code" and "text" inside "context", either of which would attach a
+// contact channel to a preference that never mentioned one.
+private static bool ContainsTerm(string haystack, string needle)
+```
+
+The failure mode is chosen rather than accepted: an unrecognised preference
+resolves to `NoneStated` and behaves exactly as before, making no promise, while
+a recognised but unserviceable one is refused explicitly. Neither path can
+produce a promise.
+
+The resolution reaches the agents as an instruction rather than another key in a
+stringified context dictionary, and it survives an outage — the specialists'
+deterministic fallback carries the same refusal. Capability changes wording and
+one audit event (`workflow.contact_channel_unavailable`); it can change neither
+`requires_approval` nor the route, which `ContactChannelWorkflowTests` asserts
+in both directions.
+
 ### Tool calling over MCP
 
 Hosted LangGraph agents are invoked as standards-compliant MCP tools over
