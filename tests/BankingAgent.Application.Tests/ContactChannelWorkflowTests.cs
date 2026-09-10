@@ -80,30 +80,52 @@ public sealed class ContactChannelWorkflowTests
     }
 
     [Fact]
-    public async Task What_the_bank_can_deliver_never_changes_whether_a_human_must_approve()
+    public async Task An_unserviceable_channel_does_not_summon_an_approver()
     {
-        // The invariant that keeps this feature cosmetic where it should be
-        // cosmetic. An unserviceable contact channel is a wording problem; it is
-        // neither a reason to summon an approver nor a reason to stop needing
-        // one. Both directions are checked, because a policy that only ever
-        // escalates would still be wrong.
-        var withoutPreference = await RunAsync("Needs large-print statements");
-        var withUnavailable = await RunAsync("Only contact me on TikTok");
+        // An unserviceable contact channel is a wording problem, not a reason to
+        // put a human in the way of an informational answer.
+        const string Informational = "Why is this charge pending?";
+        var withoutPreference = await RunAsync("Needs large-print statements", Informational);
+        var withUnavailable = await RunAsync("Only contact me on TikTok", Informational);
 
-        Assert.Equal(withoutPreference.Workflow.RequiresApproval, withUnavailable.Workflow.RequiresApproval);
+        Assert.False(withoutPreference.Workflow.RequiresApproval);
+        Assert.False(withUnavailable.Workflow.RequiresApproval);
         Assert.Equal(withoutPreference.Workflow.Status, withUnavailable.Workflow.Status);
     }
 
     [Fact]
-    public async Task What_the_bank_can_deliver_never_changes_which_agent_handles_the_request()
+    public async Task An_unserviceable_channel_does_not_talk_a_workflow_past_an_approver()
     {
-        var withoutPreference = await RunAsync("Needs large-print statements");
-        var withUnavailable = await RunAsync("Only contact me on TikTok");
+        // The direction that actually protects the customer, and the one an
+        // equality assertion between two informational runs cannot see: there,
+        // approval is false either way and the test passes by saying false
+        // equals false. A dispute genuinely requires approval, so a policy that
+        // could de-escalate would be caught here.
+        const string Dispute = "I want to dispute this charge.";
+        var withoutPreference = await RunAsync("Needs large-print statements", Dispute);
+        var withUnavailable = await RunAsync("Only contact me on TikTok", Dispute);
 
+        Assert.True(withoutPreference.Workflow.RequiresApproval);
+        Assert.True(withUnavailable.Workflow.RequiresApproval);
+        Assert.Equal(withoutPreference.Workflow.Status, withUnavailable.Workflow.Status);
+    }
+
+    [Fact]
+    public async Task An_unserviceable_channel_does_not_change_which_agent_handles_a_dispute()
+    {
+        // Checked on a dispute rather than an informational request so that the
+        // expected route is one the policy actually had to choose.
+        const string Dispute = "I want to dispute this charge.";
+        var withoutPreference = await RunAsync("Needs large-print statements", Dispute);
+        var withUnavailable = await RunAsync("Only contact me on TikTok", Dispute);
+
+        Assert.Contains("dispute.plan", withoutPreference.InvokedTools);
         Assert.Equal(withoutPreference.InvokedTools, withUnavailable.InvokedTools);
     }
 
-    private async Task<RunResult> RunAsync(string preference)
+    private async Task<RunResult> RunAsync(
+        string preference,
+        string userMessage = "Why is this charge pending?")
     {
         WorkflowState? persisted = null;
         var repo = new Mock<IWorkflowRepository>(MockBehavior.Loose);
@@ -142,15 +164,21 @@ public sealed class ContactChannelWorkflowTests
                     specialistContext = new Dictionary<string, object?>(captured);
                 }
 
-                var agent = toolName == "workflow.plan" ? "workflow-planning" : "transaction-explanation";
+                // The specialist follows the message rather than being hardcoded,
+                // so a dispute genuinely routes to dispute-planning and genuinely
+                // requires approval. Without that, an invariant test comparing two
+                // informational runs would only ever be comparing false to false.
+                var isDispute = userMessage.Contains("dispute", StringComparison.OrdinalIgnoreCase);
+                var specialist = isDispute ? "dispute-planning" : "transaction-explanation";
+                var agent = toolName == "workflow.plan" ? "workflow-planning" : specialist;
                 var body = JsonSerializer.Serialize(new
                 {
                     agent,
                     status = "ok",
-                    intent = "transaction_explanation",
+                    intent = isDispute ? "dispute" : "transaction_explanation",
                     summary = "Explaining the charge.",
-                    requires_approval = false,
-                    selected_agent = "transaction-explanation",
+                    requires_approval = isDispute,
+                    selected_agent = specialist,
                     evidence = Array.Empty<string>(),
                     contract_version = "1.0",
                     execution_mode = "fallback"
@@ -172,7 +200,7 @@ public sealed class ContactChannelWorkflowTests
             loggerFactory: null,
             customerProfile: ProfileThatRecalls(preference));
 
-        var draft = await service.StartForCustomerAsync("Why is this charge pending?", "customer-a");
+        var draft = await service.StartForCustomerAsync(userMessage, "customer-a");
         var completed = await service.RecoverAsync(draft.Id);
 
         return new RunResult(completed, specialistContext, invokedTools);

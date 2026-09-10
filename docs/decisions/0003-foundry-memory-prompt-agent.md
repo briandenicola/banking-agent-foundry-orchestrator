@@ -67,7 +67,10 @@ Consequences of note:
 > audit event, never `requires_approval` and never the route.
 > `ContactChannelWorkflowTests` asserts that in both directions, because a
 > policy that could only escalate approval would still have broken the property
-> this ADR is defending.
+> this ADR is defending. The de-escalation case runs a dispute rather than an
+> informational request: with an informational one, approval is false whether or
+> not the feature misbehaves, so the test would have passed by asserting that
+> false equals false.
 
 > **Correction (later).** "No custom memory client code", as this ADR first
 > put it, did not survive contact with the service.
