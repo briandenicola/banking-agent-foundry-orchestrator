@@ -26,8 +26,7 @@ See [`docs/diagrams/README.md`](docs/diagrams/README.md) to rebuild it.
 ## How it works, in code
 
 Three capabilities carry the demonstration. Each is short enough to read on a
-slide, and the talk track
-([`docs/demo-agent-memory-and-tools.md`](docs/demo-agent-memory-and-tools.md))
+slide, and [`docs/demo-agent-memory-and-tools.md`](docs/demo-agent-memory-and-tools.md)
 expands on all three.
 
 ### Delegated user identity

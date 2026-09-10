@@ -119,9 +119,16 @@ support case and the complete audit trail, including the approval and action eve
 6. Append `mcp.invoked`.
 7. Transition to `Completed` or `WaitingForApproval`.
 
-The planning agent is advisory. If its selected agent differs from
-`WorkflowRoutingPolicy`, C# logs the difference and uses the deterministic C# result.
-The current routing rules are:
+The planning agent selects the specialist. `WorkflowRoutingPolicy.Decide` runs as
+a deterministic guardrail alongside it: it can only escalate `requires_approval`
+from false to true, never de-escalate, and it supplies the agent only when the
+planner omits `selected_agent` or returns a name that does not normalise to a
+known specialist. That fallback is recorded as `workflow.route_fallback`, and a
+planner/policy disagreement on a valid route is recorded as
+`workflow.route_disagreement`. See
+[Routing authority](./agent-implementation.md#routing-authority).
+
+The policy's own rules are:
 
 | User request | Hosted specialist | Tool name | Approval |
 | --- | --- | --- | --- |
@@ -381,6 +388,113 @@ smoke runner, and operators.
 
 ## 6. Sequence diagrams
 
+The three flows named in the acceptance criteria for a code-level guide are
+informational, suspicious activity, and dispute approval. They differ only in
+which specialist runs and whether the workflow stops at an approval gate; the
+planner, the routing policy, and the persistence pattern are identical.
+
+| Flow | Selected when | Specialist tool | Terminal state |
+| --- | --- | --- | --- |
+| Informational | The planner selects `transaction-explanation`, or nothing matched on fallback | `transaction.explain` | `Completed` without approval |
+| Suspicious activity | The planner selects `suspicious-activity`, or `fraud`, `suspicious`, `not my transaction`, or `not mine` matched on fallback | `suspicious.assess` | `Completed`, or `WaitingForApproval` when the specialist asks for it or a sensitive action term (`freeze`, `block`, `close`) is present |
+| Dispute | The planner selects `dispute-planning`, or `dispute`, `chargeback`, or `refund this charge` matched on fallback | `dispute.plan` | Always `WaitingForApproval`, because the policy escalates |
+
+### Informational request, no approval
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Web UI
+    participant API as Workflow API
+    participant SVC as WorkflowService
+    participant ORCH as AgentFrameworkWorkflowOrchestrator
+    participant Profile as CustomerProfileClient
+    participant DB as PostgreSQL
+    participant FClient as FoundryMcpClient
+    participant Foundry as Foundry hosted agents
+
+    User->>UI: "Why was I charged $42 by ACME?"
+    UI->>API: POST /api/v1/workflows
+    API->>SVC: StartAsync
+    SVC->>DB: Insert Draft and workflow.started
+    API-->>UI: 202 Accepted and Location
+    SVC->>DB: Atomic claim: Draft to Recovering
+    SVC->>ORCH: ExecuteAsync
+
+    opt Signed-in customer and memory configured
+        ORCH->>Profile: AskAsync scoped to CustomerId
+        Profile-->>ORCH: Remembered preferences
+        Note over ORCH,Profile: Fails open. A profile error leaves the workflow unpersonalised, not failed
+    end
+
+    ORCH->>FClient: Invoke workflow.plan
+    FClient->>Foundry: POST workflow-planning invocation
+    Foundry-->>FClient: Planner AgentResult
+    SVC->>DB: Append workflow.plan
+
+    Note over ORCH: Planner selected transaction-explanation, so that route stands
+    Note over ORCH: WorkflowRoutingPolicy matched no dispute or suspicion term, so it adds no approval
+    SVC->>DB: Append workflow.route_selected
+
+    ORCH->>FClient: Invoke transaction.explain with planner context and customer_preferences
+    FClient->>Foundry: POST transaction-explanation invocation
+    Foundry-->>FClient: Specialist AgentResult, requires_approval false
+    SVC->>DB: Set Completed and append events
+    UI->>API: GET /workflows/{id}
+    API-->>UI: Completed with explanation and evidence
+```
+
+### Suspicious activity, escalating to approval
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Web UI
+    participant API as Workflow API
+    participant SVC as WorkflowService
+    participant ORCH as AgentFrameworkWorkflowOrchestrator
+    participant DB as PostgreSQL
+    participant FClient as FoundryMcpClient
+    participant Foundry as Foundry hosted agents
+
+    User->>UI: "This transaction is not mine, please freeze the card"
+    UI->>API: POST /api/v1/workflows
+    API->>SVC: StartAsync
+    SVC->>DB: Insert Draft and workflow.started
+    SVC->>ORCH: ExecuteAsync
+    ORCH->>FClient: Invoke workflow.plan
+    FClient->>Foundry: POST workflow-planning invocation
+    Foundry-->>FClient: Planner AgentResult
+    SVC->>DB: Append workflow.plan
+
+    Note over ORCH: Planner selected suspicious-activity; the policy would fall back to it anyway
+
+    alt Policy matched a sensitive action term
+        Note over ORCH: RequiresApproval escalated to true
+    else No sensitive action term
+        Note over ORCH: Approval can still be raised by the specialist, never lowered
+    end
+    SVC->>DB: Append workflow.route_selected and, on disagreement, workflow.route_disagreement
+
+    ORCH->>FClient: Invoke suspicious.assess
+    FClient->>Foundry: POST suspicious-activity invocation
+    Foundry-->>FClient: Specialist AgentResult
+
+    alt Approval required by policy or specialist
+        SVC->>DB: Set WaitingForApproval and append events
+        UI->>API: GET /workflows/{id}
+        API-->>UI: WaitingForApproval with the proposed action
+        User->>UI: Approve
+        UI->>API: POST /workflows/{id}/approval
+        API->>SVC: ApproveAsync
+        SVC->>DB: Transaction: decision, action, case, events
+        API-->>UI: Completed with support case
+    else No approval required
+        SVC->>DB: Set Completed and append events
+        API-->>UI: Completed with the assessment
+    end
+```
+
 ### Successful dispute and approval
 
 ```mermaid
@@ -389,6 +503,8 @@ sequenceDiagram
     participant UI as Web UI
     participant API as Workflow API
     participant SVC as WorkflowService
+    participant ORCH as AgentFrameworkWorkflowOrchestrator
+    participant Profile as CustomerProfileClient
     participant DB as PostgreSQL
     participant FClient as FoundryMcpClient
     participant Foundry as Foundry hosted agents
@@ -401,13 +517,18 @@ sequenceDiagram
     UI->>API: POST /workflows/{id}/evidence
     API->>DB: Insert validated evidence
     SVC->>DB: Atomic claim: Draft to Recovering
-    SVC->>FClient: Invoke workflow.plan
+    SVC->>ORCH: ExecuteAsync
+    opt Signed-in customer and memory configured
+        ORCH->>Profile: AskAsync scoped to CustomerId
+        Profile-->>ORCH: Remembered preferences (fails open)
+    end
+    ORCH->>FClient: Invoke workflow.plan
     FClient->>Foundry: POST workflow-planning invocation
     Foundry-->>FClient: Planner AgentResult
     SVC->>DB: Append workflow.plan
-    Note over SVC: C# routing policy is authoritative
+    Note over ORCH: Policy escalates approval and only picks the agent if the planner's choice does not normalise
     SVC->>DB: Append workflow.route_selected
-    SVC->>FClient: Invoke dispute.plan
+    ORCH->>FClient: Invoke dispute.plan
     FClient->>Foundry: POST dispute-planning invocation
     Foundry-->>FClient: Specialist AgentResult
     SVC->>DB: Set WaitingForApproval and append events
