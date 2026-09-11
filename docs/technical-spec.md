@@ -36,7 +36,7 @@ The reference implementation is now a C# workflow orchestrator that uses an Agen
 8. When a remembered contact preference names a channel this deployment cannot service, `ContactChannelPolicy` resolves it before the specialist runs and passes the resulting instruction in the specialist context, so the agent refuses the channel rather than agreeing to it. Capability is a configuration lookup (`CONTACT_CHANNELS`), never a model inference. It affects wording and a `workflow.contact_channel_unavailable` event only: it can change neither `requires_approval` nor the selected agent.
 9. If sensitive, the orchestrator sets `WaitingForApproval` and persists. The UI polls until this state is observed, then shows the approval form.
 10. After approval, the orchestrator executes the bounded action, creates a support case (if applicable), and persists the audit trail.
-11. All model calls are made by the hosted agents directly against Microsoft Foundry. There is no gateway in the request path.
+11. All model calls are made by the hosted agents directly against Microsoft Foundry over the Responses API, on the project's `/openai/v1/` surface. There is no gateway in the request path. See [ADR 0006](decisions/0006-responses-api.md).
 12. The UI polls `GET /api/v1/workflows/{id}` with exponential backoff until a terminal status (`Completed`, `Failed`, `Rejected`, `WaitingForApproval`) is observed.
 
 ### Recovery and failure behavior

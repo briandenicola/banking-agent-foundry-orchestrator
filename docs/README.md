@@ -48,6 +48,10 @@ This index organizes the banking-agent documentation by audience and task.
 | --- | --- |
 | [ADR 0001 — Remove the LiteLLM gateway](decisions/0001-remove-litellm-gateway.md) | Records why the AI gateway was removed and the conditions under which one would be reintroduced. |
 | [ADR 0002 — Hand-written MCP server](decisions/0002-mcp-sdk-vs-hand-written.md) | Records why the hosted-agent MCP implementation is hand-written rather than built on the official SDK. |
+| [ADR 0003 — Foundry memory prompt agent](decisions/0003-foundry-memory-prompt-agent.md) | Records why customer memory is a Foundry-managed prompt agent rather than a client-side memory library. |
+| [ADR 0004 — Foundry toolbox tools](decisions/0004-foundry-toolbox-tools.md) | Records how hosted agents reach Foundry-managed tools, and corrects an overstatement in ADR 0003. |
+| [ADR 0005 — Delegated user authentication](decisions/0005-delegated-user-authentication.md) | Records why the Web UI signs the user in and calls the orchestrator on their behalf. |
+| [ADR 0006 — Call Foundry over the Responses API](decisions/0006-responses-api.md) | Records why hosted agents moved off Chat Completions, and what was verified before the switch. |
 
 ## Planning and backlog
 

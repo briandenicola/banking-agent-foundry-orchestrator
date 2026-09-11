@@ -58,6 +58,36 @@ def project_endpoint() -> str | None:
     return raw.strip() or None if raw else None
 
 
+#: Hosted agents call Foundry's Responses API rather than Chat Completions.
+#: Both surfaces answer on the project's ``/openai/v1/`` base URL, and the
+#: choice used to be made by omission: LangChain's ``ChatOpenAI`` defaults to
+#: Chat Completions, so the Python specialists used it while the C#
+#: ``CustomerProfileClient`` posted to ``/openai/v1/responses``. Two halves of
+#: one system on two surfaces is a decision nobody made.
+#:
+#: Responses is the surface Foundry treats as current, and it is where
+#: reasoning-item persistence and server-side tool state are being added, so
+#: it is the one to standardise on. ``with_structured_output`` and
+#: ``bind_tools`` were both exercised against the deployed project on each
+#: surface before this was switched; they returned equivalent results.
+USE_RESPONSES_API_ENV_VAR = "BANKING_AGENT_USE_RESPONSES_API"
+
+
+def _use_responses_api() -> bool:
+    """Whether hosted agents call Foundry over the Responses API.
+
+    Defaults to enabled, and unlike ``ALLOW_FALLBACK`` this is opt-*out*: only
+    an explicit negative turns it off. The escape hatch exists because a
+    specialist that cannot reach its model degrades to canned fallback text
+    rather than failing loudly, so an operator needs a way to revert the
+    surface without waiting for a rebuild.
+    """
+    raw = os.getenv(USE_RESPONSES_API_ENV_VAR)
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() not in {"false", "0", "no", "off"}
+
+
 def _model() -> AzureChatOpenAI | ChatOpenAI | None:
     foundry_endpoint = project_endpoint()
     deployment = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5.4-mini")
@@ -72,12 +102,17 @@ def _model() -> AzureChatOpenAI | ChatOpenAI | None:
             base_url=f"{foundry_endpoint.rstrip('/')}/openai/v1/",
             model=deployment,
             api_key=token_provider,
+            use_responses_api=_use_responses_api(),
         )
 
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     if not endpoint:
         return None
 
+    # Deliberately left on Chat Completions. This branch only runs against a
+    # standalone Azure OpenAI resource for local development, where the
+    # Responses surface needs a different api-version, and changing an
+    # untested path would let local and deployed behaviour drift apart.
     token_provider = get_bearer_token_provider(
         credential,
         "https://cognitiveservices.azure.com/.default",
