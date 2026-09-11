@@ -187,3 +187,17 @@ tasks:
         terraform -chdir=./{{.INFRA_DIR}} validate
     vars:
       REGION: '{{default .DEFAULT_REGION .CLI_ARGS}}'
+  logs:
+    desc: Recent container logs as JSON. Pass -- <app> --since 2h --grep pattern
+    cmds:
+      - python ./scripts/cloud-logs.py {{.CLI_ARGS}}
+
+  logs:follow:
+    desc: Stream container logs, one JSON object per line
+    cmds:
+      - python ./scripts/cloud-logs.py --follow {{.CLI_ARGS}}
+
+  logs:model:
+    desc: Model-call health as JSON. 429s, failures by phase, recent exceptions
+    cmds:
+      - python ./scripts/cloud-logs.py --model --since 24h {{.CLI_ARGS}}

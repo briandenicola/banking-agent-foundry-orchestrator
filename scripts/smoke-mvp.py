@@ -19,6 +19,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from azure_logs import AzureQueryError, resolve_workspace_id  # noqa: E402
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_AGENTS = (
@@ -238,40 +242,7 @@ def collect_container_app_logs(
         return {"error": "Unable to derive Container App names from deployed URLs."}
 
     try:
-        environment_id = subprocess.run(
-            [
-                "az",
-                "containerapp",
-                "show",
-                "--name",
-                app_names[0],
-                "--resource-group",
-                resource_group,
-                "--query",
-                "properties.environmentId",
-                "--output",
-                "tsv",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        workspace_id = subprocess.run(
-            [
-                "az",
-                "resource",
-                "show",
-                "--ids",
-                environment_id,
-                "--query",
-                "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId",
-                "--output",
-                "tsv",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+        workspace_id = resolve_workspace_id(resource_group, app_names[0])
         quoted_names = ", ".join(f"'{name}'" for name in app_names)
         started_at_utc = started_at.strftime("%Y-%m-%dT%H:%M:%SZ")
         query = (
@@ -301,7 +272,7 @@ def collect_container_app_logs(
             text=True,
         )
         return {"entries": json.loads(result.stdout)}
-    except (json.JSONDecodeError, subprocess.CalledProcessError) as error:
+    except (json.JSONDecodeError, subprocess.CalledProcessError, AzureQueryError) as error:
         details = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
         return {"error": details or "Unable to query Container Apps logs."}
 
