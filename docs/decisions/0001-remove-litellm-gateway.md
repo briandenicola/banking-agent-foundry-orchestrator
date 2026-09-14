@@ -1,9 +1,17 @@
 # ADR 0001 — Remove the LiteLLM gateway
 
-- **Status:** Accepted
+- **Status:** Accepted — superseded by [ADR 0007](0007-agent-harness-inner-loop.md) on its acceptance
 - **Date:** 2026-08-06
 - **Issue:** [#24](https://github.com/briandenicola/banking-agent-foundry-orchestrator/issues/24)
 - **Amends:** `docs/project-constitution.md` (v1.0 → v1.1)
+
+> **Superseded (pending).** The decision below — remove LiteLLM, run with no AI
+> gateway — still stands and is not reopened by ADR 0007. What ADR 0007
+> supersedes is the *reasoning*. This ADR argues that no gateway is reachable
+> because model calls happen only inside Foundry-hosted agents, on the far side
+> of a network boundary. Once the orchestrator runs an Agent Harness it calls a
+> model itself, from inside the Container Apps Environment, and that argument
+> stops holding. Anyone weighing a gateway should start from ADR 0007.
 
 ## Context
 

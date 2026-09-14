@@ -46,13 +46,13 @@ This index organizes the banking-agent documentation by audience and task.
 
 | Document | Purpose |
 | --- | --- |
-| [ADR 0001 — Remove the LiteLLM gateway](decisions/0001-remove-litellm-gateway.md) | Records why the AI gateway was removed and the conditions under which one would be reintroduced. |
+| [ADR 0001 — Remove the LiteLLM gateway](decisions/0001-remove-litellm-gateway.md) | Records why the AI gateway was removed and the conditions under which one would be reintroduced. Its reasoning is superseded by ADR 0007; the no-gateway decision still stands. |
 | [ADR 0002 — Hand-written MCP server](decisions/0002-mcp-sdk-vs-hand-written.md) | Records why the hosted-agent MCP implementation is hand-written rather than built on the official SDK. |
 | [ADR 0003 — Foundry memory prompt agent](decisions/0003-foundry-memory-prompt-agent.md) | Records why customer memory is a Foundry-managed prompt agent rather than a client-side memory library. |
 | [ADR 0004 — Foundry toolbox tools](decisions/0004-foundry-toolbox-tools.md) | Records how hosted agents reach Foundry-managed tools, and corrects an overstatement in ADR 0003. |
 | [ADR 0005 — Delegated user authentication](decisions/0005-delegated-user-authentication.md) | Records why the Web UI signs the user in and calls the orchestrator on their behalf. |
 | [ADR 0006 — Call Foundry over the Responses API](decisions/0006-responses-api.md) | Records why hosted agents moved off Chat Completions, and what was verified before the switch. |
-| [ADR 0007 — Run the specialist step inside an Agent Harness](decisions/0007-agent-harness-inner-loop.md) | **Proposed.** Records why the Agent Harness replaces only the specialist step, which capabilities are disabled, and that the orchestrator gains its own model connection. |
+| [ADR 0007 — Run the specialist step inside an Agent Harness](decisions/0007-agent-harness-inner-loop.md) | **Proposed.** Records why the Agent Harness replaces only the specialist step, which capabilities are disabled, and that the orchestrator gains its own model connection. Supersedes ADR 0001's reasoning. |
 
 ## Planning and backlog
 

@@ -2,7 +2,8 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-14
-- **Relates to:** [ADR 0001](0001-remove-litellm-gateway.md), [ADR 0003](0003-foundry-memory-prompt-agent.md), [ADR 0004](0004-foundry-toolbox-tools.md), [ADR 0006](0006-responses-api.md)
+- **Supersedes:** [ADR 0001](0001-remove-litellm-gateway.md)
+- **Relates to:** [ADR 0003](0003-foundry-memory-prompt-agent.md), [ADR 0004](0004-foundry-toolbox-tools.md), [ADR 0006](0006-responses-api.md)
 - **Amends:** `docs/project-constitution.md` (v1.1 → v1.2)
 
 ## Context
@@ -31,24 +32,39 @@ That is the gap the harness fills. The specialist reasoning itself is already
 good and already lives in the LangGraph agents; what is missing is a loop
 around them.
 
-## The constraint nobody can skip past
+## What this supersedes
 
 Adopting the harness gives the C# orchestrator **its own model connection for
-the first time**. That is not a detail. [ADR 0001](0001-remove-litellm-gateway.md)
-rests on it as its central factual claim:
+the first time**. That is not a detail: it changes a premise other documents
+depend on, so the constitution and ADR 0001 are updated here rather than left
+to contradict the code — the failure ADR 0003 already had to correct once.
+
+[ADR 0001](0001-remove-litellm-gateway.md) is superseded, because its reasoning
+no longer describes this system. Its central factual claim was verified again
+while preparing this ADR — `IChatClient`, `AsAIAgent`, `AIAgent`, and
+`ChatClient` across `src` and `tests` return zero hits — and this decision is
+what falsifies it:
 
 > Model calls in this system happen in exactly one place: inside the Python
-> agents. The C# orchestrator makes none — there is no `IChatClient`, no
-> `AzureOpenAI` client, and no chat-completion call anywhere in `src/**/*.cs`.
+> agents. The C# orchestrator makes none.
 
-That was true when written and was verified again while preparing this ADR: a
-search for `IChatClient`, `AsAIAgent`, `AIAgent`, and `ChatClient` across `src`
-and `tests` returns nothing. A harness agent falsifies it, because a harness
-*is* a chat client with a loop around it.
+A harness *is* a chat client with a loop around it, so from here the
+orchestrator makes model calls too.
 
-So this ADR cannot be read as a pure addition. It changes a premise two other
-documents depend on, and both are updated accordingly rather than left to
-contradict the code — which is the failure ADR 0003 already had to correct once.
+**Two things carry forward unchanged, and must not be read as reopened:**
+
+1. **LiteLLM stays removed.** Nothing here asks for it back.
+2. **There is still no AI gateway**, and introducing one still requires its own
+   ADR, a consumer, and a test proving a model call traverses it — the
+   discipline ADR 0001 established after a gateway was deployed with no callers.
+
+What changes is the *premise*. ADR 0001 argued no gateway was reachable because
+the only model callers were hosted agents on the far side of a network
+boundary. That argument no longer holds: the orchestrator runs inside the
+Container Apps Environment, so a second model caller now exists on the
+reachable side. This ADR does not act on that, but it is the first time the
+constraint has moved, and the next person weighing a gateway should start here
+rather than from ADR 0001's network argument.
 
 ## Decision
 
@@ -125,24 +141,63 @@ The orchestrator's managed identity gets `Azure AI User` on the Foundry
 project, granted in `infrastructure/roles.tf`. No keys, per constitution
 principle 1.
 
-**Which client is deliberately left open.** Two options, to be settled by
-verification rather than by preference:
+**The client is `Microsoft.Agents.AI.Foundry` 1.5.0.** That is the first-party
+path and it is stable. The version needs explaining, because the package's
+history is not monotonic: it shipped stable through `1.0.0` → `1.5.0` and then
+went **back** to preview from `1.6.0` onward, so the newest version
+(`1.21.0-preview.260911.1`) is preview while `1.5.0` is not. The latest release
+is therefore the wrong choice here and the newest *stable* release is 1.5.0.
 
-1. `Microsoft.Agents.AI.Foundry` — the first-party path, currently
-   **`1.21.0-preview.260911.1`**.
-2. `Azure.AI.OpenAI` 2.1.0 with `Microsoft.Extensions.AI.OpenAI` 10.10.0 —
-   both **stable**, producing an `IChatClient` against the same Foundry
-   `/openai/v1` surface and Entra scope the rest of the system already uses.
+`Microsoft.Agents.AI.Harness` is independently stable from 1.14.0 onward, and
+`Microsoft.Agents.AI [1.5.0, )` is a minimum, not an exact pin, so Foundry
+1.5.0 coexists with the 1.21.0 packages already in the graph.
 
-Option 2 is preferred if it works, and the reason is immediate: the change that
-precedes this one existed to get the solution *off* a release candidate. Taking
-a preview dependency in the very next change would undo that unless the
-first-party client earns it. `Microsoft.Agents.AI.Harness` itself is stable
-(1.14.0 onward), so the harness does not force the preview — only the choice of
-chat client does.
+### This drags `Azure.AI.Projects` with it, and that was verified rather than assumed
 
-Option 2 also agrees with [ADR 0006](0006-responses-api.md), which standardised
-this system on the Responses API.
+`Microsoft.Agents.AI.Foundry` 1.5.0 requires `Azure.AI.Projects [2.0.0, )`.
+This repository pins `2.0.0-beta.2`, and `2.0.0-beta.2` sorts **below**
+`2.0.0`, so adding the package fails the build outright:
+
+```
+error NU1605: Detected package downgrade: Azure.AI.Projects from 2.0.0 to 2.0.0-beta.2
+```
+
+Moving to `2.0.0` then breaks the memory-store code this repository adopted in
+[ADR 0003](0003-foundry-memory-prompt-agent.md):
+
+```
+error CS0246: The type or namespace name 'AIProjectMemoryStoresOperations' could not be found
+```
+
+That looks like the feature was withdrawn. It was not — it was **renamed and
+moved**:
+
+| 2.0.0-beta.2 | 2.0.0 |
+| --- | --- |
+| `Azure.AI.Projects.AIProjectMemoryStoresOperations` | `Azure.AI.Projects.Memory.AIProjectMemoryStores` |
+
+`DeleteScopeAsync` — the operation ADR 0003 adopted the SDK *for*, because it
+is what stopped **Clear all memories** wiping every customer's scope — survives
+intact. The migration is a type rename plus a `using Azure.AI.Projects.Memory;`
+in `CustomerProfileClient` and `CustomerProfileClearScopeTests`.
+
+This was proven on a scratch branch before being written down: full solution
+builds with 0 errors and `task test:infrastructure` passes 66/66, including
+`CustomerProfileClearScopeTests`.
+
+**This is a net improvement, not a cost.** It moves `Azure.AI.Projects` from a
+**beta** to a **stable** release, which is the same direction of travel as the
+change that precedes this one. The `AAIP001` experimental suppression in
+`infrastructure.csproj` should be re-examined once the types are no longer
+preview.
+
+One thing deliberately not taken: `MemorySearchPreviewTool` — absent from
+2.0.0-beta.2, which is why ADR 0003 hand-writes `BuildScopedRequest` and
+`EnforceScope` — is still absent from `2.0.0` stable and reappears only in
+`2.1.0-beta.4`. ADR 0003 asked that this be re-checked "in case the type
+returns under a new name". It has returned, but only in beta, so the inline
+scope stays hand-written and we stay on stable. That trade should be revisited
+when 2.1.0 goes stable.
 
 ## Consequences
 
@@ -159,19 +214,23 @@ this system on the Responses API.
   recorded that losing LiteLLM left no home for token accounting and no cost
   ceiling, and that the gap widens as agent graphs issue more calls per
   invocation. This widens it again, and in a new place: model spend now
-  originates in the orchestrator as well as in the agents. It also moves
-  revisit condition 3 of that ADR measurably closer, because a gateway now has
-  two consumers rather than one — and unlike LiteLLM, the orchestrator sits
-  inside the Container Apps Environment where an internal gateway is reachable.
-  That is not a reason to reintroduce one here, but it is the first time the
-  blocking constraint in ADR 0001 has softened, and the next person asking
-  should find that written down.
+  originates in the orchestrator as well as in the agents. See *What this
+  supersedes* for why the gateway question is now open on different grounds
+  than ADR 0001 left it.
 - **A loop costs more than a single call**, in tokens and in latency, on a
   system with no ceiling.
+- **A forced dependency migration.** `Azure.AI.Projects` moves beta.2 → 2.0.0
+  and `CustomerProfileClient` changes with it. Verified, mechanical, and in the
+  direction of stability — but it is not optional, and it touches the memory
+  feature rather than the harness.
 - **Harness defaults are opinionated and will change.** Seven capabilities are
   disabled above. A future version adding an eighth, enabled by default, lands
   in an approval-gated banking workflow on upgrade. Pin the version and read
   the release notes.
+- **`Microsoft.Agents.AI.Foundry` is pinned behind its own latest release.**
+  1.5.0 is stable; everything after it is preview. Upgrading means either
+  waiting for the line to re-stabilise or accepting a preview dependency, and
+  that choice should be made deliberately rather than by a routine bump.
 
 ## Revisit conditions
 
@@ -181,6 +240,10 @@ this system on the Responses API.
 - Background agents are adopted for parallel specialist fan-out.
 - Token accounting (#33) selects a gateway, at which point the orchestrator is
   now a consumer that can actually reach one.
+- `Microsoft.Agents.AI.Foundry` returns to a stable line above 1.5.0.
+- `Azure.AI.Projects` 2.1.0 goes stable, bringing `MemorySearchPreviewTool`
+  with it, at which point ADR 0003's hand-written `BuildScopedRequest` and
+  `EnforceScope` may finally be replaceable.
 
 ## Constitution amendment
 
@@ -194,8 +257,8 @@ Becomes (literal replacement text, paths relative to the constitution):
 ```markdown
 Model access is made directly against Microsoft Foundry, by the hosted agents
 and by the orchestrator's harness-driven specialist loop. There is no AI
-gateway in the current architecture; see [ADR 0001](decisions/0001-remove-litellm-gateway.md)
-and [ADR 0007](decisions/0007-agent-harness-inner-loop.md).
+gateway in the current architecture; see [ADR 0007](decisions/0007-agent-harness-inner-loop.md),
+which supersedes the reasoning in [ADR 0001](decisions/0001-remove-litellm-gateway.md).
 ```
 
 The "no AI gateway" position is unchanged. What changes is the claim that
