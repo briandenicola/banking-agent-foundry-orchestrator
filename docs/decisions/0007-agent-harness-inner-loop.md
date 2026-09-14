@@ -137,9 +137,17 @@ state.
 
 ### Model access
 
-The orchestrator's managed identity gets `Azure AI User` on the Foundry
-project, granted in `infrastructure/roles.tf`. No keys, per constitution
-principle 1.
+**No new role assignment is needed**, and the first draft of this ADR got that
+wrong. It asked for `Azure AI User` in `infrastructure/roles.tf`, which is
+wrong three ways: the file is `apps/roles.tf`, the role is unnecessary, and the
+access already exists. The orchestrator's managed identity already holds
+`Cognitive Services User` on the Foundry account, whose data actions are the
+wildcard `Microsoft.CognitiveServices/*`, and `CustomerProfileClient` already
+reaches `{endpoint}/openai/v1/responses` with that identity today. The harness
+agent calls the same API on the same endpoint as the same caller, so there is
+nothing left to grant.
+
+Still no keys, per constitution principle 1.
 
 **The client is `Microsoft.Agents.AI.Foundry` 1.5.0.** That is the first-party
 path and it is stable. The version needs explaining, because the package's
