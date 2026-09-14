@@ -17,6 +17,8 @@
          1.5.0 is the newest *stable* release: this package went back to
          preview from 1.6.0 onward, so "latest" is the wrong choice here. -->
     <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.5.0" />
+    <!-- The specialist step's inner loop (ADR 0007). Stable from 1.14.0. -->
+    <PackageReference Include="Microsoft.Agents.AI.Harness" Version="1.21.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.11" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">

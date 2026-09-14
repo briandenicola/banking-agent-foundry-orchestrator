@@ -258,6 +258,27 @@ builder.Services.Configure<FoundryChatClientOptions>(options =>
 });
 builder.Services.AddSingleton<IChatClient>(sp => FoundryChatClientFactory.Create(
     sp.GetRequiredService<IOptions<FoundryChatClientOptions>>().Value));
+// The specialist step's inner loop (ADR 0007). Scoped, to match the lifetime of
+// the typed IMcpClient it wraps rather than capturing a transient one. When no
+// model is configured the agent reports IsConfigured false and the workflow
+// keeps its single-call behaviour.
+builder.Services.Configure<HarnessInvestigationAgentOptions>(options =>
+{
+    options.MaxIterations = builder.Configuration.GetValue("HARNESS_MAX_ITERATIONS", 4);
+    options.MaxSpecialistCalls = builder.Configuration.GetValue("HARNESS_MAX_SPECIALIST_CALLS", 3);
+});
+builder.Services.AddScoped<IInvestigationAgent>(sp =>
+{
+    var chatOptions = sp.GetRequiredService<IOptions<FoundryChatClientOptions>>().Value;
+
+    return new HarnessInvestigationAgent(
+        FoundryChatClientFactory.IsConfigured(chatOptions)
+            ? sp.GetRequiredService<IChatClient>()
+            : null,
+        sp.GetRequiredService<IMcpClient>(),
+        sp.GetRequiredService<ILoggerFactory>(),
+        sp.GetRequiredService<IOptions<HarnessInvestigationAgentOptions>>().Value);
+});
 
 // Which contact channels this deployment can actually service. A model must
 // never infer this: asked whether the bank can send an SMS, it will say yes.
