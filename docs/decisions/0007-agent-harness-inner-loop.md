@@ -150,7 +150,31 @@ is therefore the wrong choice here and the newest *stable* release is 1.5.0.
 
 `Microsoft.Agents.AI.Harness` is independently stable from 1.14.0 onward, and
 `Microsoft.Agents.AI [1.5.0, )` is a minimum, not an exact pin, so Foundry
-1.5.0 coexists with the 1.21.0 packages already in the graph.
+1.5.0 coexists with the 1.21.0 packages already in the graph. That 16-version
+gap is wider than it looks comfortable being, so it was tested rather than
+trusted: a runtime probe resolved `ProjectResponsesClient` →
+`AsIChatClientWithStoredOutputDisabled` → `AsHarnessAgent` → `HarnessAgent`
+against Foundry 1.5.0 with `Microsoft.Agents.AI` 1.21.0, and confirmed the
+client is Responses-based, which is what [ADR 0006](0006-responses-api.md)
+requires.
+
+**This pin is "newest stable", not "newest".** Two alternatives were built and
+tested, and both pass equally — the choice is about release quality, not
+function:
+
+| Foundry | `Azure.AI.Projects` | Build / infra tests |
+| --- | --- | --- |
+| **1.5.0** (chosen) | **`2.0.0` — stable** | 0 errors, 66/66 |
+| 1.20.0-preview | `2.1.0-beta.4` | 0 errors, 66/66 |
+| 1.21.0-preview | `3.0.0-beta.2` | 0 errors, 66/66 |
+
+Only `1.21.0-preview` crosses to the `Azure.AI.Projects` 3.x line; everything
+from 1.6.0 to 1.20.0-preview sits on `2.1.0-beta.x`. So the real question was
+whether to take a preview Foundry *and* a beta `Azure.AI.Projects` in order to
+close the version gap. We take the stable pair instead. The gap is proven to
+work, and nothing in this ADR's scope needs a preview-only capability.
+
+Revisit when `Microsoft.Agents.AI.Foundry` returns to stable above 1.5.0.
 
 ### This drags `Azure.AI.Projects` with it, and that was verified rather than assumed
 
@@ -187,17 +211,68 @@ builds with 0 errors and `task test:infrastructure` passes 66/66, including
 
 **This is a net improvement, not a cost.** It moves `Azure.AI.Projects` from a
 **beta** to a **stable** release, which is the same direction of travel as the
-change that precedes this one. The `AAIP001` experimental suppression in
-`infrastructure.csproj` should be re-examined once the types are no longer
-preview.
+change that precedes this one.
 
-One thing deliberately not taken: `MemorySearchPreviewTool` — absent from
-2.0.0-beta.2, which is why ADR 0003 hand-writes `BuildScopedRequest` and
-`EnforceScope` — is still absent from `2.0.0` stable and reappears only in
-`2.1.0-beta.4`. ADR 0003 asked that this be re-checked "in case the type
-returns under a new name". It has returned, but only in beta, so the inline
-scope stays hand-written and we stay on stable. That trade should be revisited
-when 2.1.0 goes stable.
+The `AAIP001` suppression in `infrastructure.csproj` **stays**, and the
+tempting assumption that a stable package makes it removable was tested and is
+false: deleting the `<NoWarn>` against `2.0.0` stable produces four
+`error AAIP001`. The memory types are still `[Experimental]`. A stable package
+is not the same thing as a stable API, and the same holds for
+`AsIChatClientWithStoredOutputDisabled`, which is gated behind `MAAI001` even
+in Foundry 1.5.0 stable. Expect to suppress both.
+
+### Memory search is unaffected, and gets a better path
+
+`MemorySearchPreviewTool` is absent from `2.0.0` stable and returns only in
+`2.1.0-beta.4`. ADR 0003 asked for this to be re-checked "in case the type
+returns under a new name", so the check was done — and the finding is that the
+question does not bite, because **nothing in this repository references that
+type**. Memory search is attached and read as raw JSON on both sides:
+
+```
+src/agents/deployer/deploy.py:85                 "type": "memory_search_preview"
+src/infrastructure/CustomerProfileClient.cs:51   const string MemoryToolType = "memory_search_preview";
+scripts/verify-memory-scope.py:205               tool.get("type") == "memory_search_preview"
+```
+
+`MemorySearchPreviewTool` is a *tool-attachment* type — it declares the tool on
+an agent definition from C#. This repository declares it from Terraform and
+`deploy.py`, in JSON. Its absence has therefore cost nothing since
+`2.0.0-beta.2`, and costs nothing here. Verified: all 31 `CustomerProfile`
+tests pass on the 1.5.0 / `2.0.0` pair, inline scope rewriting included.
+
+What `2.0.0` stable *adds* is a typed, directly scoped search:
+
+```csharp
+Task<...> SearchMemoriesAsync(string memoryStoreName, MemorySearchOptions options, CancellationToken ct)
+MemorySearchOptions(string scope)   // scope is a required constructor argument
+```
+
+This matters more than it first appears. The reason ADR 0003 hand-writes
+`BuildScopedRequest` and `EnforceScope` is that Foundry **silently ignores**
+`scope` when it sits next to an `agent_reference`: the call returns 200 and the
+write lands where nothing reads. `SearchMemoriesAsync` never touches an agent
+definition, so there is nothing to ignore it, and `scope` is a constructor
+argument rather than an optional field — it cannot be forgotten.
+
+That makes it the natural way to give the harness agent memory search: an
+`AIFunction` bound to `SearchMemoriesAsync`, with the scope supplied from the
+workflow's customer identity. Whether to adopt it is **out of scope for this
+ADR** and is not required by the harness change; it is recorded here so the
+option is not rediscovered later.
+
+### Noted, deliberately not decided here
+
+Foundry 1.5.0 also ships `FoundryMemoryProvider : AIContextProvider` with
+`FoundryMemoryProviderScope(string scope)`, plus a `Redactor` and `MaxMemories`
+on its options. [ADR 0003](0003-foundry-memory-prompt-agent.md) rejected Agent
+Framework's memory abstractions partly because there was **"no hook for the
+scope override"**. That hook now exists — session-scoped rather than
+per-request, so it fits one-session-per-customer and not arbitrary per-call
+scoping.
+
+This reopens an ADR 0003 rejection and deserves its own decision rather than
+being smuggled in through a harness ADR. Tracked separately; not adopted here.
 
 ## Consequences
 
@@ -240,10 +315,13 @@ when 2.1.0 goes stable.
 - Background agents are adopted for parallel specialist fan-out.
 - Token accounting (#33) selects a gateway, at which point the orchestrator is
   now a consumer that can actually reach one.
-- `Microsoft.Agents.AI.Foundry` returns to a stable line above 1.5.0.
-- `Azure.AI.Projects` 2.1.0 goes stable, bringing `MemorySearchPreviewTool`
-  with it, at which point ADR 0003's hand-written `BuildScopedRequest` and
-  `EnforceScope` may finally be replaceable.
+- `Microsoft.Agents.AI.Foundry` returns to a stable line above 1.5.0, at which
+  point the version table above should be re-run.
+- The typed `SearchMemoriesAsync` path is adopted, at which point ADR 0003's
+  hand-written `BuildScopedRequest` and `EnforceScope` become removable. Note
+  this does *not* depend on `MemorySearchPreviewTool` returning to stable —
+  that type attaches tools from C#, which this repository does not do.
+- `FoundryMemoryProvider` is evaluated against ADR 0003's scope-hook rejection.
 
 ## Constitution amendment
 
