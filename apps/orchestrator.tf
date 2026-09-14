@@ -151,6 +151,15 @@ resource "azurerm_container_app" "orchestrator" {
         value = "${var.app_name}-agent"
       }
 
+      # The orchestrator's own model, for the harness agent's inner loop
+      # (ADR 0007). This is the same deployment the hosted agents use; it needs
+      # no new role assignment, because the orchestrator identity already holds
+      # Cognitive Services User on the Foundry account (see roles.tf).
+      env {
+        name  = "FOUNDRY_MODEL_DEPLOYMENT"
+        value = local.model_deployment
+      }
+
       # The customer-profile prompt agent and its memory store. Empty when memory
       # is disabled, which makes the profile endpoints report 503 rather than fail.
       env {

@@ -1,6 +1,7 @@
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using Azure.AI.Projects;
+using Azure.AI.Projects.Memory;
 using BankingAgent.Application;
 using BankingAgent.Infrastructure;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,13 +14,13 @@ namespace BankingAgent.Infrastructure.Tests;
 /// Clearing memories deletes a single scope. It used to delete and recreate the
 /// whole store, because per-item deletion is rejected by the preview API for the
 /// identifiers memory search returns -- so one customer pressing "clear" wiped
-/// every customer. <c>AIProjectMemoryStoresOperations.DeleteScopeAsync</c>
+/// every customer. <c>AIProjectMemoryStores.DeleteScopeAsync</c>
 /// replaced that, and these tests pin the narrower behaviour: the store name and
 /// the caller's scope go through, and nothing else is touched.
 /// </summary>
 public class CustomerProfileClearScopeTests
 {
-    private sealed class RecordingMemoryStores : AIProjectMemoryStoresOperations
+    private sealed class RecordingMemoryStores : AIProjectMemoryStores
     {
         public List<(string Store, string Scope)> Deletions { get; } = [];
 

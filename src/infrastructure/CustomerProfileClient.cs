@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Azure.AI.Projects;
+using Azure.AI.Projects.Memory;
 using Azure.Core;
 using Azure.Identity;
 using BankingAgent.Application;
@@ -63,10 +64,10 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
     private JsonObject? _cachedDefinition;
 
     // Created on first use so an unconfigured client can still be constructed.
-    // Injectable because AIProjectMemoryStoresOperations is designed to be
+    // Injectable because AIProjectMemoryStores is designed to be
     // subclassed for tests: its methods are virtual and it has a protected
     // parameterless constructor.
-    private AIProjectMemoryStoresOperations? _memoryStores;
+    private AIProjectMemoryStores? _memoryStores;
 
     public CustomerProfileClient(
         HttpClient httpClient,
@@ -91,10 +92,10 @@ public sealed class CustomerProfileClient : ICustomerProfileClient
     /// constructor parameter so the experimental <c>AAIP001</c> type stays out
     /// of this class's public surface.
     /// </summary>
-    internal void UseMemoryStores(AIProjectMemoryStoresOperations memoryStores) =>
+    internal void UseMemoryStores(AIProjectMemoryStores memoryStores) =>
         _memoryStores = memoryStores;
 
-    private AIProjectMemoryStoresOperations MemoryStores =>
+    private AIProjectMemoryStores MemoryStores =>
         _memoryStores ??= new AIProjectClient(new Uri(_endpoint!), _credential).MemoryStores;
 
     public bool IsConfigured =>

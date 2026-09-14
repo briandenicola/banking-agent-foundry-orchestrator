@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using OpenTelemetry.Trace;
@@ -244,6 +246,19 @@ builder.Services.Configure<CustomerProfileClientOptions>(options =>
     options.Scope = builder.Configuration["FOUNDRY_SCOPE"] ?? "https://ai.azure.com/.default";
 });
 builder.Services.AddHttpClient<ICustomerProfileClient, CustomerProfileClient>();
+// The orchestrator's own model access (ADR 0007). Registered lazily: an
+// environment without a Foundry endpoint still starts, and only a component
+// that actually needs a model fails, with a message that says which setting is
+// missing.
+builder.Services.Configure<FoundryChatClientOptions>(options =>
+{
+    options.ProjectEndpoint = builder.Configuration["FOUNDRY_AGENT_ENDPOINT"];
+    options.ModelDeploymentName =
+        builder.Configuration["FOUNDRY_MODEL_DEPLOYMENT"] ?? "gpt-5.4-mini";
+});
+builder.Services.AddSingleton<IChatClient>(sp => FoundryChatClientFactory.Create(
+    sp.GetRequiredService<IOptions<FoundryChatClientOptions>>().Value));
+
 // Which contact channels this deployment can actually service. A model must
 // never infer this: asked whether the bank can send an SMS, it will say yes.
 builder.Services.AddSingleton(sp =>
