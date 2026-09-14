@@ -112,8 +112,7 @@ Two further reasons, either of which would be decisive alone:
 
 What *was* adopted is the Azure SDK rather than the framework.
 `Azure.AI.Projects` 2.0.0-beta.2 — already in the dependency graph beneath
-`Microsoft.Agents.AI.AzureAI` — exposes `AIProjectClient.MemoryStores`, and
-`DeleteScopeAsync` on it removes a genuine defect: clearing memories used to
+`Microsoft.Agents.AI.AzureAI` — exposes `AIProjectClient.MemoryStores`, and`DeleteScopeAsync` on it removes a genuine defect: clearing memories used to
 delete and recreate the whole store, wiping every customer's scope, because
 per-item deletion is rejected for the identifiers memory search returns. The
 Responses call stays hand-written, because `MemorySearchPreviewTool` exists in
@@ -121,6 +120,14 @@ Responses call stays hand-written, because `MemorySearchPreviewTool` exists in
 attach or rewrite the memory tool on a definition. These types are also marked
 experimental (`AAIP001`), which `src/infrastructure/infrastructure.csproj`
 suppresses deliberately.
+
+> **Correction (later).** `Azure.AI.Projects` is no longer "already in the
+> dependency graph beneath `Microsoft.Agents.AI.AzureAI`". When the repository
+> moved to Microsoft Agent Framework 1.21.0, `Microsoft.Agents.AI.AzureAI`
+> 1.0.0-rc5 was found to have no code referencing it at all — it was pinning
+> the solution to a release-candidate purely to supply this transitive
+> dependency — and was removed. `Azure.AI.Projects` is now a standalone direct
+> reference, which is what the memory-store code actually needs.
 
 ### Rejected: memory on `suspicious-activity`
 

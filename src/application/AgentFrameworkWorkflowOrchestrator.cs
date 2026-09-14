@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BankingAgent.Domain;
@@ -511,15 +510,7 @@ internal sealed class AgentFrameworkWorkflowOrchestrator
     }
 
     private static IWorkflowExecutionEnvironment CreateExecutionEnvironment()
-    {
-        var executionModeType = typeof(InProcessExecutionEnvironment)
-            .Assembly
-            .GetType("Microsoft.Agents.AI.Workflows.ExecutionMode", throwOnError: true)!;
-        var lockstepMode = Enum.Parse(executionModeType, "Lockstep");
-        var constructor = typeof(InProcessExecutionEnvironment).GetConstructors(
-            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)[0];
-        return (IWorkflowExecutionEnvironment)constructor.Invoke([lockstepMode, false, null])!;
-    }
+        => InProcessExecution.Lockstep;
 
     private static void ThrowIfCanceled(IReadOnlyList<Microsoft.Agents.AI.Workflows.WorkflowEvent> newEvents, CancellationToken cancellationToken)
     {
