@@ -16,6 +16,7 @@ This index organizes the banking-agent documentation by audience and task.
 | Understand architecture and implementation boundaries | [Technical specification](technical-spec.md) |
 | See every Azure resource and how the parts connect | [Azure architecture diagram](diagrams/) |
 | Trace the LangGraph agents and Foundry runtime through the code | [Agent implementation and Foundry runtime](agent-implementation.md) |
+| Understand how the Foundry agents are deployed | [Agent deployment](agent_deployment.md) |
 | Follow a guided hosted-agents lab for Azure | [Hosted Agents lab](hosted-agents-lab.md) |
 | Run local and CI test suites | [Testing guide](testing.md) |
 | Run a repeatable demonstration | [Demo scenarios](demo-scenarios.md) |
@@ -35,6 +36,7 @@ This index organizes the banking-agent documentation by audience and task.
 | --- | --- |
 | [MVP implementation and operations guide](mvp-implementation-operations-guide.md) | Code-referenced source of truth for workflow lifecycle, agents, PostgreSQL, Foundry, authentication, deployment, rollback, troubleshooting, and smoke verification. |
 | [Agent implementation and Foundry runtime](agent-implementation.md) | Traces LangGraph state, graph construction, typed contracts, model calls, C# handoff, shared image packaging, Foundry registration, identities, and runtime behavior to exact source locations. |
+| [Agent deployment](agent_deployment.md) | Explains how the deployment script, Container Apps Job, and Python deployer create and version the Foundry agents. |
 | [Testing guide](testing.md) | Explains test categories, prerequisites, local commands, and CI coverage. |
 | [Workflow observability](observability.md) | Defines telemetry and correlation behavior with ready-to-run Application Insights queries. |
 | [Terraform remote state](remote-state.md) | Covers Azure Blob state, OIDC authentication, environment separation, bootstrap, and migration. |
